@@ -79,6 +79,16 @@ produced. Neither GHA nor first-party routines model "run B after A finished" cl
 it composes into pipelines (A → B → C) with the producing run's outputs available to the consumer as
 `${{ upstream.* }}`. (GHA's `workflow_run` is the closest analogue; `after` is the friendly form.)
 
+### 1.7 Instance subscriptions — `flow:` (events on artifacts a routine *created*)
+
+Everything above is *class-level*: an event of a type, matched against the fleet, starting a new run.
+There is a second kind — *instance-level* — where a routine **follows a specific PR it opened** and
+reacts to that PR's hook events ("if `ci/*` fails, do Y"). These are declared in `flow:`, not `on:`,
+and are covered in full in [11](11-reactive-flows-and-pr-subscriptions.md). The distinction matters:
+`on:` answers *what starts a routine*; `flow:` answers *what the routine does as the PR it produced
+lives its life*. Both normalize into the same Event envelope, so reaction handlers read
+`${{ event.* }}` / `${{ pr.* }}` the same way.
+
 ---
 
 ## 2. Filters, guards, and shaping
@@ -143,6 +153,7 @@ regardless of source.
 | Per-trigger filters (`branches`/`paths`/`if`) | ✗ | ✓ |
 | External gate program | ✗ (DIY) | `gate:` extension point |
 | Debounce / dedupe of event storms | ✗ | ✓ |
+| Follow a PR it opened & react ("if CI X fails, do Y") | ✗ (creation is the end of the loop) | ✓ `flow:` subscriptions ([11](11-reactive-flows-and-pr-subscriptions.md)) |
 | Daily run cap | 5 / 15 / 25 per plan | governed by org policy + budgets, not a hard per-user wall |
 
 ---

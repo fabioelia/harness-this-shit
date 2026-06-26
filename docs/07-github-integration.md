@@ -82,6 +82,26 @@ routine.
 
 ---
 
+## 4b. Following the PRs the harness opens (hook subscriptions)
+
+When a routine uses `open-pr`, the harness **auto-subscribes to that PR's hook events** and reacts
+per the routine's `flow:` rules — "if the `ci/build` check fails, fix it; on changes-requested,
+address it; on merge, stop." Full design in [11](11-reactive-flows-and-pr-subscriptions.md); the
+GitHub-specific mechanics:
+
+- The same App webhook stream feeds these subscriptions; the Subscription Manager filters deliveries
+  to the specific `pr:<repo>#<number>` a routine owns (the PR it created).
+- **Webhooks don't deliver everything** — CI *success*, fresh pushes, and **merge-conflict
+  transitions** are notably absent (documented harness behavior). So the subscription **reconciles by
+  polling** the PR on a cadence (`flow.subscribe.reconcile`) and synthesizes the missing events —
+  e.g. it polls `mergeable`/`mergeable_state` to catch a conflict no webhook announced.
+- A subscription is **not finished until the PR is merged or closed** (or its TTL lapses); then the
+  harness auto-unsubscribes. This mirrors the `subscribe_pr_activity` lifecycle exactly.
+- Reaction runs reuse §3's capabilities and §4's collision controls (lease on `pr:#N`, SHA barrier,
+  budget), so following a PR is safe by construction.
+
+---
+
 ## 5. Check-runs and the merge gate (the GHA aspiration)
 
 Routines can **emit check-runs** (`outputs.emit_check_run: "routine/<name>"`), SHA-pinned to the

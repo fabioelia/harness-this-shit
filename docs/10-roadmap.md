@@ -36,8 +36,13 @@ A phased plan that delivers a usable slice early and lands the three pillars
 - **The Dispatcher**: concurrency groups, **leases**, **SHA barrier**, **yield-to-human**,
   **iteration budgets**, write-consent ([05](05-concurrency-and-collisions.md)).
 - **Idempotent status surfaces** (marker-comment upsert).
+- **Subscription Manager + reactive flows** ([11](11-reactive-flows-and-pr-subscriptions.md)):
+  auto-subscribe to PRs a routine opens, match `flow.reactions` ("if `ci/*` fails → do Y"), spawn
+  PR-scoped reaction runs, and **reconcile** the events webhooks miss (CI-success, conflicts) by
+  polling. (The flow-diagram *visualization* lands with the richer UI in Phase 4.)
 - Deliverable: stand up the `pr-cleanup` loop with two review voices and prove "two agents never
-  touch the same PR" — the Newton guard stack, now declarative. Pillars 2 & 3 landed.
+  touch the same PR" — the Newton guard stack, now declarative — **and** an authoring routine that
+  opens a PR, follows it, and auto-fixes its failing CI. Pillars 2 & 3 landed.
 
 ## Phase 3 — Connectors & MCP management (3–4 weeks)
 
@@ -74,7 +79,7 @@ A phased plan that delivers a usable slice early and lands the three pillars
 | Phase | Lands | Answers |
 |---|---|---|
 | 0–1 | Pillar 1 (file-powered routines) | "everything powered via the MD file"; "see/run automations" |
-| 2 | Pillars 2 & 3 (triggers + dispatcher) | "limited trigger controls"; "avoid multiple agents touching the same PR"; "aspirations from GitHub Actions" |
+| 2 | Pillars 2 & 3 (triggers + dispatcher) + reactive PR flows | "limited trigger controls"; "avoid multiple agents touching the same PR"; "subscribe to hook events on PRs it opens, react (if CI X fails do Y)"; "aspirations from GitHub Actions" |
 | 3 | Connectors/MCP | "support connectors… trivial to manage MCPs" |
 | 4 | Team UI/governance | "no team exposure"; "user/team interface"; "update/adjust/control" |
 

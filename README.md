@@ -75,6 +75,7 @@ YAML workflow, and the runner is Claude Code instead of a shell.
 | [`docs/08-team-web-ui.md`](docs/08-team-web-ui.md) | The web service: surfaces, RBAC, what the team actually sees and does. |
 | [`docs/09-tooling-stack.md`](docs/09-tooling-stack.md) | Recommended tech stack, build-vs-buy, and the tools we'll want. |
 | [`docs/10-roadmap.md`](docs/10-roadmap.md) | A phased build plan, open questions, and risks. |
+| [`docs/11-reactive-flows-and-pr-subscriptions.md`](docs/11-reactive-flows-and-pr-subscriptions.md) | When a routine **opens a PR**, it subscribes to that PR's hook events and reacts per declared rules ("if CI check X fails, do Y") — and that becomes the routine's flow diagram. |
 
 ## Mapping the ask → the design
 
@@ -87,6 +88,7 @@ Every line of the original goal has a home:
 - *"basic user / team interface"* → [08 Team Web UI](docs/08-team-web-ui.md) (RBAC + teams).
 - *"GitHub integration is a must"* → [07 GitHub Integration](docs/07-github-integration.md).
 - *"avoid multiple agents touching / iterating the same tasks / PRs"* → [05 Concurrency & Collisions](docs/05-concurrency-and-collisions.md).
-- *"aspirations from GitHub Actions"* → [01 Research §GitHub Actions](docs/01-research.md) + threaded through 03/04/05/06.
+- *"routines that open PRs should subscribe to hook events and react ('if CI X fails, do Y'), funneling into the routine's flow diagram"* → [11 Reactive Flows & PR Subscriptions](docs/11-reactive-flows-and-pr-subscriptions.md).
+- *"aspirations from GitHub Actions"* → [01 Research §GitHub Actions](docs/01-research.md) + threaded through 03/04/05/06/11.
 - *"limited trigger controls"* → [04 Triggers](docs/04-triggers.md).
 - *"no team exposure"* → [08 Team Web UI](docs/08-team-web-ui.md).

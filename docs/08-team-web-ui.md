@@ -34,6 +34,13 @@ exist, who owns them, and whether they're healthy.
 - Controls: **Run now** (renders `inputs:` as a form — the `workflow_dispatch` button), **Enable/
   Disable**, **Edit**, **Duplicate/Fork**, **Validate** (schema + grant lint), **Kill switch**.
 - Live **lease/budget** panel: what it's currently claiming, remaining iteration budget per target.
+- **Flow diagram** — the routine rendered as a graph: triggers → run → (opens PR) → the reactive
+  branches from its `flow.reactions` ("`ci/*` fails → fix-ci", "changes-requested → address",
+  "merged → done"). This is the management/flow view of the routine, not just its text
+  ([11](11-reactive-flows-and-pr-subscriptions.md) §5).
+- **Owned PRs / subscriptions** panel — every PR this routine has opened and is now following: its
+  subscription status (watching / reacting / done), what it's waiting on, the last reaction fired,
+  and per-handler budget/lease state. The operational view of a routine that babysits its own work.
 
 ### 1.3 Run detail (the inspectable execution — GHA's job-log energy)
 

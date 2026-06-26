@@ -55,6 +55,7 @@ what lets us swap or scale runners without touching the product.
 | **Connector Registry** | The catalog of available MCP servers + native capabilities, their auth state, and which routines are granted them ([06](06-connectors-and-mcp.md)). |
 | **Secret Broker** | Resolves `secrets:` references to short-lived injected values at run start; enforces redaction. Never persists secret values in run records. |
 | **Run Orchestrator** | The durable state machine for a single run: provision runner → checkout → inject → execute → collect → finalize, with retries/timeouts/budget decrement. Survives process restarts (durable execution engine — see [09](09-tooling-stack.md)). |
+| **Subscription Manager** | Owns *instance-level* follows ([11](11-reactive-flows-and-pr-subscriptions.md)). When a run opens a PR, it registers a durable `Subscription` to that PR's hook events, matches incoming events against the routine's `flow.reactions`, spawns PR-scoped reaction runs, **reconciles** events webhooks don't deliver (CI-success, conflicts) by polling, and unsubscribes on merge/close/TTL. This is the productized `subscribe_pr_activity` loop. |
 
 ### Data plane
 
@@ -107,6 +108,8 @@ Routine *───* SecretBinding *───1 Secret        (references, never v
 Routine 1───* Run                               (every execution)
 Run 1───* RunStep / LogChunk / Artifact         (the inspectable timeline)
 Run *───1 Event                                 (what triggered it; null for manual)
+Subscription (pr, owner_routine, owner_run,      (instance-level follow of a PR the routine
+              head_sha, events, until, ttl)        opened; spawns reaction runs — see 11)
 Lease (resource, holder_run, ttl, sha)          (collision control; see 05)
 ConcurrencyGroup (key) 1───* Run                (serialization)
 Budget (key, used, max)                         (per-target iteration cap)
@@ -144,6 +147,10 @@ QUEUED ─► ADMITTED ─► PROVISIONING ─► RUNNING ─► COLLECTING ─�
   consumed").
 - **NEEDS_HUMAN** is a first-class terminal state, surfaced in the UI and on the target — not an
   error and not an infinite retry.
+- **Opening a PR registers a Subscription.** If a run uses `open-pr`, finalize hands the new PR to
+  the Subscription Manager so the routine begins following it per its `flow:` rules
+  ([11](11-reactive-flows-and-pr-subscriptions.md)). Reaction runs are ordinary runs through this
+  same state machine, scoped to that PR.
 
 ---
 

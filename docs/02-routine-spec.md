@@ -243,6 +243,34 @@ includes:
 A routine can also *extend* a template: `extends: templates/pr-worker.routine.md` inherits front
 matter (overridable per field) so a team standardizes "all PR workers behave like this."
 
+### 2.12 Reactive flow — follow & react to PRs this routine opens (full design in [11](11-reactive-flows-and-pr-subscriptions.md))
+
+When a routine opens a PR, it shouldn't fire-and-forget. `flow:` declares that the routine
+**subscribes to that PR's hook events** and **reacts** to them — the "*if `ci/*` fails, do Y*" rules
+that become the routine's flow diagram. These are *instance-level* subscriptions on artifacts the
+routine created, distinct from the *class-level* `on:` triggers in §2.2.
+
+```yaml
+flow:
+  subscribe:
+    events: [check_run, pull_request_review, issue_comment, status, pull_request]
+    until: [merged, closed]      # auto-unsubscribe
+    reconcile: 1h                # poll fallback for events webhooks don't deliver (CI-success, conflicts)
+    ttl: 14d
+  reactions:                     # event on the owned PR -> handler
+    - when: { check_run: { name: "ci/*", conclusion: failure } }
+      do: fix-ci                 # a named `## handler: fix-ci` body section, a `routine:<slug>`, or an inline prompt
+      budget: { key: "pr:${{ pr.number }}:fix-ci", max: 3, on_exhausted: needs-human }
+    - when: { pull_request_review: { state: changes_requested } }
+      do: routine:pr-cleanup     # delegate to the shared cleanup routine
+    - when: { pull_request: { merged: true } }
+      do: done                   # terminal: unsubscribe + clean up
+```
+
+Each reaction spawns a PR-scoped **reaction run** that obeys all of [05](05-concurrency-and-collisions.md)
+(lease on `pr:#N`, SHA barrier, yield-to-human, per-handler budget) and updates one idempotent status
+surface. Subscriptions are auto-created on PR creation and auto-removed on merge/close.
+
 ---
 
 ## 3. The body — prompt conventions
@@ -259,6 +287,8 @@ because they work):
 - Templated runtime values via `${{ … }}`: `${{ inputs.* }}`, `${{ event.* }}`, `${{ secrets.* }}`
   (redacted), `${{ state.* }}`, `${{ runtime.* }}`.
 - Explicit return/summary shape so the harness can parse and display a structured result.
+- `## handler: <name>` sections — the bodies that `flow.reactions[].do` (§2.12) point at, e.g.
+  `## handler: fix-ci`. Each is a self-contained sub-prompt run when its reaction fires.
 
 The harness never paraphrases the body — it passes it to the runner verbatim (with `${{ }}`
 resolved). Prompt wording is behavior; changes go through review like code.
