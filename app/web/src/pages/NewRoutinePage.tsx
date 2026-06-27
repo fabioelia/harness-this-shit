@@ -244,6 +244,8 @@ export function NewRoutinePage() {
   const [filterMode, setFilterMode] = useState<'and' | 'or'>('and');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [reactions, setReactions] = useState<{ source: string; kind: string; when: string; run: string; check?: string }[]>([]);
+  const [concScope, setConcScope] = useState('auto');
+  const [concConflict, setConcConflict] = useState<'wait' | 'drop'>('wait');
 
   const slug = slugTouched ? slugInput : slugify(name);
   // CI / GitHub events that carry an `action` and can be filtered.
@@ -273,6 +275,8 @@ export function NewRoutinePage() {
     setFilterBranches((d.filters?.branches ?? []).join(', '));
     setFilterMode((d.filters as { mode?: 'and' | 'or' })?.mode === 'or' ? 'or' : 'and');
     setReactions(d.reactions ?? []);
+    setConcScope(d.concurrency?.scope || 'auto');
+    setConcConflict(d.concurrency?.onConflict === 'drop' ? 'drop' : 'wait');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existing.data, isEdit]);
 
@@ -298,6 +302,7 @@ export function NewRoutinePage() {
     if (effort) L.push(`  effort: ${effort}`);
     L.push(`  repos: [${repo.split(',').map((s) => s.trim()).filter(Boolean).join(', ') || '*'}]`);
     if (memory) L.push('  memory: enabled');
+    if (concScope !== 'off') L.push(`  concurrency: { scope: ${concScope}, on_conflict: ${concConflict} }`);
     if (chainArr.length) L.push(`chain: [${chainArr.join(', ')}]`);
     if (reactions.length) {
       L.push('react:');
@@ -307,12 +312,12 @@ export function NewRoutinePage() {
     L.push('');
     L.push(prompt.trim() || '## Prompt\nDescribe what this routine should do, step by step.');
     return L.join('\n');
-  }, [name, slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain, schedule, filterActions, filterBranches, reactions]);
+  }, [name, slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain, schedule, filterActions, filterBranches, reactions, concScope, concConflict]);
 
   const valid = name.trim().length > 0 && slug.length > 0;
   function submit() {
     if (!valid) return;
-    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions };
+    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict } };
     if (isEdit) update.mutate({ slug: editSlug!, body }, { onSuccess: () => navigate(`/routines/${editSlug}`) });
     else create.mutate(body, { onSuccess: (r) => navigate(`/routines/${r.slug}`) });
   }
@@ -451,6 +456,23 @@ export function NewRoutinePage() {
                   <input type="checkbox" checked={memory} onChange={(e) => setMemory(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[#5b9ee6]" />
                   <div><div className="font-display text-[12.5px] font-semibold text-t2">Persistent memory</div><div className="text-[11px] text-dim-2">A <span className="font-mono text-[#ada695]">memory.md</span> the session reads at start and updates as it learns.</div></div>
                 </label>
+                <div className="border-t border-line-soft pt-3.5">
+                  <div className={LABEL}>Concurrency · <span className="font-mono lowercase tracking-normal text-dim-2">no two routines touch the same thing at once</span></div>
+                  <div className="mt-1 flex gap-3">
+                    <select value={concScope} onChange={(e) => setConcScope(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')}>
+                      <option value="auto">auto (per-PR, else per-routine)</option>
+                      <option value="pr">per PR</option>
+                      <option value="repo">per repo</option>
+                      <option value="routine">per routine</option>
+                      <option value="off">off (no lease)</option>
+                    </select>
+                    <select value={concConflict} onChange={(e) => setConcConflict(e.target.value as 'wait' | 'drop')} disabled={concScope === 'off'} className={cn(inputCls, 'font-mono text-[12px] disabled:opacity-40')}>
+                      <option value="wait">wait (serialize)</option>
+                      <option value="drop">drop (stand down)</option>
+                    </select>
+                  </div>
+                  <div className="mt-1.5 text-[11px] text-dim-2">A run acquires a lease on its scope (e.g. <span className="font-mono text-[#ada695]">pr:acme/x#42</span>). If held, <span className="font-mono">wait</span> serializes; <span className="font-mono">drop</span> stands down. Leases expire after 15m so a crash never wedges.</div>
+                </div>
                 <div className="border-t border-line-soft pt-3.5">
                   <div className={LABEL}>Chain · <span className="font-mono lowercase tracking-normal text-dim-2">run routines immediately after</span></div>
                   <ChainPicker value={chain} onChange={setChain} selfSlug={slug} />

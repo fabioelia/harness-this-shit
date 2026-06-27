@@ -27,8 +27,9 @@ const STATE_META: Record<string, { label: string; color: string; pulse?: boolean
   // run-status aliases
   succeeded: { label: 'Succeeded', color: SIGNAL.success },
   failed: { label: 'Failed', color: SIGNAL.failing },
-  skipped: { label: 'Skipped', color: SIGNAL.idle },
+  skipped: { label: 'Stood down', color: SIGNAL.idle },
   canceled: { label: 'Canceled', color: SIGNAL.idle },
+  waiting: { label: 'Waiting · lease', color: SIGNAL.lease, pulse: true },
 };
 export const stateMeta = (s: string) => STATE_META[s] ?? STATE_META.idle;
 

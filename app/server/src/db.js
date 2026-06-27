@@ -59,6 +59,14 @@ CREATE TABLE IF NOT EXISTS watches (
   fire_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_watches_status ON watches(status);
+CREATE TABLE IF NOT EXISTS leases (
+  key TEXT PRIMARY KEY,             -- concurrency group: pr:<repo>#<n> | repo:<r> | routine:<slug>
+  run_id TEXT NOT NULL,
+  routine_slug TEXT NOT NULL,
+  head_sha TEXT NOT NULL DEFAULT '',
+  acquired_at INTEGER NOT NULL DEFAULT 0,
+  expires_at INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS mcp_servers (
   name TEXT PRIMARY KEY,
   config TEXT NOT NULL,            -- json server def: {command,args,env} (stdio) | {type,url,headers} (http/sse)
@@ -132,6 +140,7 @@ export function getDb() {
   ensure('routines', 'reactions', "reactions TEXT NOT NULL DEFAULT '[]'");
   ensure('routines', 'effort', "effort TEXT NOT NULL DEFAULT ''");
   ensure('routines', 'memory', 'memory INTEGER NOT NULL DEFAULT 0');
+  ensure('routines', 'concurrency', "concurrency TEXT NOT NULL DEFAULT '{}'");
   ensure('mcp_servers', 'auth', "auth TEXT NOT NULL DEFAULT '{}'");
   ensure('runs', 'dur_ms', 'dur_ms INTEGER');
   const n = _db.prepare('SELECT COUNT(*) AS n FROM routines').get();

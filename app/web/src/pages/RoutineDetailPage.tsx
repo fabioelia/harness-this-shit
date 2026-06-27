@@ -259,6 +259,26 @@ export function RoutineDetailPage() {
             </div>
             <div className="mt-3 border-t border-line-soft pt-2.5 font-mono text-[11px] text-dim">{d.runCount} run{d.runCount === 1 ? '' : 's'} recorded</div>
           </div>
+          {(d.concurrency?.scope ?? 'auto') !== 'off' && (
+            <div className={CARD}>
+              <div className={`${LABEL} mb-3`}>Concurrency · {d.concurrency?.scope || 'auto'} · {d.concurrency?.onConflict || 'wait'}</div>
+              {d.leases.length === 0 ? (
+                <div className="font-mono text-[12px] text-dim">No lease held — idle. A run claims a lease on its scope so two never overlap.</div>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  {d.leases.map((l) => (
+                    <div key={l.key} className="flex items-center gap-2 font-mono text-[11.5px]">
+                      <Dot color={SIGNAL.lease} size={7} pulse />
+                      <span className="text-lease">{l.key}</span>
+                      {l.sha && <span className="text-dim">@{l.sha}</span>}
+                      <Link to={`/runs/${l.runId}`} className="ml-auto text-brand">{l.runId}</Link>
+                      <span className="text-dim">ttl {l.ttl}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {d.memory && <MemoryCard slug={d.slug} />}
           {d.chain?.length > 0 && (
             <div className={CARD}>

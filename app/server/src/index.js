@@ -127,6 +127,10 @@ const cleanFilters = (f) => {
   const arr = (x) => (Array.isArray(x) ? x.map((s) => String(s).trim()).filter(Boolean) : []);
   return { actions: arr(o.actions), branches: arr(o.branches), mode: o.mode === 'or' ? 'or' : 'and' };
 };
+const cleanConcurrency = (c) => {
+  const o = c && typeof c === 'object' ? c : {};
+  return { scope: ['auto', 'pr', 'repo', 'routine', 'off'].includes(o.scope) ? o.scope : 'auto', onConflict: o.onConflict === 'drop' ? 'drop' : 'wait' };
+};
 
 function relTime(ts) {
   if (!ts) return '—';
@@ -139,6 +143,32 @@ function relTime(ts) {
 }
 const fmtDur = (ms) => (ms == null ? '…' : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`);
 const fmtOffset = (ms) => `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, '0')}`;
+
+// ── Concurrency leases: no two routines act on the same entity at once ──────────
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const LEASE_TTL = 15 * 60_000; // a crashed run's lease frees itself after this
+const eventSha = (e) => e?.pull_request?.head?.sha || e?.after || e?.check_suite?.head_sha || e?.workflow_run?.head_sha || e?.head_commit?.id || '';
+const lightPrRef = (e, routine) => { const repo = eventRepo(e) || repoTargets(routine)[0]; const num = e?.pull_request?.number ?? e?.number; return repo && num ? { repo, pr: num } : null; };
+function leaseFor(routine, event) {
+  let conc; try { conc = JSON.parse(routine.concurrency || '{}'); } catch { conc = {}; }
+  let scope = conc.scope || 'auto';
+  const pr = lightPrRef(event, routine);
+  if (scope === 'auto') scope = pr ? 'pr' : 'routine';
+  const onConflict = conc.onConflict === 'drop' ? 'drop' : 'wait';
+  if (scope === 'off') return { key: null, onConflict, sha: '' };
+  if (scope === 'pr' && pr) return { key: `pr:${pr.repo}#${pr.pr}`, onConflict, sha: eventSha(event) };
+  if (scope === 'repo') { const repo = pr?.repo || repoTargets(routine)[0] || eventRepo(event); return { key: repo ? `repo:${repo}` : `routine:${routine.slug}`, onConflict, sha: eventSha(event) }; }
+  return { key: `routine:${routine.slug}`, onConflict, sha: eventSha(event) };
+}
+// Atomic (node:sqlite is synchronous): steals an expired lease, else reports the holder.
+function acquireLease(key, runId, slug, sha) {
+  const cur = one('SELECT * FROM leases WHERE key=?', key);
+  if (cur && cur.run_id !== runId && cur.expires_at > now()) return { ok: false, holder: cur.run_id };
+  run('INSERT INTO leases (key,run_id,routine_slug,head_sha,acquired_at,expires_at) VALUES (?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET run_id=excluded.run_id, routine_slug=excluded.routine_slug, head_sha=excluded.head_sha, acquired_at=excluded.acquired_at, expires_at=excluded.expires_at',
+    key, runId, slug, sha || '', now(), now() + LEASE_TTL);
+  return { ok: true };
+}
+const releaseLease = (key, runId) => { if (key) run('DELETE FROM leases WHERE key=? AND run_id=?', key, runId); };
 
 // Redact obvious secrets before a trace event is ever written to disk.
 // Runtime options the CLI actually accepts (verified against `claude --model/--effort`).
@@ -169,6 +199,7 @@ const shapeRoutine = (r) => {
     owner: r.owner, team: r.team, ownerColor: r.av_color, initials: r.initials,
     triggers: j(r.triggers), connectors: j(r.connectors), chain: j(r.chain),
     schedule: r.schedule || '', filters: jObj(r.filters) || {}, reactions: j(r.reactions),
+    concurrency: jObj(r.concurrency) || {},
     model: r.model, effort: r.effort || '', memory: !!r.memory, repo: r.repo, branch: r.branch,
     state: r.enabled ? r.state : 'disabled', enabled: !!r.enabled,
     lastAgo: r.last_ago, lastStatus: r.last_status, next: r.next,
@@ -221,6 +252,32 @@ function executeRoutine(r, rawEvent, triggerLabel) {
   run('UPDATE routines SET state=?, last_ago=?, last_status=? WHERE slug=?', 'running', 'now', 'running', r.slug);
 
   (async () => {
+    // Concurrency guard: acquire the routine's lease before doing any work so two
+    // routines never act on the same entity (PR / repo / routine) at once.
+    const { key: leaseK, onConflict, sha } = leaseFor(r, rawEvent ?? {});
+    if (leaseK) {
+      let lease = acquireLease(leaseK, id, r.slug, sha);
+      if (!lease.ok) {
+        if (onConflict === 'drop') {
+          run("UPDATE runs SET status='skipped', dur=?, output=? WHERE id=?", '—', `stood down — ${leaseK} is held by ${lease.holder}`, id);
+          run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
+          logActivity(`${r.slug} stood down · ${leaseK} held by ${lease.holder}`, 'idle');
+          return;
+        }
+        run("UPDATE runs SET status='waiting', dur=? WHERE id=?", `waiting · ${leaseK}`, id);
+        logActivity(`${r.slug} waiting · ${leaseK} held by ${lease.holder}`, 'queued');
+        const deadline = now() + LEASE_TTL;
+        while (now() < deadline) { await sleep(3000); lease = acquireLease(leaseK, id, r.slug, sha); if (lease.ok) break; }
+        if (!lease.ok) {
+          run("UPDATE runs SET status='failed', dur='—', output=? WHERE id=?", `gave up waiting for ${leaseK}`, id);
+          run("UPDATE routines SET state='idle', last_status='failing' WHERE slug=?", r.slug);
+          return;
+        }
+      }
+      run("UPDATE runs SET status='running' WHERE id=?", id);
+    }
+
+    try {
     // The session is autonomous: it gets the natural instruction + the raw event +
     // its granted tools, and does the work itself (gh, slack-post, web…) — the harness
     // only routes, captures the trace, and enforces guardrails.
@@ -299,6 +356,9 @@ function executeRoutine(r, rawEvent, triggerLabel) {
           if (dr) executeRoutine(dr, { ...(rawEvent ?? {}), _chainPath: nextPath, upstream: { routine: r.slug, run: id, output } }, `after · ${r.slug}`);
         }
       }
+    }
+    } finally {
+      if (leaseK) releaseLease(leaseK, id);
     }
   })().catch((e) => {
     run('UPDATE runs SET status=?, output=? WHERE id=?', 'failed', `harness error: ${e.message}`, id);
@@ -515,6 +575,11 @@ if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(tickWatches, 45_00
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.get('/api/health', (_q, res) => res.json({ ok: true }));
 app.get('/api/models', (_q, res) => res.json({ models: MODELS, efforts: EFFORTS, defaultModel: DEFAULT_MODEL }));
+// Live concurrency leases — who's holding what, on which entity/SHA.
+app.get('/api/leases', (_q, res) => res.json(
+  all('SELECT * FROM leases WHERE expires_at > ? ORDER BY acquired_at DESC', now())
+    .map((l) => ({ key: l.key, runId: l.run_id, routine: l.routine_slug, sha: l.head_sha ? l.head_sha.slice(0, 7) : '', held: relTime(l.acquired_at), ttl: fmtDur(Math.max(0, l.expires_at - now())) }))
+));
 
 // The user's real GitHub repos — so the UI can see & target repositories.
 // ?owner=<org|*> & ?q=<search> for cross-org browse / GitHub-wide search.
@@ -550,7 +615,9 @@ app.get('/api/routines/:slug', (req, res) => {
   const runHistory = all('SELECT * FROM runs WHERE routine_slug=? ORDER BY created_at DESC, ord DESC LIMIT 12', r.slug)
     .map((x) => ({ id: x.id, status: x.status, ago: relTime(x.created_at), dur: x.dur, trigger: x.trigger }));
   const watches = all('SELECT * FROM watches WHERE origin_routine=? ORDER BY created_at DESC LIMIT 20', r.slug).map(shapeWatch);
-  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches });
+  const leases = all('SELECT * FROM leases WHERE routine_slug=? AND expires_at > ? ORDER BY acquired_at DESC', r.slug, now())
+    .map((l) => ({ key: l.key, runId: l.run_id, sha: l.head_sha ? l.head_sha.slice(0, 7) : '', held: relTime(l.acquired_at), ttl: fmtDur(Math.max(0, l.expires_at - now())) }));
+  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases });
 });
 
 function insertRoutine(b) {
@@ -568,14 +635,14 @@ function insertRoutine(b) {
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
   run(
     `INSERT INTO routines
-      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     slug, (b.name || '').trim(), (b.summary || '').trim(), owner, team,
     JSON.stringify(triggers), JSON.stringify(connectors),
     'idle', 'never', 'idle', next, null, '$0.00', enabled, '', '', '—',
     ownerColor(owner), initialsOf(owner), ord,
     (b.prompt || '').trim(), normModel(b.model), (b.repo || '').trim(), (b.branch || 'main').trim(),
-    JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions), normEffort(b.effort), b.memory ? 1 : 0
+    JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions), normEffort(b.effort), b.memory ? 1 : 0, JSON.stringify(cleanConcurrency(b.concurrency))
   );
   return slug;
 }
@@ -630,6 +697,7 @@ function buildRoutineMd(r) {
   if (r.effort) L.push(`  effort: ${r.effort}`);
   L.push(`  repos: [${(r.repo || '').split(',').map((s) => s.trim()).filter(Boolean).join(', ') || '*'}]`);
   if (r.memory) L.push('  memory: enabled');
+  { const c = jObj(r.concurrency) || {}; if (c.scope && c.scope !== 'off') L.push(`  concurrency: { scope: ${c.scope || 'auto'}, on_conflict: ${c.onConflict || 'wait'} }`); }
   const chain = j(r.chain);
   if (chain.length) L.push(`chain: [${chain.join(', ')}]`);
   const reactions = cleanReactions(j(r.reactions));
@@ -669,14 +737,15 @@ app.put('/api/routines/:slug', (req, res) => {
   const reactions = b.reactions != null ? cleanReactions(b.reactions) : j(r.reactions);
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
   run(
-    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=? WHERE slug=?`,
+    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
     JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
     JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
     normModel(b.model ?? r.model), (b.repo ?? r.repo).trim(), (b.branch ?? r.branch).trim() || 'main',
     (b.prompt ?? r.prompt).trim(), ownerColor(owner), initialsOf(owner), next, schedule, JSON.stringify(filters), JSON.stringify(reactions),
     b.effort != null ? normEffort(b.effort) : (r.effort || ''),
-    b.memory != null ? (b.memory ? 1 : 0) : r.memory, r.slug
+    b.memory != null ? (b.memory ? 1 : 0) : r.memory,
+    JSON.stringify(b.concurrency != null ? cleanConcurrency(b.concurrency) : (jObj(r.concurrency) || {})), r.slug
   );
   res.json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', r.slug)));
 });

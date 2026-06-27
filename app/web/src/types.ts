@@ -12,6 +12,7 @@ export interface Routine {
   schedule: string;
   filters: { actions?: string[]; branches?: string[] };
   reactions: Reaction[];
+  concurrency: { scope?: string; onConflict?: string };
   model: string;
   effort: string;
   memory: boolean;
@@ -52,6 +53,7 @@ export interface RoutineDetail extends Routine {
   prompt: string;
   runHistory: RunRow[];
   watches: Watch[];
+  leases: { key: string; runId: string; sha: string; held: string; ttl: string }[];
 }
 
 export interface Connector {
