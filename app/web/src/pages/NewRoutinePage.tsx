@@ -4,12 +4,13 @@ import { useCreateRoutine, useUpdateRoutine, useRoutine, useGithubRepos, useGith
 import { cn } from '@/lib/utils';
 
 const TRIGGER_GROUPS: { label: string; items: string[] }[] = [
-  { label: 'Control', items: ['schedule', 'manual', 'api', 'webhook', 'after'] },
+  { label: 'Control', items: ['schedule', 'manual', 'api', 'webhook'] },
   { label: 'GitHub', items: ['push', 'pull_request', 'pull_request_review', 'issues', 'issue_comment', 'label', 'release'] },
   { label: 'CI / checks', items: ['check_run', 'check_suite', 'workflow_run', 'status', 'deployment_status'] },
   { label: 'Other sources', items: ['sentry', 'slack'] },
 ];
-const CONNECTORS = ['github', 'slack', 'web', 'jira', 'sentry', 'notion', 'figma', 'pagerduty', 'linear'];
+// Only tools the runner actually grants (runner.js allowedToolsFor). No phantom MCPs.
+const CONNECTORS = ['github', 'slack', 'web'];
 const SINKS = ['stdout', 'slack', 'github-comment', 'github-gist', 'confluence'];
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';

@@ -22,10 +22,9 @@ export function ConnectorsPage() {
         <div className="mb-3 font-mono text-[12px] font-medium text-dim"><span className="text-brand">Switchboard</span> › Connectors</div>
         <div className="flex items-end justify-between gap-4">
           <div>
-            <div className="font-display text-[23px] font-bold tracking-tight">Connectors &amp; MCPs</div>
-            <div className="mt-1 text-[13px] text-muted-2">{connectors?.length ?? 0} connectors · grants flow to routines by registry id · secrets stored as references</div>
+            <div className="font-display text-[23px] font-bold tracking-tight">Connectors</div>
+            <div className="mt-1 text-[13px] text-muted-2">The tools a routine session can be granted. Status reflects this machine — gh keychain, env tokens.</div>
           </div>
-          <Link to="/settings" className="flex h-9 items-center gap-2 rounded-md bg-brand px-[15px] font-display text-[12.5px] font-semibold text-[#16130f] hover:bg-brand-deep"><span className="-mt-px text-[16px] leading-none">+</span>Add connector</Link>
         </div>
         <div className="mt-3.5 flex items-center gap-[18px] font-sans text-[12px] font-medium text-muted-2">
           <span className="inline-flex items-center gap-1.5"><Dot color={SIGNAL.success} size={7} /><span className="font-semibold text-t2">{counts('ok')}</span> connected</span>
@@ -37,9 +36,9 @@ export function ConnectorsPage() {
       <div className="px-[26px] py-5 pb-[26px]">
         <div className="overflow-hidden rounded-xl border border-line bg-surface">
           <div className="border-b border-line bg-surface-2 px-[18px] py-[11px] font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2" style={GRID}>
-            <div /><div>Connector</div><div>Health</div><div>Auth</div><div>Scopes</div><div className="text-right">Used by</div>
+            <div /><div>Connector</div><div>Status</div><div>Auth</div><div>Capabilities</div><div className="text-right">Used by</div>
           </div>
-          {connectors && connectors.length === 0 && <Empty title="No connectors yet" hint="Add an MCP server or native capability, then grant it to routines with a checkbox. Secrets stay as vault:// references." />}
+          {connectors && connectors.length === 0 && <Empty title="No connectors" hint="Grant github, slack, or web to a routine in its editor." />}
           {connectors?.map((c) => (
             <div key={c.code} className="border-b border-line-soft px-[18px] py-[15px] last:border-0 hover:bg-white/[0.015]" style={GRID}>
               <div className="grid place-items-center font-mono text-[11px] font-bold text-[#16130f]" style={{ width: 30, height: 30, borderRadius: 8, background: c.avColor }}>{c.code}</div>
@@ -59,7 +58,7 @@ export function ConnectorsPage() {
         </div>
         <div className="mt-3.5 flex items-center gap-[9px] font-sans text-[11.5px] font-medium text-dim-2">
           <svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="#6f685c" strokeWidth="1.6"><circle cx="9" cy="9" r="6.5" /><line x1="9" y1="8" x2="9" y2="12.5" strokeLinecap="round" /><circle cx="9" cy="5.6" r="0.6" fill="#6f685c" /></svg>
-          Granting a connector to a routine is a checkbox in its editor — secrets resolve from <span className="font-mono text-[#ada695]">vault://</span> references and never appear in the file, the UI, or logs.
+          Grant a connector to a routine in its editor (deny-by-default). Secrets come from your environment — the gh keychain and <span className="font-mono text-[#ada695]">SLACK_BOT_TOKEN</span> — never the routine file.
         </div>
       </div>
     </div>

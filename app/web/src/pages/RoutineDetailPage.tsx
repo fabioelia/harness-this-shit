@@ -179,13 +179,19 @@ export function RoutineDetailPage() {
   const runNow = () => dispatch.mutate(d.slug, { onSuccess: (res) => navigate(`/runs/${res.runId}`) });
   const onKill = () => { if (confirm(`Disable “${d.name}”? It will stop firing on its triggers.`)) toggle.mutate({ slug: d.slug, enabled: false }); };
   const onDelete = () => { if (confirm(`Delete “${d.name}” and its run history? This cannot be undone.`)) del.mutate(d.slug, { onSuccess: () => navigate('/') }); };
-  const simulatePush = () =>
-    push.mutate(undefined, {
+  const simulatePush = () => {
+    const repo = (d.repo || '').split(',').map((s) => s.trim()).filter(Boolean)[0];
+    const payload = repo
+      ? { event: 'push', repository: repo, ref: `refs/heads/${d.branch || 'main'}`, pusher: d.owner, head_commit: { message: 'simulated push from Switchboard' }, pull_request: { number: 1 } }
+      : undefined; // no repo target → server's sample push (matches any repo)
+    push.mutate(payload, {
       onSuccess: (res) => {
         const mine = res.runs.find((x) => x.slug === d.slug);
         if (mine) navigate(`/runs/${mine.runId}`);
+        else alert(`No run produced — this routine's repo/filters didn't match the simulated push${repo ? ` to ${repo}` : ''}.`);
       },
     });
+  };
   const hasPush = d.triggers.includes('push');
   const busy = dispatch.isPending || push.isPending;
 
@@ -214,7 +220,7 @@ export function RoutineDetailPage() {
             </button>
             <button onClick={() => navigate(`/routines/${d.slug}/edit`)} className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Edit</button>
             <button onClick={() => validate.mutate(d.slug)} disabled={validate.isPending} className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair disabled:opacity-40">{validate.isPending ? 'Validating…' : 'Validate'}</button>
-            <button onClick={onKill} className="flex h-[34px] items-center rounded-md border border-bad/40 px-[13px] font-display text-[12.5px] font-semibold text-bad hover:bg-bad/10">{d.enabled ? 'Kill' : 'Delete'}</button>
+            <button onClick={d.enabled ? onKill : onDelete} disabled={del.isPending} className="flex h-[34px] items-center rounded-md border border-bad/40 px-[13px] font-display text-[12.5px] font-semibold text-bad hover:bg-bad/10 disabled:opacity-40">{d.enabled ? 'Kill' : 'Delete'}</button>
           </div>
         </div>
 

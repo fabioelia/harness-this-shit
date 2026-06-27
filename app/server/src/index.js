@@ -96,7 +96,7 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     // its granted tools, and does the work itself (gh, slack-post, web…). No harness
     // enrichment, no harness sinks.
     const tools = j(r.connectors);
-    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {});
+    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints());
     run('UPDATE runs SET prompt=? WHERE id=?', prompt, id);
 
     // Step-level trace: normalize each stream-json event into a run_events row,
@@ -243,15 +243,17 @@ app.get('/api/stats', (_q, res) => {
   const enabled = rows.filter((r) => r.enabled);
   const st = (s) => rows.filter((r) => r.enabled && r.state === s).length;
   const teams = new Set(rows.map((r) => r.team)).size;
-  const withSuccess = enabled.filter((r) => r.success != null);
-  const success7d = withSuccess.length ? Math.round(withSuccess.reduce((a, r) => a + r.success, 0) / withSuccess.length) : null;
+  // Real success rate from the last 100 finished runs; real spend from captured cost.
+  const recent = all("SELECT status FROM runs WHERE status IN ('succeeded','failed') ORDER BY created_at DESC LIMIT 100");
+  const successRate = recent.length ? Math.round((100 * recent.filter((r) => r.status === 'succeeded').length) / recent.length) : null;
+  const spendNum = one('SELECT COALESCE(SUM(cost_usd),0) AS s FROM runs').s || 0;
   const dayAgo = now() - 86_400_000;
   res.json({
     wordmark: meta('wordmark', 'Switchboard'), killSwitch: meta('kill_switch', 'false') === 'true',
     total: rows.length, enabled: enabled.length, teams,
-    running: st('running'), needsHuman: st('needs_human'), failing: st('failing'),
-    runsToday: one('SELECT COUNT(*) AS n FROM runs WHERE created_at > ?', dayAgo).n, success7d, reactions24h: 0,
-    leases: rows.filter((r) => r.enabled && r.lease_ref).length,
+    running: st('running'), failing: st('failing'),
+    runsToday: one('SELECT COUNT(*) AS n FROM runs WHERE created_at > ?', dayAgo).n,
+    successRate, spend: `$${Number(spendNum).toFixed(2)}`,
   });
 });
 
@@ -371,12 +373,21 @@ app.post('/api/routines/:slug/validate', async (req, res) => {
   res.json({ ok: checks.every((c) => c.ok), checks });
 });
 
+// Guardrails injected into EVERY session prompt as hard constraints (when on).
 const DEFAULT_POLICIES = [
-  { key: 'pr_edits', title: 'UI edits commit via pull request', desc: 'Routine edits in the web editor open a PR instead of pushing to the branch.', on: true },
-  { key: 'write_consent', title: 'Write routines require opt-in consent', desc: 'A routine may only push to a PR carrying the auto-cleanup label.', on: true },
-  { key: 'deny_merge', title: 'merge-pr capability denied org-wide', desc: 'No routine may merge a pull request, regardless of grant.', on: true },
-  { key: 'approval_gate', title: 'Approval gate for first-time write routines', desc: 'A maintainer approves the first run of any routine that mutates shared targets.', on: false },
+  { key: 'deny_merge', title: 'Never merge pull requests', desc: 'Every session is told to never run `gh pr merge` or any merge command.', on: true },
+  { key: 'pr_not_push', title: 'Changes via pull request, not direct push', desc: 'Sessions must open a PR for changes instead of pushing to a protected branch.', on: true },
+  { key: 'no_destructive', title: 'No destructive git/history ops', desc: 'Sessions must not force-push, delete branches, or rewrite history.', on: true },
 ];
+function policyConstraints() {
+  const saved = jObj(meta('policies', 'null')) || {};
+  const on = (k) => (k in saved ? !!saved[k] : !!DEFAULT_POLICIES.find((p) => p.key === k)?.on);
+  const c = [];
+  if (on('deny_merge')) c.push('Never merge a pull request — do not run `gh pr merge` or any merge command.');
+  if (on('pr_not_push')) c.push('Do not push directly to a protected or default branch; open a pull request for any change.');
+  if (on('no_destructive')) c.push('Do not force-push, delete branches, or rewrite git history.');
+  return c;
+}
 app.get('/api/settings', async (_q, res) => {
   const st = await integrationStatus();
   const saved = jObj(meta('policies', 'null'));
@@ -445,13 +456,13 @@ app.get('/api/runs/:id', (req, res) => {
 // Connectors reflect REAL integration status (gh + Slack), live.
 app.get('/api/connectors', async (_q, res) => {
   const st = await integrationStatus();
-  const rows = all('SELECT triggers, connectors, sinks FROM routines WHERE enabled=1');
-  const uses = (key) => rows.filter((r) => j(r.connectors).includes(key) || j(r.sinks).some((s) => (s.type || '').startsWith(key))).length;
+  const rows = all('SELECT connectors FROM routines WHERE enabled=1');
+  const uses = (key) => rows.filter((r) => j(r.connectors).includes(key)).length;
   const out = [
-    { code: 'GH', name: 'GitHub', kind: 'CLI · gh', health: st.github.connected ? 'ok' : 'off', auth: st.github.connected ? `gh · @${st.github.account}` : 'run `gh auth login`', scopes: 'repo, pull_requests, issues, gist', routines: uses('github'), avColor: '#7f9bd1' },
-    { code: 'SL', name: 'Slack', kind: 'Bot', health: st.slack.connected ? 'ok' : 'off', auth: st.slack.connected ? `${st.slack.team} · @${st.slack.bot}` : 'set SLACK_BOT_TOKEN', scopes: 'chat:write, channels:read', routines: uses('slack'), avColor: '#c9a24a' },
-    { code: 'AT', name: 'Atlassian / Confluence', kind: 'API', health: process.env.ATLASSIAN_API_TOKEN ? 'ok' : 'off', auth: process.env.ATLASSIAN_API_TOKEN ? 'token set' : 'set ATLASSIAN_API_TOKEN + ATLASSIAN_BASE_URL', scopes: 'pages:write', routines: uses('confluence'), avColor: '#6fae9a' },
-    { code: 'SE', name: 'Sentry', kind: 'MCP', health: 'off', auth: 'not connected', scopes: 'issue:read', routines: uses('sentry'), avColor: '#b59ad6' },
+    { code: 'GH', name: 'GitHub', kind: 'CLI · gh', health: st.github.connected ? 'ok' : 'off', auth: st.github.connected ? `gh · @${st.github.account}` : 'run `gh auth login`', scopes: 'read/write PRs, issues, checks, gists', routines: uses('github'), avColor: '#7f9bd1' },
+    { code: 'SL', name: 'Slack', kind: 'Bot', health: st.slack.connected ? 'ok' : 'off', auth: st.slack.connected ? `${st.slack.team} · @${st.slack.bot}` : 'set SLACK_BOT_TOKEN', scopes: 'post messages via slack-post', routines: uses('slack'), avColor: '#c9a24a' },
+    { code: 'WB', name: 'Web fetch', kind: 'Built-in', health: 'ok', auth: 'no auth needed', scopes: 'fetch & read public URLs', routines: uses('web'), avColor: '#8aa0b8' },
+    { code: 'AT', name: 'Atlassian / Confluence', kind: 'API · planned', health: process.env.ATLASSIAN_API_TOKEN ? 'ok' : 'off', auth: process.env.ATLASSIAN_API_TOKEN ? 'token set' : 'set ATLASSIAN_API_TOKEN', scopes: 'publish to Confluence (not yet a granted tool)', routines: uses('confluence'), avColor: '#6fae9a' },
   ];
   res.json(out);
 });

@@ -53,10 +53,9 @@ function StatStrip({ s }: { s?: Stats }) {
     <div className="mb-[18px] flex overflow-hidden rounded-xl border border-line bg-surface">
       {cell('Routines', <span>{s?.total ?? '—'} <span className="text-[12px] font-medium text-dim">/ {s?.enabled ?? 0} on</span></span>)}
       {cell('Running now', <span className="flex items-center gap-[9px]">{s?.running ?? 0}<Dot color="#5b9ee6" pulse /></span>)}
-      {cell('Needs human', <span className="flex items-center gap-[9px] text-warn">{s?.needsHuman ?? 0}<Dot color="#e6b052" /></span>)}
       {cell('Runs today', s?.runsToday ?? '—')}
-      {cell('Success 7d', <span className="text-ok">{s?.success7d == null ? '—' : `${s.success7d}%`}</span>)}
-      {cell('Reactions 24h', <span>{s?.reactions24h ?? '—'} <span className="text-[12px] font-medium text-dim">fired</span></span>, true)}
+      {cell('Success rate', <span className="text-ok">{s?.successRate == null ? '—' : `${s.successRate}%`}</span>)}
+      {cell('Spend', <span>{s?.spend ?? '$0.00'} <span className="text-[12px] font-medium text-dim">total</span></span>, true)}
     </div>
   );
 }

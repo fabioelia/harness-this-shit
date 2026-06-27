@@ -62,7 +62,7 @@ export function RunDetailPage() {
           {/* Output — the real claude -p stdout */}
           <div className="rounded-lg border bg-surface p-[18px]" style={{ borderColor: ok ? 'rgba(95,191,134,.3)' : running ? '#2b2620' : 'rgba(229,115,107,.3)' }}>
             <div className="mb-3 flex items-center justify-between">
-              <span className={LABEL}>Output · claude -p stdout</span>
+              <span className={LABEL}>Output · session result</span>
               <Pill label={m.label} color={m.color} />
             </div>
             {running ? (

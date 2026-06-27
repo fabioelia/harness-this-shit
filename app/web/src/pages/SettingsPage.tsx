@@ -28,7 +28,7 @@ export function SettingsPage() {
       <div className="border-b border-line-soft bg-head px-[26px] py-[22px]">
         <div className="mb-3 font-mono text-[12px] font-medium text-dim"><span className="text-brand">Switchboard</span> › Config</div>
         <div className="font-display text-[23px] font-bold tracking-tight">Settings</div>
-        <div className="mt-1 text-[13px] text-muted-2">The identities this harness runs as, and the org-wide policy that bounds every routine.</div>
+        <div className="mt-1 text-[13px] text-muted-2">The identities this harness runs as, and the guardrails injected into every routine session.</div>
       </div>
       <div className="mx-auto max-w-[960px] px-[26px] py-6">
         <div className="mb-2 font-display text-[11px] font-semibold uppercase tracking-[0.1em] text-dim-2">Connected identities</div>
@@ -37,7 +37,7 @@ export function SettingsPage() {
           <Identity ok={!!id?.slack.connected} name="Slack · bot" detail={id?.slack.connected ? `${id.slack.team} · @${id.slack.bot}` : 'set SLACK_BOT_TOKEN'} />
         </div>
 
-        <div className="mb-2 font-display text-[11px] font-semibold uppercase tracking-[0.1em] text-dim-2">Org policy · guardrails</div>
+        <div className="mb-2 font-display text-[11px] font-semibold uppercase tracking-[0.1em] text-dim-2">Session guardrails</div>
         <div className="overflow-hidden rounded-xl border border-line bg-surface">
           {(data?.policies || []).map((p) => (
             <div key={p.key} className="flex items-center gap-3 border-b border-line-soft px-5 py-3.5 last:border-0">
@@ -48,7 +48,7 @@ export function SettingsPage() {
               <Toggle on={p.on} onCheckedChange={(v) => togglePolicy(p.key, v)} />
             </div>
           ))}
-          <div className="px-5 py-3.5 text-[12px] text-dim-2">Policy is the ceiling — individual routines can be stricter, never looser. Changes persist immediately.</div>
+          <div className="px-5 py-3.5 text-[12px] text-dim-2">Each enabled guardrail is injected into every routine session as a hard constraint. Changes persist immediately.</div>
         </div>
       </div>
     </div>
