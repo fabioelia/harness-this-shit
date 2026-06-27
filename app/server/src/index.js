@@ -105,7 +105,7 @@ function ensureMemory(slug) {
 const cleanFilters = (f) => {
   const o = f && typeof f === 'object' ? f : {};
   const arr = (x) => (Array.isArray(x) ? x.map((s) => String(s).trim()).filter(Boolean) : []);
-  return { actions: arr(o.actions), branches: arr(o.branches) };
+  return { actions: arr(o.actions), branches: arr(o.branches), mode: o.mode === 'or' ? 'or' : 'and' };
 };
 
 function relTime(ts) {
@@ -309,14 +309,13 @@ function filtersMatch(r, event) {
   let f; try { f = JSON.parse(r.filters || '{}'); } catch { f = {}; }
   const actions = Array.isArray(f.actions) ? f.actions : [];
   const branches = Array.isArray(f.branches) ? f.branches : [];
-  if (actions.length) {
-    // Match against the event's action OR a CI conclusion/state (so "success"/"failure"
-    // work for check_run/workflow_run/status/deployment, and "approved" for reviews).
-    const vals = eventStates(event);
-    if (vals.length && !vals.some((v) => actions.includes(v))) return false;
-  }
-  if (branches.length) { const br = branchOf(event); if (br && !branches.includes(br)) return false; }
-  return true;
+  const mode = f.mode === 'or' ? 'or' : 'and';
+  const checks = [];
+  // Within a filter, the listed values are OR'd; across filters they combine by `mode`.
+  if (actions.length) { const vals = eventStates(event); checks.push(!vals.length || vals.some((v) => actions.includes(v))); }
+  if (branches.length) { const br = branchOf(event); checks.push(!br || branches.includes(br)); }
+  if (!checks.length) return true;
+  return mode === 'or' ? checks.some(Boolean) : checks.every(Boolean);
 }
 
 function dispatchEvent(type, payload) {

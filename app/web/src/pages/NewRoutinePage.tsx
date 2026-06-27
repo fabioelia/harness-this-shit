@@ -241,6 +241,8 @@ export function NewRoutinePage() {
   const [schedule, setSchedule] = useState('0 9 * * *');
   const [filterActions, setFilterActions] = useState('');
   const [filterBranches, setFilterBranches] = useState('');
+  const [filterMode, setFilterMode] = useState<'and' | 'or'>('and');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [reactions, setReactions] = useState<{ source: string; kind: string; when: string; run: string; check?: string }[]>([]);
 
   const slug = slugTouched ? slugInput : slugify(name);
@@ -249,7 +251,9 @@ export function NewRoutinePage() {
   const filtersObj = {
     actions: filterActions.split(',').map((s) => s.trim()).filter(Boolean),
     branches: filterBranches.split(',').map((s) => s.trim()).filter(Boolean),
+    mode: filterMode,
   };
+  const hasFilters = filtersObj.actions.length > 0 || filtersObj.branches.length > 0;
   const toggle = (set: React.Dispatch<React.SetStateAction<string[]>>, v: string) =>
     set((arr) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]));
   const chainArr = chain.split(',').map((s) => slugify(s)).filter(Boolean);
@@ -267,6 +271,7 @@ export function NewRoutinePage() {
     if (d.schedule) setSchedule(d.schedule);
     setFilterActions((d.filters?.actions ?? []).join(', '));
     setFilterBranches((d.filters?.branches ?? []).join(', '));
+    setFilterMode((d.filters as { mode?: 'and' | 'or' })?.mode === 'or' ? 'or' : 'and');
     setReactions(d.reactions ?? []);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existing.data, isEdit]);
@@ -340,13 +345,11 @@ export function NewRoutinePage() {
       <div className="grid gap-[22px] px-[26px] py-[22px] pb-[26px]" style={{ gridTemplateColumns: 'minmax(0,1.35fr) minmax(0,1fr)' }}>
         {/* form */}
         <div className="flex min-w-0 flex-col gap-[18px]">
+          {/* 1 — what it is + does (the essentials) */}
           <div className={CARD}>
-            <div className={`${LABEL.replace('mb-1.5', 'mb-4')}`}>Identity</div>
+            <div className={`${LABEL.replace('mb-1.5', 'mb-4')}`}>1 · Identity</div>
             <div className="flex flex-col gap-3.5">
-              <div>
-                <div className={LABEL}>Name</div>
-                <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="PR Attention Digest" className={inputCls} />
-              </div>
+              <div><div className={LABEL}>Name</div><input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="PR Attention Digest" className={inputCls} /></div>
               <div>
                 <div className={LABEL}>Slug · file name</div>
                 <div className="flex items-center gap-2">
@@ -354,34 +357,26 @@ export function NewRoutinePage() {
                   <span className="shrink-0 font-mono text-[12px] text-dim">.routine.md</span>
                 </div>
               </div>
-              <div>
-                <div className={LABEL}>Summary</div>
-                <textarea value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="One line shown in the fleet, the digest, and logs." rows={2} className={cn(inputCls, 'h-auto py-2 leading-snug')} />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><div className={LABEL}>Owner</div><input value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="ada" className={inputCls} /></div>
-                <div><div className={LABEL}>Team</div><input value={team} onChange={(e) => setTeam(e.target.value)} placeholder="platform" className={inputCls} /></div>
-              </div>
+              <div><div className={LABEL}>Summary · one line</div><input value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="On a PR, post the title to #dev-ai-slop" className={inputCls} /></div>
             </div>
           </div>
 
-          {/* Repo-first: pick the repos, then the GitHub/CI triggers below are scoped to them. */}
           <div className={CARD}>
-            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Repositories · <span className="font-mono lowercase tracking-normal text-dim-2">which repos to watch</span></div>
-            <RepoPicker value={repo} onChange={setRepo} />
-            <div className="mt-2.5 text-[11.5px] text-dim-2">Pick these first — the GitHub & CI triggers below are scoped to them. Leave empty to react to <span className="font-mono">any</span> repo. Choose from your repos/orgs, or search all of GitHub.</div>
+            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>2 · What it does <span className="font-mono lowercase tracking-normal text-dim-2">— the instruction, in plain language</span></div>
+            <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={'When a pull request opens, review the diff and post the top risks to Slack #dev-ai-slop.'} rows={6} className={cn(inputCls, 'h-auto resize-y py-2.5 leading-[1.6]')} />
+            <div className="mt-2.5 text-[11.5px] text-dim-2">Say what to do — the session figures out how, using the tools you grant. No output format needed.</div>
           </div>
 
+          {/* 3 — WHEN it runs: triggers (ANY) + repo scope + filters (ALL/ANY) */}
           <div className={CARD}>
-            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Triggers · <span className="font-mono lowercase tracking-normal text-dim-2">on:</span></div>
+            <div className={`${LABEL.replace('mb-1.5', 'mb-1.5')}`}>3 · When it runs</div>
+            <div className="mb-3 text-[11.5px] text-dim-2">Fires when <span className="font-semibold text-brand-soft">any</span> of the selected triggers happen. {hasFilters && <>It then runs only when the event matches the filters below.</>}</div>
             <div className="flex flex-col gap-3">
               {TRIGGER_GROUPS.map((g) => (
                 <div key={g.label}>
                   <div className="mb-1.5 flex items-center gap-2 font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2">
                     {g.label}
-                    {(g.label === 'GitHub' || g.label === 'CI / checks') && (
-                      <span className="normal-case tracking-normal text-dim-3">→ {repo ? repo.split(',').map((s) => s.trim()).filter(Boolean).join(', ') : 'any repo'}</span>
-                    )}
+                    {(g.label === 'GitHub' || g.label === 'CI / checks') && <span className="normal-case tracking-normal text-dim-3">→ {repo ? repo.split(',').map((s) => s.trim()).filter(Boolean).join(', ') : 'any repo'}</span>}
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {g.items.map((t) => <ChipToggle key={t} on={triggers.includes(t)} onClick={() => toggle(setTriggers, t)}>{t}</ChipToggle>)}
@@ -389,6 +384,8 @@ export function NewRoutinePage() {
                 </div>
               ))}
             </div>
+            <div className="mt-2 text-[11px] text-dim-2">{triggers.length ? `${triggers.length} selected — any one fires a run.` : 'None selected → run-now / API only.'}</div>
+
             {triggers.includes('schedule') && (
               <div className="mt-3.5 border-t border-line-soft pt-3">
                 <div className={LABEL}>Schedule · <span className="font-mono lowercase tracking-normal text-dim-2">cron — min hour dom mon dow</span></div>
@@ -396,72 +393,75 @@ export function NewRoutinePage() {
                 <div className="mt-1.5 text-[11px] text-dim-2">Server local time. <span className="font-mono">0 9 * * 1-5</span> = weekdays 9am · <span className="font-mono">*/15 * * * *</span> = every 15 min.</div>
               </div>
             )}
-            {triggers.includes('push') && (
+
+            {(triggers.includes('push') || actionable) && (
               <div className="mt-3.5 border-t border-line-soft pt-3">
-                <div className={LABEL}>Push branches · <span className="font-mono lowercase tracking-normal text-dim-2">optional filter</span></div>
-                <input value={filterBranches} onChange={(e) => setFilterBranches(e.target.value)} placeholder="main, develop  ·  blank = any branch" className={cn(inputCls, 'font-mono text-[12px]')} />
+                <div className="mb-2 flex items-center gap-2">
+                  <span className={LABEL.replace('mb-1.5', '')}>Refine · run only when the event matches</span>
+                  {triggers.includes('push') && actionable && (
+                    <span className="inline-flex overflow-hidden rounded-md border border-line text-[11px] font-semibold">
+                      {(['all', 'any'] as const).map((m) => {
+                        const v = m === 'all' ? 'and' : 'or';
+                        return <button key={m} type="button" onClick={() => setFilterMode(v)} className={cn('px-2 py-0.5 font-mono', filterMode === v ? 'bg-brand/15 text-brand-soft' : 'text-dim hover:text-t2')}>{m}</button>;
+                      })}
+                    </span>
+                  )}
+                </div>
+                {triggers.includes('push') && (
+                  <div className="mb-2"><div className="mb-1 font-mono text-[10.5px] text-dim-2">push branch is any of</div>
+                    <input value={filterBranches} onChange={(e) => setFilterBranches(e.target.value)} placeholder="main, develop  ·  blank = any branch" className={cn(inputCls, 'h-8 font-mono text-[12px]')} /></div>
+                )}
+                {actionable && (
+                  <div><div className="mb-1 font-mono text-[10.5px] text-dim-2">action / conclusion is any of</div>
+                    <input value={filterActions} onChange={(e) => setFilterActions(e.target.value)} placeholder="opened, synchronize · success, failure  ·  blank = all" className={cn(inputCls, 'h-8 font-mono text-[12px]')} /></div>
+                )}
+                <div className="mt-1.5 text-[11px] text-dim-2">Values in a row are OR'd; {triggers.includes('push') && actionable ? <>the two rows combine by <span className="font-semibold text-t2">{filterMode === 'and' ? 'all (AND)' : 'any (OR)'}</span>.</> : 'leave blank to match everything.'}</div>
               </div>
             )}
-            {actionable && (
-              <div className="mt-3.5 border-t border-line-soft pt-3">
-                <div className={LABEL}>Event actions · <span className="font-mono lowercase tracking-normal text-dim-2">optional filter</span></div>
-                <input value={filterActions} onChange={(e) => setFilterActions(e.target.value)} placeholder="opened, synchronize, reopened  ·  blank = all actions" className={cn(inputCls, 'font-mono text-[12px]')} />
-                <div className="mt-1.5 text-[11px] text-dim-2">Only fire when the event’s <span className="font-mono">action</span>/conclusion matches — e.g. PR <span className="font-mono">opened</span>, check_run <span className="font-mono">completed</span>.</div>
-              </div>
-            )}
-            <div className="mt-3 text-[11.5px] text-dim-2">{triggers.length ? `${triggers.length} selected — any one firing starts a run.` : 'Pick one or more. None selected defaults to manual.'}</div>
+            <div className="mt-3 border-t border-line-soft pt-3"><div className={LABEL}>Repositories · <span className="font-mono lowercase tracking-normal text-dim-2">scope GitHub/CI triggers</span></div>
+              <RepoPicker value={repo} onChange={setRepo} />
+              <div className="mt-1.5 text-[11px] text-dim-2">Empty = any repo. Pick from your repos/orgs, or search all of GitHub.</div>
+            </div>
           </div>
 
+          {/* 4 — tools */}
           <div className={CARD}>
-            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Tools the session can use</div>
+            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>4 · Tools the session can use</div>
             <div className="flex flex-wrap gap-1.5">
               {TOOLS.map((c) => <ChipToggle key={c} on={connectors.includes(c)} onClick={() => toggle(setConnectors, c)}>{c}</ChipToggle>)}
             </div>
-            <div className="mt-2.5 text-[11.5px] text-dim-2">Deny-by-default. The session uses these to do the work — <span className="font-mono">github</span> → gh CLI, <span className="font-mono">slack</span> → bot, <span className="font-mono">web</span> → fetch. Custom <span className="font-mono">MCP</span> servers (added on the Connectors page) appear here too. Just say what to do in the prompt.</div>
+            <div className="mt-2.5 text-[11.5px] text-dim-2">Deny-by-default — <span className="font-mono">github</span> → gh, <span className="font-mono">slack</span> → bot, <span className="font-mono">web</span> → fetch, <span className="font-mono">team</span> → delegate to agents. Custom <span className="font-mono">MCP</span> servers appear here too.</div>
           </div>
 
+          {/* 5 — advanced (collapsed) */}
           <div className={CARD}>
-            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Chain · <span className="font-mono lowercase tracking-normal text-dim-2">run routines after this one</span></div>
-            <ChainPicker value={chain} onChange={setChain} selfSlug={slug} />
-            <div className="mt-2.5 text-[11.5px] text-dim-2">On success, each fires <span className="text-t2">immediately</span> with this run’s output in its event payload at <span className="font-mono text-[#ada695]">upstream.output</span>.</div>
-          </div>
-
-          <div className={CARD}>
-            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>React · <span className="font-mono lowercase tracking-normal text-dim-2">follow the work this routine creates</span></div>
-            <ReactionsEditor reactions={reactions} setReactions={setReactions} repo={repo} />
-            <div className="mt-2.5 text-[11.5px] text-dim-2">After a run resolves a PR, Switchboard <span className="text-t2">watches</span> it and fires the chosen routine <span className="text-t2">later</span> when the condition is met — e.g. when CI checks finish. Polls with <span className="font-mono">gh</span>, so no webhook needed. A <span className="font-mono">timeout</span> fires after a delay if nothing resolved first.</div>
-          </div>
-
-          <div className={CARD}>
-            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Runtime</div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <div className={LABEL}>Model</div>
-                <select value={model} onChange={(e) => setModel(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')}>
-                  {MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-                </select>
+            <button type="button" onClick={() => setShowAdvanced((v) => !v)} className="flex w-full items-center justify-between">
+              <span className={LABEL.replace('mb-1.5', '')}>5 · Advanced <span className="font-mono lowercase tracking-normal text-dim-2">— runtime, ownership, chain & reactions</span></span>
+              <span className="font-mono text-[12px] text-dim">{showAdvanced ? '▾' : '▸'}</span>
+            </button>
+            {showAdvanced && (
+              <div className="mt-4 flex flex-col gap-[18px]">
+                <div className="grid grid-cols-2 gap-3">
+                  <div><div className={LABEL}>Model</div><select value={model} onChange={(e) => setModel(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')}>{MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</select></div>
+                  <div><div className={LABEL}>Effort</div><select value={effort} onChange={(e) => setEffort(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')}><option value="">default</option>{EFFORTS.map((e) => <option key={e} value={e}>{e}</option>)}</select></div>
+                  <div><div className={LABEL}>Owner</div><input value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="ada" className={inputCls} /></div>
+                  <div><div className={LABEL}>Team</div><input value={team} onChange={(e) => setTeam(e.target.value)} placeholder="platform" className={inputCls} /></div>
+                </div>
+                <label className="flex cursor-pointer items-start gap-2.5">
+                  <input type="checkbox" checked={memory} onChange={(e) => setMemory(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[#5b9ee6]" />
+                  <div><div className="font-display text-[12.5px] font-semibold text-t2">Persistent memory</div><div className="text-[11px] text-dim-2">A <span className="font-mono text-[#ada695]">memory.md</span> the session reads at start and updates as it learns.</div></div>
+                </label>
+                <div className="border-t border-line-soft pt-3.5">
+                  <div className={LABEL}>Chain · <span className="font-mono lowercase tracking-normal text-dim-2">run routines immediately after</span></div>
+                  <ChainPicker value={chain} onChange={setChain} selfSlug={slug} />
+                </div>
+                <div className="border-t border-line-soft pt-3.5">
+                  <div className={LABEL}>React · <span className="font-mono lowercase tracking-normal text-dim-2">follow the PR this run creates, later</span></div>
+                  <ReactionsEditor reactions={reactions} setReactions={setReactions} repo={repo} />
+                  <div className="mt-2 text-[11px] text-dim-2">Watches the PR (polls gh) and fires a routine when CI checks finish, it merges, etc. A <span className="font-mono">timeout</span> fires after a delay.</div>
+                </div>
               </div>
-              <div>
-                <div className={LABEL}>Effort</div>
-                <select value={effort} onChange={(e) => setEffort(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')}>
-                  <option value="">default</option>
-                  {EFFORTS.map((e) => <option key={e} value={e}>{e}</option>)}
-                </select>
-              </div>
-            </div>
-            <div className="mt-2.5 text-[11.5px] text-dim-2">The session runs on this model (passed to <span className="font-mono">claude --model</span>); effort tunes its reasoning depth (<span className="font-mono">--effort</span>).</div>
-            <label className="mt-3.5 flex cursor-pointer items-start gap-2.5 border-t border-line-soft pt-3">
-              <input type="checkbox" checked={memory} onChange={(e) => setMemory(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[#5b9ee6]" />
-              <div>
-                <div className="font-display text-[12.5px] font-semibold text-t2">Persistent memory</div>
-                <div className="text-[11px] text-dim-2">Grant a <span className="font-mono text-[#ada695]">memory.md</span> the session reads at the start and updates as it learns — durable facts carry across runs.</div>
-              </div>
-            </label>
-          </div>
-
-          <div className={CARD}>
-            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Prompt body</div>
-            <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={'## Prompt\nDescribe what this routine should do, step by step.\n\n## Constraints\n- …'} rows={8} className={cn(inputCls, 'h-auto resize-y py-2.5 font-mono text-[12px] leading-[1.6]')} />
+            )}
           </div>
         </div>
 
