@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useCreateRoutine, useUpdateRoutine, useRoutine, useGithubRepos } from '@/lib/api';
+import { useCreateRoutine, useUpdateRoutine, useRoutine, useGithubRepos, useGithubOrgs } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 const TRIGGER_GROUPS: { label: string; items: string[] }[] = [
@@ -36,13 +36,29 @@ function ChipToggle({ on, onClick, children }: { on: boolean; onClick: () => voi
   );
 }
 
+function useDebounced<T>(v: T, ms: number) {
+  const [d, setD] = useState(v);
+  useEffect(() => { const t = setTimeout(() => setD(v), ms); return () => clearTimeout(t); }, [v, ms]);
+  return d;
+}
+
 function RepoPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const { data } = useGithubRepos();
-  const repos = value.split(',').map((s) => s.trim()).filter(Boolean);
-  const available = (data?.repos ?? []).filter((r) => !repos.includes(r));
+  const { data: orgsData } = useGithubOrgs();
+  const orgs = orgsData?.orgs ?? [];
+  const [owner, setOwner] = useState(''); // '' = my repos, '*' = search all GitHub, else an org
   const [draft, setDraft] = useState('');
+  const q = useDebounced(draft.trim(), 300);
+  const searchMode = owner === '*';
+  // In search mode the query drives results; otherwise we list the owner's repos and filter client-side.
+  const { data, isFetching } = useGithubRepos(owner, searchMode ? q : '');
+  const repos = value.split(',').map((s) => s.trim()).filter(Boolean);
+  const all = data?.repos ?? [];
+  const suggestions = (searchMode ? all : all.filter((r) => r.toLowerCase().includes(draft.toLowerCase())))
+    .filter((r) => !repos.includes(r))
+    .slice(0, 60);
   const add = (v: string) => { const t = v.trim(); if (t && !repos.includes(t)) onChange([...repos, t].join(', ')); setDraft(''); };
   const remove = (r: string) => onChange(repos.filter((x) => x !== r).join(', '));
+  const selCls = 'h-9 shrink-0 rounded-md border border-line bg-surface-2 px-2 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none';
   return (
     <div>
       {repos.length > 0 && (
@@ -55,15 +71,23 @@ function RepoPicker({ value, onChange }: { value: string; onChange: (v: string) 
           ))}
         </div>
       )}
-      <input
-        list="gh-repos"
-        value={draft}
-        onChange={(e) => { const v = e.target.value; if ((data?.repos ?? []).includes(v)) add(v); else setDraft(v); }}
-        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(draft); } }}
-        placeholder={data ? 'org/repo — pick from list or type, Enter to add' : 'loading your GitHub repos…'}
-        className={cn(inputCls, 'font-mono text-[12px]')}
-      />
-      <datalist id="gh-repos">{available.map((r) => <option key={r} value={r} />)}</datalist>
+      <div className="flex gap-2">
+        <select value={owner} onChange={(e) => { setOwner(e.target.value); setDraft(''); }} className={selCls} title="Owner / org to browse">
+          <option value="">My repos</option>
+          {orgs.map((o) => <option key={o} value={o}>{o}</option>)}
+          <option value="*">Search all GitHub…</option>
+        </select>
+        <input
+          list="gh-repos"
+          value={draft}
+          onChange={(e) => { const v = e.target.value; if (all.includes(v)) add(v); else setDraft(v); }}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(draft); } }}
+          placeholder={searchMode ? 'search repos across GitHub — type a name…' : 'filter, or type org/repo · Enter to add'}
+          className={cn(inputCls, 'font-mono text-[12px]')}
+        />
+      </div>
+      <datalist id="gh-repos">{suggestions.map((r) => <option key={r} value={r} />)}</datalist>
+      {isFetching && <div className="mt-1.5 font-mono text-[10.5px] text-dim">{searchMode ? 'searching GitHub…' : 'loading repos…'}</div>}
     </div>
   );
 }

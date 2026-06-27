@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { getDb, all, one, run } from './db.js';
 import { runClaude, buildPrompt } from './runner.js';
-import { integrationStatus, listRepos } from './integrations.js';
+import { integrationStatus, listRepos, listOrgs } from './integrations.js';
 
 const app = express();
 app.use(cors());
@@ -177,7 +177,9 @@ function dispatchEvent(type, payload) {
 app.get('/api/health', (_q, res) => res.json({ ok: true }));
 
 // The user's real GitHub repos — so the UI can see & target repositories.
-app.get('/api/github/repos', async (_q, res) => res.json({ repos: await listRepos() }));
+// ?owner=<org|*> & ?q=<search> for cross-org browse / GitHub-wide search.
+app.get('/api/github/repos', async (req, res) => res.json({ repos: await listRepos({ owner: String(req.query.owner || ''), q: String(req.query.q || '') }) }));
+app.get('/api/github/orgs', async (_q, res) => res.json({ orgs: await listOrgs() }));
 
 app.get('/api/stats', (_q, res) => {
   const rows = all('SELECT * FROM routines');

@@ -36,7 +36,14 @@ async function del<T = unknown>(url: string): Promise<T> {
 }
 
 export const useStats = () => useQuery({ queryKey: ['stats'], queryFn: () => get<Stats>('/api/stats'), refetchInterval: 8000 });
-export const useGithubRepos = () => useQuery({ queryKey: ['gh-repos'], queryFn: () => get<{ repos: string[] }>('/api/github/repos'), staleTime: 60_000 });
+export const useGithubOrgs = () => useQuery({ queryKey: ['gh-orgs'], queryFn: () => get<{ orgs: string[] }>('/api/github/orgs'), staleTime: 300_000 });
+export const useGithubRepos = (owner = '', q = '') =>
+  useQuery({
+    queryKey: ['gh-repos', owner, q],
+    queryFn: () => get<{ repos: string[] }>(`/api/github/repos?owner=${encodeURIComponent(owner)}&q=${encodeURIComponent(q)}`),
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
 export const useRoutines = () => useQuery({ queryKey: ['routines'], queryFn: () => get<Routine[]>('/api/routines'), refetchInterval: 10000 });
 export const useRoutine = (slug?: string) =>
   useQuery({ queryKey: ['routine', slug], queryFn: () => get<RoutineDetail>(`/api/routines/${slug}`), enabled: !!slug, retry: false });

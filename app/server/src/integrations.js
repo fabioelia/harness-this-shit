@@ -21,14 +21,34 @@ export function sh(cmd, args, { input } = {}) {
 }
 export const gh = (args, opts) => sh('gh', args, opts);
 
-// List the user's GitHub repos (owner/repo), cached 60s — so the UI can show &
-// target real repositories instead of free-typing a slug.
-let _repoCache = { at: 0, repos: [] };
-export async function listRepos() {
-  if (Date.now() - _repoCache.at < 60_000 && _repoCache.repos.length) return _repoCache.repos;
-  const res = await gh(['repo', 'list', '--limit', '200', '--json', 'nameWithOwner', '--jq', '.[].nameWithOwner']);
-  const repos = res.code === 0 ? res.out.split('\n').map((s) => s.trim()).filter(Boolean).sort() : [];
-  if (repos.length) _repoCache = { at: Date.now(), repos };
+// The orgs the user belongs to — so the picker can scope to any of them.
+let _orgCache = { at: 0, orgs: [] };
+export async function listOrgs() {
+  if (Date.now() - _orgCache.at < 300_000 && _orgCache.orgs.length) return _orgCache.orgs;
+  const res = await gh(['api', 'user/orgs', '--paginate', '--jq', '.[].login']);
+  const orgs = res.code === 0 ? [...new Set(res.out.split('\n').map((s) => s.trim()).filter(Boolean))].sort() : [];
+  if (orgs.length) _orgCache = { at: Date.now(), orgs };
+  return orgs;
+}
+
+// Resolve repos for the picker, cached 60s per (owner,q):
+//  - q + owner '*'   → search all of GitHub by query
+//  - q + owner <org> → search within that org
+//  - owner <org>     → list that org's repos
+//  - (none)          → the authenticated user's repos (owned + collaborator)
+const _repoCaches = new Map();
+const lines = (res) => (res.code === 0 ? [...new Set(res.out.split('\n').map((s) => s.trim()).filter(Boolean))].sort() : []);
+export async function listRepos({ owner = '', q = '' } = {}) {
+  const key = `${owner}|${q}`;
+  const c = _repoCaches.get(key);
+  if (c && Date.now() - c.at < 60_000) return c.repos;
+  let res;
+  if (q && owner && owner !== '*') res = await gh(['search', 'repos', q, '--owner', owner, '--limit', '50', '--json', 'fullName', '--jq', '.[].fullName']);
+  else if (q) res = await gh(['search', 'repos', q, '--limit', '50', '--json', 'fullName', '--jq', '.[].fullName']);
+  else if (owner && owner !== '*') res = await gh(['repo', 'list', owner, '--limit', '200', '--json', 'nameWithOwner', '--jq', '.[].nameWithOwner']);
+  else res = await gh(['repo', 'list', '--limit', '200', '--json', 'nameWithOwner', '--jq', '.[].nameWithOwner']);
+  const repos = lines(res);
+  if (repos.length) _repoCaches.set(key, { at: Date.now(), repos });
   return repos;
 }
 
