@@ -13,6 +13,8 @@ export interface Routine {
   connectors: string[];
   sinks: Sink[];
   chain: string[];
+  schedule: string;
+  filters: { actions?: string[]; branches?: string[] };
   model: string;
   repo: string;
   branch: string;

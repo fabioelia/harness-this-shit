@@ -36,7 +36,9 @@ CREATE TABLE IF NOT EXISTS routines (
   repo TEXT NOT NULL DEFAULT '',
   branch TEXT NOT NULL DEFAULT 'main',
   sinks TEXT NOT NULL DEFAULT '[]',   -- json: output sinks [{type,target}]
-  chain TEXT NOT NULL DEFAULT '[]'    -- json: downstream routine slugs
+  chain TEXT NOT NULL DEFAULT '[]',   -- json: downstream routine slugs
+  schedule TEXT NOT NULL DEFAULT '',  -- 5-field cron for the schedule trigger
+  filters TEXT NOT NULL DEFAULT '{}'  -- json: actions/branches event sub-filters
 );
 CREATE TABLE IF NOT EXISTS connectors (
   code TEXT PRIMARY KEY,
@@ -102,6 +104,8 @@ export function getDb() {
   ensure('runs', 'cost_usd', 'cost_usd REAL');
   ensure('runs', 'num_turns', 'num_turns INTEGER');
   ensure('runs', 'session_id', "session_id TEXT NOT NULL DEFAULT ''");
+  ensure('routines', 'schedule', "schedule TEXT NOT NULL DEFAULT ''");
+  ensure('routines', 'filters', "filters TEXT NOT NULL DEFAULT '{}'");
   const n = _db.prepare('SELECT COUNT(*) AS n FROM routines').get();
   if (fresh || n.n === 0) seed(_db);
   return _db;

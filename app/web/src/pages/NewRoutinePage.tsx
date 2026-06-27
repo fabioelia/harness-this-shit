@@ -139,8 +139,17 @@ export function NewRoutinePage() {
   const [sinks, setSinks] = useState<string[]>(['stdout']);
   const [slackChannel, setSlackChannel] = useState('#dev-ai-slop');
   const [chain, setChain] = useState('');
+  const [schedule, setSchedule] = useState('0 9 * * *');
+  const [filterActions, setFilterActions] = useState('');
+  const [filterBranches, setFilterBranches] = useState('');
 
   const slug = slugTouched ? slugInput : slugify(name);
+  // CI / GitHub events that carry an `action` and can be filtered.
+  const actionable = triggers.some((t) => ['pull_request', 'pull_request_review', 'issues', 'issue_comment', 'label', 'release', 'check_run', 'check_suite', 'workflow_run', 'deployment_status'].includes(t));
+  const filtersObj = {
+    actions: filterActions.split(',').map((s) => s.trim()).filter(Boolean),
+    branches: filterBranches.split(',').map((s) => s.trim()).filter(Boolean),
+  };
   const toggle = (set: React.Dispatch<React.SetStateAction<string[]>>, v: string) =>
     set((arr) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]));
   const sinksArr = sinks.map((t) => (t === 'slack' ? { type: 'slack', target: slackChannel.trim() } : { type: t }));
@@ -159,6 +168,9 @@ export function NewRoutinePage() {
     const slk = d.sinks.find((s) => s.type === 'slack');
     if (slk?.target) setSlackChannel(slk.target);
     setChain(d.chain.join(', '));
+    if (d.schedule) setSchedule(d.schedule);
+    setFilterActions((d.filters?.actions ?? []).join(', '));
+    setFilterBranches((d.filters?.branches ?? []).join(', '));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existing.data, isEdit]);
 
@@ -171,26 +183,31 @@ export function NewRoutinePage() {
     L.push(`owner: ${owner || 'unassigned'}`);
     L.push(`team: ${team || 'general'}`);
     L.push('on:');
-    (triggers.length ? triggers : ['manual']).forEach((t) => L.push(`  ${onLine(t, slug)}`));
+    (triggers.length ? triggers : ['manual']).forEach((t) => {
+      if (t === 'schedule') L.push(`  - schedule: { cron: "${schedule}" }`);
+      else if (t === 'push' && filtersObj.branches.length) L.push(`  - push: { branches: [${filtersObj.branches.join(', ')}] }`);
+      else if (actionable && filtersObj.actions.length && t !== 'push') L.push(`  - ${t}: { actions: [${filtersObj.actions.join(', ')}] }`);
+      else L.push(`  ${onLine(t, slug)}`);
+    });
     if (connectors.length) {
       L.push('tools:');
       L.push(`  mcp: [${connectors.join(', ')}]`);
     }
     L.push('runtime:');
     L.push(`  model: ${model || 'claude-opus-4-8'}`);
-    L.push(`  repo: ${repo || '—'}`);
+    L.push(`  repos: [${repo.split(',').map((s) => s.trim()).filter(Boolean).join(', ') || '*'}]`);
     L.push(`  branch: ${branch || 'main'}`);
     if (chainArr.length) L.push(`chain: [${chainArr.join(', ')}]`);
     L.push('---');
     L.push('');
     L.push(prompt.trim() || '## Prompt\nDescribe what this routine should do, step by step.');
     return L.join('\n');
-  }, [name, slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, sinks, slackChannel, chain]);
+  }, [name, slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, chain, schedule, filterActions, filterBranches]);
 
   const valid = name.trim().length > 0 && slug.length > 0;
   function submit() {
     if (!valid) return;
-    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, sinks: [], chain: chainArr };
+    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, sinks: [], chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj };
     if (isEdit) update.mutate({ slug: editSlug!, body }, { onSuccess: () => navigate(`/routines/${editSlug}`) });
     else create.mutate(body, { onSuccess: (r) => navigate(`/routines/${r.slug}`) });
   }
@@ -248,25 +265,51 @@ export function NewRoutinePage() {
             </div>
           </div>
 
+          {/* Repo-first: pick the repos, then the GitHub/CI triggers below are scoped to them. */}
+          <div className={CARD}>
+            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Repositories · <span className="font-mono lowercase tracking-normal text-dim-2">which repos to watch</span></div>
+            <RepoPicker value={repo} onChange={setRepo} />
+            <div className="mt-2.5 text-[11.5px] text-dim-2">Pick these first — the GitHub & CI triggers below are scoped to them. Leave empty to react to <span className="font-mono">any</span> repo. Choose from your repos/orgs, or search all of GitHub.</div>
+          </div>
+
           <div className={CARD}>
             <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Triggers · <span className="font-mono lowercase tracking-normal text-dim-2">on:</span></div>
             <div className="flex flex-col gap-3">
               {TRIGGER_GROUPS.map((g) => (
                 <div key={g.label}>
-                  <div className="mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2">{g.label}</div>
+                  <div className="mb-1.5 flex items-center gap-2 font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2">
+                    {g.label}
+                    {(g.label === 'GitHub' || g.label === 'CI / checks') && (
+                      <span className="normal-case tracking-normal text-dim-3">→ {repo ? repo.split(',').map((s) => s.trim()).filter(Boolean).join(', ') : 'any repo'}</span>
+                    )}
+                  </div>
                   <div className="flex flex-wrap gap-1.5">
                     {g.items.map((t) => <ChipToggle key={t} on={triggers.includes(t)} onClick={() => toggle(setTriggers, t)}>{t}</ChipToggle>)}
                   </div>
                 </div>
               ))}
             </div>
+            {triggers.includes('schedule') && (
+              <div className="mt-3.5 border-t border-line-soft pt-3">
+                <div className={LABEL}>Schedule · <span className="font-mono lowercase tracking-normal text-dim-2">cron — min hour dom mon dow</span></div>
+                <input value={schedule} onChange={(e) => setSchedule(e.target.value)} placeholder="0 9 * * *" className={cn(inputCls, 'font-mono text-[12px]')} />
+                <div className="mt-1.5 text-[11px] text-dim-2">Server local time. <span className="font-mono">0 9 * * 1-5</span> = weekdays 9am · <span className="font-mono">*/15 * * * *</span> = every 15 min.</div>
+              </div>
+            )}
+            {triggers.includes('push') && (
+              <div className="mt-3.5 border-t border-line-soft pt-3">
+                <div className={LABEL}>Push branches · <span className="font-mono lowercase tracking-normal text-dim-2">optional filter</span></div>
+                <input value={filterBranches} onChange={(e) => setFilterBranches(e.target.value)} placeholder="main, develop  ·  blank = any branch" className={cn(inputCls, 'font-mono text-[12px]')} />
+              </div>
+            )}
+            {actionable && (
+              <div className="mt-3.5 border-t border-line-soft pt-3">
+                <div className={LABEL}>Event actions · <span className="font-mono lowercase tracking-normal text-dim-2">optional filter</span></div>
+                <input value={filterActions} onChange={(e) => setFilterActions(e.target.value)} placeholder="opened, synchronize, reopened  ·  blank = all actions" className={cn(inputCls, 'font-mono text-[12px]')} />
+                <div className="mt-1.5 text-[11px] text-dim-2">Only fire when the event’s <span className="font-mono">action</span>/conclusion matches — e.g. PR <span className="font-mono">opened</span>, check_run <span className="font-mono">completed</span>.</div>
+              </div>
+            )}
             <div className="mt-3 text-[11.5px] text-dim-2">{triggers.length ? `${triggers.length} selected — any one firing starts a run.` : 'Pick one or more. None selected defaults to manual.'}</div>
-          </div>
-
-          <div className={CARD}>
-            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Repositories · <span className="font-mono lowercase tracking-normal text-dim-2">which repos to watch</span></div>
-            <RepoPicker value={repo} onChange={setRepo} />
-            <div className="mt-2.5 text-[11.5px] text-dim-2">Only events from these repos trigger this routine. Leave empty to react to <span className="font-mono">any</span> repo. Pick from your GitHub repos or type <span className="font-mono">org/repo</span>.</div>
           </div>
 
           <div className={CARD}>

@@ -14,6 +14,11 @@ const j = (s) => { try { const v = JSON.parse(s); return Array.isArray(v) ? v : 
 const jObj = (s) => { try { return JSON.parse(s); } catch { return null; } };
 const meta = (k, d) => one('SELECT value FROM meta WHERE key=?', k)?.value ?? d;
 const now = () => Date.now();
+const cleanFilters = (f) => {
+  const o = f && typeof f === 'object' ? f : {};
+  const arr = (x) => (Array.isArray(x) ? x.map((s) => String(s).trim()).filter(Boolean) : []);
+  return { actions: arr(o.actions), branches: arr(o.branches) };
+};
 
 function relTime(ts) {
   if (!ts) return '—';
@@ -38,6 +43,7 @@ const shapeRoutine = (r) => ({
   slug: r.slug, name: r.name, summary: r.summary,
   owner: r.owner, team: r.team, ownerColor: r.av_color, initials: r.initials,
   triggers: j(r.triggers), connectors: j(r.connectors), sinks: j(r.sinks), chain: j(r.chain),
+  schedule: r.schedule || '', filters: jObj(r.filters) || {},
   model: r.model, repo: r.repo, branch: r.branch,
   state: r.enabled ? r.state : 'disabled', enabled: !!r.enabled,
   lastAgo: r.last_ago, lastStatus: r.last_status, next: r.next,
@@ -163,15 +169,66 @@ function repoMatches(r, event) {
   return !er || targets.includes(er);
 }
 
+// Optional event sub-filters (opt-in): only enforce when configured.
+const branchOf = (e) => (e?.ref ? String(e.ref).replace('refs/heads/', '') : null) || e?.pull_request?.head?.ref || e?.branch || null;
+function filtersMatch(r, event) {
+  let f; try { f = JSON.parse(r.filters || '{}'); } catch { f = {}; }
+  const actions = Array.isArray(f.actions) ? f.actions : [];
+  const branches = Array.isArray(f.branches) ? f.branches : [];
+  if (actions.length && event?.action && !actions.includes(event.action)) return false;
+  if (branches.length) { const br = branchOf(event); if (br && !branches.includes(br)) return false; }
+  return true;
+}
+
 function dispatchEvent(type, payload) {
   if (meta('kill_switch', 'false') === 'true') return { error: 'kill switch engaged' };
   const event = payload && Object.keys(payload).length ? payload : { event: type };
   const matched = all('SELECT * FROM routines WHERE enabled=1')
     .filter((r) => j(r.triggers).includes(type))
-    .filter((r) => repoMatches(r, event));
+    .filter((r) => repoMatches(r, event))
+    .filter((r) => filtersMatch(r, event));
   const runs = matched.map((r) => ({ slug: r.slug, runId: executeRoutine(r, event, `${type} · ${event.ref || eventRepo(event) || 'event'}`) }));
   return { matched: matched.map((r) => r.slug), runs, event };
 }
+
+// ── Scheduler: makes the `schedule` trigger real (dependency-free 5-field cron) ──
+function cronFieldMatch(field, val, min, max) {
+  if (field === '*' || field === '?') return true;
+  for (const part of String(field).split(',')) {
+    const [rangePart, stepPart] = part.split('/');
+    const step = stepPart ? parseInt(stepPart, 10) || 1 : 1;
+    let lo, hi;
+    if (rangePart === '*') { lo = min; hi = max; }
+    else if (rangePart.includes('-')) { const [a, b] = rangePart.split('-').map(Number); lo = a; hi = b; }
+    else { lo = hi = Number(rangePart); }
+    if (Number.isNaN(lo) || Number.isNaN(hi)) continue;
+    for (let v = lo; v <= hi; v += step) if (v === val) return true;
+  }
+  return false;
+}
+export function cronMatches(expr, d) {
+  const p = String(expr).trim().split(/\s+/);
+  if (p.length !== 5) return false;
+  return cronFieldMatch(p[0], d.getMinutes(), 0, 59)
+    && cronFieldMatch(p[1], d.getHours(), 0, 23)
+    && cronFieldMatch(p[2], d.getDate(), 1, 31)
+    && cronFieldMatch(p[3], d.getMonth() + 1, 1, 12)
+    && cronFieldMatch(p[4], d.getDay(), 0, 6);
+}
+const _lastFired = new Map();
+function tickScheduler() {
+  if (meta('kill_switch', 'false') === 'true') return;
+  const d = new Date();
+  const stamp = `${d.getFullYear()}/${d.getMonth()}/${d.getDate()} ${d.getHours()}:${d.getMinutes()}`;
+  for (const r of all('SELECT * FROM routines WHERE enabled=1')) {
+    if (!j(r.triggers).includes('schedule') || !r.schedule) continue;
+    if (!cronMatches(r.schedule, d)) continue;
+    if (_lastFired.get(r.slug) === stamp) continue; // fire at most once per matching minute
+    _lastFired.set(r.slug, stamp);
+    executeRoutine(r, { event: 'schedule', cron: r.schedule, fired_at: d.toISOString() }, `schedule · ${r.schedule}`);
+  }
+}
+if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(tickScheduler, 30_000).unref?.();
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.get('/api/health', (_q, res) => res.json({ ok: true }));
@@ -222,29 +279,37 @@ app.post('/api/routines', (req, res) => {
   const connectors = Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : [];
   const sinks = Array.isArray(b.sinks) ? b.sinks.filter((s) => s && s.type) : [];
   const chain = Array.isArray(b.chain) ? b.chain.filter(Boolean) : [];
+  const schedule = (b.schedule || '').trim();
+  const filters = cleanFilters(b.filters);
   const enabled = b.enabled === false ? 0 : 1;
   const ord = (one('SELECT MAX(ord) AS m FROM routines').m ?? -1) + 1;
-  const next = triggers.includes('schedule') ? 'scheduled' : triggers.length ? 'on event' : '—';
+  const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
 
   run(
     `INSERT INTO routines
-      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,sinks,chain)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,sinks,chain,schedule,filters)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     slug, name, (b.summary || '').trim(), owner, team,
     JSON.stringify(triggers), JSON.stringify(connectors),
     'idle', 'never', 'idle', next, null, '$0.00', enabled, '', '', '—',
     ownerColor(owner), initialsOf(owner), ord,
     (b.prompt || '').trim(), (b.model || 'claude-opus-4-8').trim(), (b.repo || '').trim(), (b.branch || 'main').trim(),
-    JSON.stringify(sinks), JSON.stringify(chain)
+    JSON.stringify(sinks), JSON.stringify(chain), schedule, JSON.stringify(filters)
   );
   res.status(201).json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', slug)));
 });
 
 function buildRoutineMd(r) {
   const L = ['---', `name: ${r.name}`, `slug: ${r.slug}`, 'summary: >-', `  ${r.summary}`, `owner: ${r.owner}`, `team: ${r.team}`, 'on:'];
-  j(r.triggers).forEach((t) => L.push(`  - ${t}: {}`));
+  const flt = jObj(r.filters) || {};
+  j(r.triggers).forEach((t) => {
+    if (t === 'schedule' && r.schedule) L.push(`  - schedule: { cron: "${r.schedule}" }`);
+    else if ((t === 'push') && Array.isArray(flt.branches) && flt.branches.length) L.push(`  - ${t}: { branches: [${flt.branches.join(', ')}] }`);
+    else if (Array.isArray(flt.actions) && flt.actions.length) L.push(`  - ${t}: { actions: [${flt.actions.join(', ')}] }`);
+    else L.push(`  - ${t}: {}`);
+  });
   if (j(r.connectors).length) { L.push('tools:'); L.push(`  mcp: [${j(r.connectors).join(', ')}]`); }
-  L.push('runtime:', `  model: ${r.model}`, `  repo: ${r.repo || '—'}`, `  branch: ${r.branch}`);
+  L.push('runtime:', `  model: ${r.model}`, `  repos: [${(r.repo || '').split(',').map((s) => s.trim()).filter(Boolean).join(', ') || '*'}]`, `  branch: ${r.branch}`);
   const sinks = j(r.sinks);
   if (sinks.length) { L.push('outputs:'); sinks.forEach((s) => L.push(`  - ${s.type}${s.target ? `: { target: ${s.target} }` : ''}`)); }
   const chain = j(r.chain);
@@ -265,15 +330,17 @@ app.put('/api/routines/:slug', (req, res) => {
   const b = req.body || {};
   const owner = (b.owner ?? r.owner).trim() || 'unassigned';
   const triggers = Array.isArray(b.triggers) ? b.triggers.filter(Boolean) : j(r.triggers);
-  const next = triggers.includes('schedule') ? 'scheduled' : triggers.length ? 'on event' : '—';
+  const schedule = b.schedule != null ? String(b.schedule).trim() : (r.schedule || '');
+  const filters = b.filters != null ? cleanFilters(b.filters) : (jObj(r.filters) || {});
+  const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
   run(
-    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,sinks=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=? WHERE slug=?`,
+    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,sinks=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
     JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
     JSON.stringify(Array.isArray(b.sinks) ? b.sinks.filter((s) => s && s.type) : j(r.sinks)),
     JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
     (b.model ?? r.model).trim() || 'claude-opus-4-8', (b.repo ?? r.repo).trim(), (b.branch ?? r.branch).trim() || 'main',
-    (b.prompt ?? r.prompt).trim(), ownerColor(owner), initialsOf(owner), next, r.slug
+    (b.prompt ?? r.prompt).trim(), ownerColor(owner), initialsOf(owner), next, schedule, JSON.stringify(filters), r.slug
   );
   res.json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', r.slug)));
 });
