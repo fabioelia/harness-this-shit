@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useRoutines, useStats, useToggleRoutine, useKillSwitch } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, Sbar, Spark, StatePill, Toggle, makeHist } from '@/components/sb';
 import { cn } from '@/lib/utils';
@@ -108,6 +108,13 @@ export function FleetPage() {
   const [trig, setTrig] = useState('');
   const [conn, setConn] = useState('');
   const [needsReview, setNeedsReview] = useState(false);
+  const [params] = useSearchParams();
+  useEffect(() => {
+    const c = params.get('connector'); if (c) setConn(c);
+    const t = params.get('team'); if (t) setTeam(t);
+    const g = params.get('trigger'); if (g) setTrig(g);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
 
   const opts = useMemo(() => {
     const teams = new Set<string>(), trigs = new Set<string>(), conns = new Set<string>();

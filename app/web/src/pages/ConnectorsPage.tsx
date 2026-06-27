@@ -1,6 +1,9 @@
+import { Link } from 'react-router-dom';
 import { useConnectors } from '@/lib/api';
 import { Pill, Dot, Empty, SIGNAL } from '@/components/sb';
 import type { Connector } from '@/types';
+
+const connSlug = (name: string) => name.toLowerCase().split(/[ /]/)[0];
 
 const GRID = { display: 'grid', gridTemplateColumns: '44px minmax(0,1.3fr) 138px minmax(0,1.5fr) minmax(0,1.7fr) 150px', alignItems: 'center', gap: 14 } as const;
 const HEALTH: Record<Connector['health'], { label: string; color: string }> = {
@@ -22,7 +25,7 @@ export function ConnectorsPage() {
             <div className="font-display text-[23px] font-bold tracking-tight">Connectors &amp; MCPs</div>
             <div className="mt-1 text-[13px] text-muted-2">{connectors?.length ?? 0} connectors · grants flow to routines by registry id · secrets stored as references</div>
           </div>
-          <button className="flex h-9 items-center gap-2 rounded-md bg-brand px-[15px] font-display text-[12.5px] font-semibold text-[#16130f] hover:bg-brand-deep"><span className="-mt-px text-[16px] leading-none">+</span>Add connector</button>
+          <Link to="/settings" className="flex h-9 items-center gap-2 rounded-md bg-brand px-[15px] font-display text-[12.5px] font-semibold text-[#16130f] hover:bg-brand-deep"><span className="-mt-px text-[16px] leading-none">+</span>Add connector</Link>
         </div>
         <div className="mt-3.5 flex items-center gap-[18px] font-sans text-[12px] font-medium text-muted-2">
           <span className="inline-flex items-center gap-1.5"><Dot color={SIGNAL.success} size={7} /><span className="font-semibold text-t2">{counts('ok')}</span> connected</span>
@@ -49,7 +52,7 @@ export function ConnectorsPage() {
               <div className="truncate font-mono text-[11.5px] font-medium text-muted">{c.scopes}</div>
               <div className="flex items-center justify-end gap-3">
                 <span className="font-mono text-[12px] font-semibold text-t2">{c.routines}</span>
-                <span className="font-mono text-[11px] font-medium text-brand">Manage ›</span>
+                <Link to={`/?connector=${connSlug(c.name)}`} className="font-mono text-[11px] font-medium text-brand hover:underline">Manage ›</Link>
               </div>
             </div>
           ))}
