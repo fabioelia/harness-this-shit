@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useAgents, useAgent, useCreateAgent, useMessageAgent, useDeleteAgent } from '@/lib/api';
+import { useAgents, useAgent, useCreateAgent, useMessageAgent, useDeleteAgent, useModels } from '@/lib/api';
 import { Avatar, Dot, Empty } from '@/components/sb';
 import { cn } from '@/lib/utils';
 
@@ -19,8 +19,11 @@ function NewAgent() {
   const [role, setRole] = useState('');
   const [connectors, setConnectors] = useState<string[]>([]);
   const [memory, setMemory] = useState(false);
+  const [model, setModel] = useState('claude-opus-4-8');
+  const [effort, setEffort] = useState('high');
+  const { data: models } = useModels();
   const toggle = (c: string) => setConnectors((a) => (a.includes(c) ? a.filter((x) => x !== c) : [...a, c]));
-  const submit = () => create.mutate({ name: slugify(name), summary, role, connectors, memory }, { onSuccess: (a) => navigate(`/team/${a.name}`) });
+  const submit = () => create.mutate({ name: slugify(name), summary, role, connectors, memory, model, effort }, { onSuccess: (a) => navigate(`/team/${a.name}`) });
   if (!open) return <button onClick={() => setOpen(true)} className="flex h-9 items-center gap-2 rounded-md bg-brand px-[15px] font-display text-[12.5px] font-semibold text-[#16130f] hover:bg-brand-deep"><span className="-mt-px text-[16px] leading-none">+</span>New agent</button>;
   return (
     <div className={cn(CARD, 'mb-5')}>
@@ -31,6 +34,10 @@ function NewAgent() {
       </div>
       <div className="mt-3"><div className="mb-1 text-[11px] text-dim-2">Role · standing instructions</div>
         <textarea value={role} onChange={(e) => setRole(e.target.value)} rows={3} placeholder="You are a careful code reviewer. When asked, review the change and report concrete risks and suggestions." className={cn(inputCls, 'h-auto resize-y py-2 leading-snug')} />
+      </div>
+      <div className="mt-3 grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+        <div><div className="mb-1 text-[11px] text-dim-2">Model</div><select value={model} onChange={(e) => setModel(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')}>{(models?.models ?? [{ id: 'claude-opus-4-8', label: 'Opus 4.8' }]).map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</select></div>
+        <div><div className="mb-1 text-[11px] text-dim-2">Effort</div><select value={effort} onChange={(e) => setEffort(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')}><option value="">default</option>{(models?.efforts ?? ['low', 'medium', 'high', 'xhigh', 'max']).map((e) => <option key={e} value={e}>{e}</option>)}</select></div>
       </div>
       <div className="mt-3 flex items-center gap-4">
         <div className="flex flex-wrap gap-1.5">
@@ -114,7 +121,7 @@ export function AgentPage() {
         <div className="mt-[11px] flex flex-wrap items-center gap-2.5 font-mono text-[12px] text-muted-2">
           <span>{a.summary || a.role || 'agent'}</span>
           {a.connectors.map((c) => <span key={c} className="rounded-[5px] border border-white/[0.08] bg-white/[0.045] px-1.5 py-px text-[11px] text-[var(--code-accent)]">{c}</span>)}
-          <span className="text-hair">|</span><span>{a.model}</span>{a.memory && <span className="text-lease">memory</span>}
+          <span className="text-hair">|</span><span>{a.model}</span>{a.effort && <span className="text-dim-2">· {a.effort}</span>}{a.memory && <span className="text-lease">memory</span>}
         </div>
       </div>
 

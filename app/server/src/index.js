@@ -689,8 +689,8 @@ app.post('/api/samples/load', async (req, res) => {
   const routines = [], agents = [], skipped = [];
   for (const a of SAMPLE_AGENTS) {
     if (one('SELECT 1 FROM agents WHERE name=?', a.name)) { skipped.push(`@${a.name}`); continue; }
-    run('INSERT INTO agents (name,role,summary,connectors,model,memory,av_color,created_at) VALUES (?,?,?,?,?,?,?,?)',
-      a.name, fill(a.role), a.summary, JSON.stringify(a.connectors || []), normModel(a.model), a.memory ? 1 : 0, ownerColor(a.name), now());
+    run('INSERT INTO agents (name,role,summary,connectors,model,effort,memory,av_color,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
+      a.name, fill(a.role), a.summary, JSON.stringify(a.connectors || []), normModel(a.model), normEffort(a.effort), a.memory ? 1 : 0, ownerColor(a.name), now());
     agents.push(a.name);
   }
   for (const rt of SAMPLE_ROUTINES) {
@@ -855,7 +855,7 @@ function shapeAgent(a) {
   const last = one("SELECT status, trigger, created_at FROM runs WHERE routine_slug=? ORDER BY created_at DESC, ord DESC LIMIT 1", agentSlug(a.name));
   const working = last?.status === 'running';
   return {
-    name: a.name, role: a.role, summary: a.summary, connectors: j(a.connectors), model: a.model, memory: !!a.memory, avColor: a.av_color,
+    name: a.name, role: a.role, summary: a.summary, connectors: j(a.connectors), model: a.model, effort: a.effort || '', memory: !!a.memory, avColor: a.av_color,
     status: working ? 'working' : 'idle', currentTask: working ? last.trigger : null,
     lastActive: last ? relTime(last.created_at) : 'never',
     taskCount: one('SELECT COUNT(*) AS n FROM runs WHERE routine_slug=?', agentSlug(a.name)).n,
@@ -870,7 +870,7 @@ function runAgentTask(a, text) {
   const synthetic = {
     slug: agentSlug(a.name), name: a.name, summary: a.summary || a.role, owner: a.name, team: 'agents',
     prompt: instruction, connectors: a.connectors, model: a.model, memory: a.memory,
-    repo: '', branch: 'main', chain: '[]', reactions: '[]', effort: '', filters: '{}',
+    repo: '', branch: 'main', chain: '[]', reactions: '[]', effort: a.effort || '', filters: '{}', concurrency: '{}',
     av_color: a.av_color, initials: (a.name[0] || 'A').toUpperCase(),
   };
   return executeRoutine(synthetic, { event: 'agent-message', from: 'user', task: text }, text.replace(/\s+/g, ' ').slice(0, 70) || 'task');
@@ -881,10 +881,10 @@ app.post('/api/agents', (req, res) => {
   const name = String(b.name || '').trim().replace(/[^a-z0-9_-]/gi, '');
   if (!name) return res.status(400).json({ error: 'an agent name (letters, digits, - or _) is required' });
   if (one('SELECT 1 FROM agents WHERE name=?', name)) return res.status(409).json({ error: `agent "${name}" already exists` });
-  run('INSERT INTO agents (name,role,summary,connectors,model,memory,av_color,created_at) VALUES (?,?,?,?,?,?,?,?)',
+  run('INSERT INTO agents (name,role,summary,connectors,model,effort,memory,av_color,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
     name, (b.role || '').trim(), (b.summary || '').trim(),
     JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : []),
-    normModel(b.model), b.memory ? 1 : 0, ownerColor(name), now());
+    normModel(b.model), normEffort(b.effort), b.memory ? 1 : 0, ownerColor(name), now());
   res.status(201).json(shapeAgent(one('SELECT * FROM agents WHERE name=?', name)));
 });
 app.get('/api/agents/:name', (req, res) => {

@@ -72,7 +72,7 @@ export const useAgent = (name?: string) =>
   useQuery({ queryKey: ['agent', name], enabled: !!name, queryFn: () => get<AgentDetail>(`/api/agents/${name}`), refetchInterval: (q) => (q.state.data?.status === 'working' ? 2000 : 8000) });
 export function useCreateAgent() {
   const qc = useQueryClient();
-  return useMutation({ mutationFn: (b: { name: string; role?: string; summary?: string; connectors?: string[]; model?: string; memory?: boolean }) => post<Agent>('/api/agents', b), onSuccess: () => qc.invalidateQueries({ queryKey: ['agents'] }) });
+  return useMutation({ mutationFn: (b: { name: string; role?: string; summary?: string; connectors?: string[]; model?: string; effort?: string; memory?: boolean }) => post<Agent>('/api/agents', b), onSuccess: () => qc.invalidateQueries({ queryKey: ['agents'] }) });
 }
 export function useMessageAgent() {
   const qc = useQueryClient();
