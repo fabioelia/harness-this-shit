@@ -1,0 +1,35 @@
+import { Link } from 'react-router-dom';
+import { useRuns } from '@/lib/api';
+import { Dot, stateMeta } from '@/components/sb';
+
+const GRID = { display: 'grid', gridTemplateColumns: '16px 110px minmax(0,1.4fr) minmax(0,1fr) 90px 80px', alignItems: 'center', gap: 14 } as const;
+
+export function RunsPage() {
+  const { data: runs } = useRuns();
+  return (
+    <div className="font-sans text-fg animate-fade-up">
+      <div className="border-b border-line-soft bg-head px-[26px] py-[22px]">
+        <div className="mb-3 font-mono text-[12px] font-medium text-dim"><span className="text-brand">Switchboard</span> › Runs</div>
+        <div className="font-display text-[23px] font-bold tracking-tight">Runs</div>
+        <div className="mt-1 text-[13px] text-muted-2">Every execution across the fleet — status, trigger, and how long it took.</div>
+      </div>
+      <div className="px-[26px] py-5 pb-[26px]">
+        <div className="overflow-hidden rounded-xl border border-line bg-surface">
+          <div className="border-b border-line bg-surface-2 px-[18px] py-[11px] font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2" style={GRID}>
+            <div /><div>Run</div><div>Routine</div><div>Trigger</div><div>Duration</div><div className="text-right">When</div>
+          </div>
+          {runs?.map((r) => (
+            <Link key={r.id} to={`/runs/${r.id}`} className="border-b border-line-soft px-[18px] py-3 last:border-0 hover:bg-white/[0.015]" style={GRID}>
+              <Dot state={r.status} size={8} />
+              <span className="font-mono text-[12px] font-semibold text-t2">{r.id}</span>
+              <span className="truncate font-display text-[13px] font-medium text-fg-2">{r.routineName}</span>
+              <span className="truncate font-mono text-[11.5px] font-medium text-dim">{r.trigger}</span>
+              <span className="font-mono text-[12px] font-medium text-muted-2">{r.dur}</span>
+              <span className="text-right font-mono text-[11.5px] font-medium" style={{ color: stateMeta(r.status).color }}>{r.ago}</span>
+            </Link>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
