@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useCreateRoutine, useUpdateRoutine, useRoutine, useGithubRepos, useGithubOrgs, useGithubChecks, useModels, useMcp } from '@/lib/api';
+import { useCreateRoutine, useUpdateRoutine, useRoutine, useRoutines, useGithubRepos, useGithubOrgs, useGithubChecks, useModels, useMcp } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 const TRIGGER_GROUPS: { label: string; items: string[] }[] = [
@@ -108,6 +108,32 @@ function RepoPicker({ value, onChange }: { value: string; onChange: (v: string) 
 }
 
 type Rx = { source: string; kind: string; when: string; run: string; check?: string };
+function ChainPicker({ value, onChange, selfSlug }: { value: string; onChange: (v: string) => void; selfSlug: string }) {
+  const { data: routines } = useRoutines();
+  const selected = value.split(',').map((s) => s.trim()).filter(Boolean);
+  const available = (routines ?? []).filter((r) => !selected.includes(r.slug) && r.slug !== selfSlug);
+  const add = (slug: string) => { if (slug && !selected.includes(slug)) onChange([...selected, slug].join(', ')); };
+  const remove = (slug: string) => onChange(selected.filter((x) => x !== slug).join(', '));
+  return (
+    <div>
+      {selected.length > 0 && (
+        <div className="mb-2 flex flex-col gap-1.5">
+          {selected.map((s) => (
+            <div key={s} className="flex items-center gap-2 rounded-md border border-line-soft bg-surface-2 px-2.5 py-1.5 font-mono text-[11.5px]">
+              <span className="text-faint">↳</span><span className="text-brand">{s}</span>
+              <button type="button" onClick={() => remove(s)} className="ml-auto text-dim hover:text-bad" aria-label="remove">✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <select value="" onChange={(e) => { add(e.target.value); }} className={cn(inputCls, 'font-mono text-[12px]')}>
+        <option value="">{available.length ? 'add a routine to run after this one…' : 'no other routines to chain'}</option>
+        {available.map((r) => <option key={r.slug} value={r.slug}>{r.name} · {r.slug}</option>)}
+      </select>
+    </div>
+  );
+}
+
 function ReactionsEditor({ reactions, setReactions, repo }: { reactions: Rx[]; setReactions: (r: Rx[]) => void; repo: string }) {
   const [preset, setPreset] = useState(0);
   const [run, setRun] = useState('');
@@ -266,7 +292,6 @@ export function NewRoutinePage() {
     L.push(`  model: ${model || 'claude-opus-4-8'}`);
     if (effort) L.push(`  effort: ${effort}`);
     L.push(`  repos: [${repo.split(',').map((s) => s.trim()).filter(Boolean).join(', ') || '*'}]`);
-    L.push(`  branch: ${branch || 'main'}`);
     if (memory) L.push('  memory: enabled');
     if (chainArr.length) L.push(`chain: [${chainArr.join(', ')}]`);
     if (reactions.length) {
@@ -396,9 +421,9 @@ export function NewRoutinePage() {
           </div>
 
           <div className={CARD}>
-            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Chain · <span className="font-mono lowercase tracking-normal text-dim-2">kick off downstream routines now</span></div>
-            <input value={chain} onChange={(e) => setChain(e.target.value)} placeholder="other-routine-slug, another-one" className={cn(inputCls, 'font-mono text-[12px]')} />
-            <div className="mt-2.5 text-[11.5px] text-dim-2">On success, these routines fire <span className="text-t2">immediately</span> — the downstream session gets this run’s output in its event payload at <span className="font-mono text-[#ada695]">upstream.output</span>.</div>
+            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Chain · <span className="font-mono lowercase tracking-normal text-dim-2">run routines after this one</span></div>
+            <ChainPicker value={chain} onChange={setChain} selfSlug={slug} />
+            <div className="mt-2.5 text-[11.5px] text-dim-2">On success, each fires <span className="text-t2">immediately</span> with this run’s output in its event payload at <span className="font-mono text-[#ada695]">upstream.output</span>.</div>
           </div>
 
           <div className={CARD}>
@@ -409,7 +434,7 @@ export function NewRoutinePage() {
 
           <div className={CARD}>
             <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Runtime</div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <div>
                 <div className={LABEL}>Model</div>
                 <select value={model} onChange={(e) => setModel(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')}>
@@ -423,7 +448,6 @@ export function NewRoutinePage() {
                   {EFFORTS.map((e) => <option key={e} value={e}>{e}</option>)}
                 </select>
               </div>
-              <div><div className={LABEL}>Branch</div><input value={branch} onChange={(e) => setBranch(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')} /></div>
             </div>
             <div className="mt-2.5 text-[11.5px] text-dim-2">The session runs on this model (passed to <span className="font-mono">claude --model</span>); effort tunes its reasoning depth (<span className="font-mono">--effort</span>).</div>
             <label className="mt-3.5 flex cursor-pointer items-start gap-2.5 border-t border-line-soft pt-3">

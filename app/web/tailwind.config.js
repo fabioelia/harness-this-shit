@@ -7,29 +7,27 @@ export default {
   theme: {
     extend: {
       colors: {
-        // surfaces (warm brown-black)
-        bg: '#100e0a',
-        panel: '#16130f', // screen / window
-        surface: '#1a1712', // cards, rail, sub-panels
-        'surface-2': '#1c1915', // table bg, inner cards, chips
-        'surface-3': '#1d1813', // attention card
-        head: '#181510', // header bands
-        code: '#15120e', // code blocks
-        // lines
-        line: '#2b2620',
-        'line-soft': '#221d17',
-        'line-3': '#251f18',
-        hair: '#3a342c', // dashed / connector strokes
-        // text
-        fg: '#efe9dd',
-        'fg-2': '#f0ece3',
-        t2: '#cdc7ba',
-        muted: '#9a9384',
-        'muted-2': '#8a8474',
-        dim: '#767063',
-        'dim-2': '#6f685c',
-        'dim-3': '#6e6757',
-        faint: '#5d584d',
+        // surfaces/lines/text are themable via CSS vars (see index.css :root / .light)
+        bg: 'var(--bg)',
+        panel: 'var(--panel)',
+        surface: 'var(--surface)',
+        'surface-2': 'var(--surface-2)',
+        'surface-3': 'var(--surface-3)',
+        head: 'var(--head)',
+        code: 'var(--code)',
+        line: 'var(--line)',
+        'line-soft': 'var(--line-soft)',
+        'line-3': 'var(--line-3)',
+        hair: 'var(--hair)',
+        fg: 'var(--fg)',
+        'fg-2': 'var(--fg-2)',
+        t2: 'var(--t2)',
+        muted: 'var(--muted)',
+        'muted-2': 'var(--muted-2)',
+        dim: 'var(--dim)',
+        'dim-2': 'var(--dim-2)',
+        'dim-3': 'var(--dim-3)',
+        faint: 'var(--faint)',
         // brand accent (blue) — wordmark, primary, toggle-on, links
         brand: { DEFAULT: '#5b9ee6', soft: '#5b9ee6', deep: '#4a8bd4', glow: 'rgba(91,158,230,.16)' },
         copper: { DEFAULT: '#e89b3c', text: '#d8b486' }, // attention / connectors / amber

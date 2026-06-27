@@ -104,8 +104,8 @@ export function buildPrompt(routine, event, constraints = [], { memoryDir, agent
     JSON.stringify(event ?? {}, null, 2),
     '```',
   ];
-  if (targetRepos.length || routine.branch) {
-    lines.push('', '## Target', `${targetRepos.length ? `Repositories: ${targetRepos.join(', ')}.` : ''}${routine.branch ? ` Default branch: ${routine.branch}.` : ''} Use these with \`gh --repo\` unless the trigger payload points elsewhere.`.trim());
+  if (targetRepos.length) {
+    lines.push('', '## Target', `Repositories: ${targetRepos.join(', ')}. Use these with \`gh --repo\` unless the trigger payload points elsewhere.`);
   }
   if (constraints.length) lines.push('', '## Hard constraints (must obey)', ...constraints.map((c) => `- ${c}`));
   if (memoryDir) {

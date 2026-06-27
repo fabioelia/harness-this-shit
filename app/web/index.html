@@ -9,6 +9,10 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // Apply the saved theme before paint to avoid a flash.
+      try { if (localStorage.getItem('sb-theme') === 'light') document.documentElement.classList.add('light'); } catch (e) {}
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

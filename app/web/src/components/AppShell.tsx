@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { TooltipProvider, Tip } from '@/components/ui/tooltip';
 import { useKillSwitch, useStats } from '@/lib/api';
@@ -55,6 +56,13 @@ export function AppShell() {
   const { data: stats } = useStats();
   const kill = useKillSwitch();
   const halted = !!stats?.killSwitch;
+  const [light, setLight] = useState(() => typeof document !== 'undefined' && document.documentElement.classList.contains('light'));
+  const toggleTheme = () => {
+    const next = !light;
+    document.documentElement.classList.toggle('light', next);
+    try { localStorage.setItem('sb-theme', next ? 'light' : 'dark'); } catch { /* ignore */ }
+    setLight(next);
+  };
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -78,11 +86,21 @@ export function AppShell() {
               <span className="font-display text-[8.5px] font-semibold tracking-[0.04em]">{n.label}</span>
             </NavLink>
           ))}
+          <Tip label={light ? 'Switch to dark' : 'Switch to light'} side="right">
+            <button onClick={toggleTheme} className="mt-auto flex w-12 flex-col items-center gap-[5px] rounded-[11px] py-[9px] text-dim transition-colors hover:text-t2">
+              {light ? (
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M14.5 10.2A5.6 5.6 0 0 1 7.8 3.5 5.6 5.6 0 1 0 14.5 10.2Z" /></svg>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><circle cx="9" cy="9" r="3.4" /><path d="M9 1.6v1.8M9 14.6v1.8M1.6 9h1.8M14.6 9h1.8M3.8 3.8l1.3 1.3M12.9 12.9l1.3 1.3M14.2 3.8l-1.3 1.3M5.1 12.9l-1.3 1.3" /></svg>
+              )}
+              <span className="font-display text-[8.5px] font-semibold tracking-[0.04em]">{light ? 'Dark' : 'Light'}</span>
+            </button>
+          </Tip>
           <Tip label={halted ? 'Fleet halted — release the kill switch' : 'Emergency stop — halt every routine'} side="right">
             <button
               onClick={() => { if (halted || confirm('Engage the kill switch? This halts ALL routines until released.')) kill.mutate(!halted); }}
               className={cn(
-                'mt-auto flex w-12 flex-col items-center gap-[5px] rounded-[11px] py-[9px] transition-colors',
+                'flex w-12 flex-col items-center gap-[5px] rounded-[11px] py-[9px] transition-colors',
                 halted ? 'bg-bad/15 text-bad animate-sbpulse' : 'text-bad/90 hover:text-bad'
               )}
             >

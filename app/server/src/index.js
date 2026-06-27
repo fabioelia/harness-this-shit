@@ -580,7 +580,7 @@ function buildRoutineMd(r) {
   if (j(r.connectors).length) { L.push('tools:', `  grant: [${j(r.connectors).join(', ')}]`); }
   L.push('runtime:', `  model: ${r.model}`);
   if (r.effort) L.push(`  effort: ${r.effort}`);
-  L.push(`  repos: [${(r.repo || '').split(',').map((s) => s.trim()).filter(Boolean).join(', ') || '*'}]`, `  branch: ${r.branch}`);
+  L.push(`  repos: [${(r.repo || '').split(',').map((s) => s.trim()).filter(Boolean).join(', ') || '*'}]`);
   if (r.memory) L.push('  memory: enabled');
   const chain = j(r.chain);
   if (chain.length) L.push(`chain: [${chain.join(', ')}]`);
