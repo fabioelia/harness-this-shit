@@ -12,7 +12,16 @@ async function post<T>(url: string, body?: unknown): Promise<T> {
     headers: { 'content-type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error(`${res.status} ${url}`);
+  if (!res.ok) {
+    let msg = `${res.status} ${url}`;
+    try {
+      const e = await res.json();
+      if (e?.error) msg = e.error;
+    } catch {
+      /* non-JSON error */
+    }
+    throw new Error(msg);
+  }
   return res.json();
 }
 
@@ -48,6 +57,30 @@ export function useDispatchRoutine() {
     },
   });
 }
+export interface CreateRoutineInput {
+  name: string;
+  slug?: string;
+  summary?: string;
+  owner?: string;
+  team?: string;
+  triggers?: string[];
+  connectors?: string[];
+  model?: string;
+  repo?: string;
+  branch?: string;
+  prompt?: string;
+}
+export function useCreateRoutine() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateRoutineInput) => post<Routine>('/api/routines', body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['routines'] });
+      qc.invalidateQueries({ queryKey: ['stats'] });
+    },
+  });
+}
+
 export function useKillSwitch() {
   const qc = useQueryClient();
   return useMutation({

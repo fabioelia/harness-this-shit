@@ -30,7 +30,11 @@ CREATE TABLE IF NOT EXISTS routines (
   avg TEXT NOT NULL,
   av_color TEXT NOT NULL,
   initials TEXT NOT NULL,
-  ord INTEGER NOT NULL
+  ord INTEGER NOT NULL,
+  prompt TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT 'claude-opus-4-8',
+  repo TEXT NOT NULL DEFAULT '',
+  branch TEXT NOT NULL DEFAULT 'main'
 );
 CREATE TABLE IF NOT EXISTS connectors (
   code TEXT PRIMARY KEY,

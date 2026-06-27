@@ -20,7 +20,7 @@ const shapeRoutine = (r) => ({
   success: r.success, spend: r.spend, metaShort: r.meta_short, leaseRef: r.lease_ref, avg: r.avg,
 });
 
-// Routine detail derived from the routine's own fields — never fabricated.
+// Routine detail derived from the routine's own stored fields — never fabricated.
 function detailOf(r) {
   return {
     breadcrumb: ['Fleet', r.slug],
@@ -28,18 +28,32 @@ function detailOf(r) {
     frontMatter: {
       on: j(r.triggers).map((t) => ({ key: `trigger · ${t}`, detail: '' })),
       tools: j(r.connectors).map((c) => ({ sign: '+', name: c, tone: 'ok' })),
-      runtime: ['claude-opus-4-8', '· repo —', '· branch —'],
+      runtime: [r.model || 'claude-opus-4-8', `· repo ${r.repo || '—'}`, `· branch ${r.branch || '—'}`],
       concurrency: r.lease_ref
         ? [['lease', r.lease_ref, 'ttl', '20m']]
         : [['group', `${r.slug}-\${event}`, 'cancel_in_progress', 'true']],
     },
     flowNodes: [{ title: j(r.triggers)[0] || 'trigger', sub: 'on' }, { title: 'run', sub: r.slug, tone: 'run' }, { title: 'status', sub: 'surface' }],
     reactions: [],
-    prompt: `## Prompt\n${r.summary}`,
+    prompt: r.prompt && r.prompt.trim() ? r.prompt : `## Prompt\n${r.summary}`,
     lease: null,
     ownedPRs: [],
   };
 }
+
+// Owner avatar helpers for newly-created routines.
+const AV_PALETTE = ['#d98a5c', '#c9a24a', '#6fae9a', '#7f9bd1', '#c98fb0', '#b59ad6', '#5b9ee6', '#5fbf86', '#e6b052'];
+const ownerColor = (name) => {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return AV_PALETTE[h % AV_PALETTE.length];
+};
+const initialsOf = (name) => {
+  const p = name.trim().split(/\s+/).filter(Boolean);
+  if (!p.length) return '??';
+  return (p.length === 1 ? p[0].slice(0, 2) : p[0][0] + p[p.length - 1][0]).toUpperCase();
+};
+const slugify = (s) => s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
 app.get('/api/health', (_q, res) => res.json({ ok: true }));
 
@@ -68,6 +82,35 @@ app.get('/api/routines/:slug', (req, res) => {
   const runHistory = all('SELECT * FROM runs WHERE routine_slug=? ORDER BY ord', r.slug)
     .map((x) => ({ id: x.id, status: x.status, ago: x.ago, dur: x.dur, trigger: x.trigger }));
   res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory });
+});
+
+app.post('/api/routines', (req, res) => {
+  const b = req.body || {};
+  const name = (b.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'A routine name is required.' });
+  const slug = (b.slug || slugify(name)).trim();
+  if (!slug) return res.status(400).json({ error: 'A valid slug is required.' });
+  if (one('SELECT 1 FROM routines WHERE slug=?', slug)) return res.status(409).json({ error: `A routine with slug "${slug}" already exists.` });
+
+  const owner = (b.owner || '').trim() || 'unassigned';
+  const team = (b.team || '').trim() || 'general';
+  const triggers = Array.isArray(b.triggers) ? b.triggers.filter(Boolean) : [];
+  const connectors = Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : [];
+  const enabled = b.enabled === false ? 0 : 1;
+  const ord = (one('SELECT MAX(ord) AS m FROM routines').m ?? -1) + 1;
+  const next = triggers.includes('schedule') ? 'scheduled' : triggers.length ? 'on event' : '—';
+
+  run(
+    `INSERT INTO routines
+      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    slug, name, (b.summary || '').trim(), owner, team,
+    JSON.stringify(triggers), JSON.stringify(connectors),
+    'idle', 'never', 'idle', next, null, '$0.00', enabled, '', '', '—',
+    ownerColor(owner), initialsOf(owner), ord,
+    (b.prompt || '').trim(), (b.model || 'claude-opus-4-8').trim(), (b.repo || '').trim(), (b.branch || 'main').trim()
+  );
+  res.status(201).json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', slug)));
 });
 
 app.get('/api/runs', (_q, res) =>

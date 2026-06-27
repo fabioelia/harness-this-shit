@@ -106,9 +106,9 @@ export function FleetPage() {
           >
             <StopIcon />{stats?.killSwitch ? 'Halted' : 'Stop all'}
           </button>
-          <button className="flex h-9 items-center gap-2 rounded-md bg-brand px-[15px] font-display text-[12.5px] font-semibold text-[#16130f] transition-colors hover:bg-brand-deep">
+          <Link to="/routines/new" className="flex h-9 items-center gap-2 rounded-md bg-brand px-[15px] font-display text-[12.5px] font-semibold text-[#16130f] transition-colors hover:bg-brand-deep">
             <span className="-mt-px text-[16px] leading-none">+</span>New routine
-          </button>
+          </Link>
         </div>
       </div>
 
@@ -140,9 +140,14 @@ export function FleetPage() {
           <Empty
             title={routines && routines.length === 0 ? 'No routines yet' : 'No routines match'}
             hint={
-              routines && routines.length === 0
-                ? 'Routines are version-controlled *.routine.md files. Connect a repo and add one to see it here.'
-                : 'Try clearing the search.'
+              routines && routines.length === 0 ? (
+                <>
+                  Routines are version-controlled <span className="font-mono text-[#ada695]">*.routine.md</span> files.{' '}
+                  <Link to="/routines/new" className="text-brand hover:underline">Create your first one ›</Link>
+                </>
+              ) : (
+                'Try clearing the search.'
+              )
             }
           />
         ) : (

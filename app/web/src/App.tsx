@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AppShell } from '@/components/AppShell';
 import { FleetPage } from '@/pages/FleetPage';
+import { NewRoutinePage } from '@/pages/NewRoutinePage';
 import { RoutineDetailPage } from '@/pages/RoutineDetailPage';
 import { RunsPage } from '@/pages/RunsPage';
 import { RunDetailPage } from '@/pages/RunDetailPage';
@@ -14,6 +15,7 @@ export function App() {
       <Routes>
         <Route element={<AppShell />}>
           <Route path="/" element={<FleetPage />} />
+          <Route path="/routines/new" element={<NewRoutinePage />} />
           <Route path="/routines/:slug" element={<RoutineDetailPage />} />
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />
