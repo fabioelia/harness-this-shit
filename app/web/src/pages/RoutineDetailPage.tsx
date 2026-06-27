@@ -254,6 +254,40 @@ export function RoutineDetailPage() {
               </div>
             </div>
           )}
+
+          {(d.reactions?.length > 0 || d.watches?.length > 0) && (
+            <div className={CARD}>
+              <div className={`${LABEL} mb-3`}>Reactions · follow the work</div>
+              {d.reactions?.length > 0 && (
+                <div className="mb-3 flex flex-col gap-1.5">
+                  {d.reactions.map((rx, i) => (
+                    <div key={i} className="flex items-center gap-2 font-mono text-[11.5px]">
+                      <span className="text-lease">when</span>
+                      <span className="text-t2">{rx.source === 'timeout' ? `after ${rx.when}` : `${rx.source}:${rx.kind}${rx.when ? `:${rx.when}` : ''}`}</span>
+                      <span className="text-faint">→</span>
+                      <Link to={`/routines/${rx.run}`} className="text-brand">{rx.run}</Link>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {d.watches?.length > 0 && (
+                <div className="border-t border-line-soft pt-3">
+                  <div className="mb-2 font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2">Active watches</div>
+                  <div className="flex flex-col gap-2">
+                    {d.watches.map((w) => (
+                      <div key={w.id} className="flex items-start gap-2.5">
+                        <Dot color={w.status === 'open' ? '#5b9ee6' : w.status === 'fired' ? '#5fbf86' : '#7f8a80'} size={7} pulse={w.status === 'open'} />
+                        <div className="min-w-0 flex-1">
+                          <div className="font-mono text-[11.5px] text-t2">{w.source}:{w.kind}{w.when ? `:${w.when}` : ''} {w.entity.repo ? `· ${w.entity.repo}#${w.entity.pr}` : ''} → <Link to={`/routines/${w.target}`} className="text-brand">{w.target}</Link></div>
+                          <div className="font-mono text-[10.5px] text-dim">{w.status}{w.detail ? ` · ${w.detail}` : ''} · {w.ago}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           <div className={CARD}>
             <div className="mb-3.5 flex items-center justify-between">
               <span className={LABEL}>Recent runs</span>

@@ -3,7 +3,7 @@ import cors from 'cors';
 import crypto from 'node:crypto';
 import { getDb, all, one, run } from './db.js';
 import { runClaude, buildPrompt } from './runner.js';
-import { integrationStatus, listRepos, listOrgs } from './integrations.js';
+import { integrationStatus, listRepos, listOrgs, gh } from './integrations.js';
 
 const app = express();
 // Same-machine tool: only allow the local web origin to call the API from a browser.
@@ -59,7 +59,7 @@ const shapeRoutine = (r) => {
     slug: r.slug, name: r.name, summary: r.summary,
     owner: r.owner, team: r.team, ownerColor: r.av_color, initials: r.initials,
     triggers: j(r.triggers), connectors: j(r.connectors), chain: j(r.chain),
-    schedule: r.schedule || '', filters: jObj(r.filters) || {},
+    schedule: r.schedule || '', filters: jObj(r.filters) || {}, reactions: j(r.reactions),
     model: r.model, repo: r.repo, branch: r.branch,
     state: r.enabled ? r.state : 'disabled', enabled: !!r.enabled,
     lastAgo: r.last_ago, lastStatus: r.last_status, next: r.next,
@@ -154,7 +154,7 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       } catch { /* one malformed event must not kill the run */ }
     };
 
-    const res = await runClaude(prompt, { tools, onEvent });
+    const res = await runClaude(prompt, { tools, onEvent, model: r.model });
     const ok = !res.isError && !!res.finalText;
     const rawOut = ok ? res.finalText
       : (res.finalText || (res.code === 124 ? `timed out after ${Math.round(res.ms / 1000)}s` : res.stderr || `claude exited ${res.code}`));
@@ -168,6 +168,9 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       'idle', 'just now', ok ? 'success' : 'failing', ok ? 100 : 0,
       `$${Number(agg.spend || 0).toFixed(2)}`, agg.avgms ? fmtDur(agg.avgms) : '—', r.slug);
     logActivity(`${r.slug} ${ok ? 'ran · ' + output.split('\n').pop().slice(0, 60) : 'failed'} · ${triggerLabel}`, ok ? 'success' : 'failing');
+
+    // reactions: arm watches on the entity this run touched (PR checks/review/merge, timeout…)
+    try { await armReactions(r, rawEvent ?? {}, id); } catch (e) { logActivity(`reactions error · ${r.slug}: ${e.message}`, 'failing'); }
 
     // chain: kick off downstream routines, guarding against cycles + runaway depth.
     if (ok) {
@@ -203,11 +206,21 @@ function repoMatches(r, event) {
 
 // Optional event sub-filters (opt-in): only enforce when configured.
 const branchOf = (e) => (e?.ref ? String(e.ref).replace('refs/heads/', '') : null) || e?.pull_request?.head?.ref || e?.branch || null;
+const eventStates = (e) => [
+  e?.action, e?.conclusion, e?.state,
+  e?.check_run?.conclusion, e?.check_suite?.conclusion, e?.workflow_run?.conclusion,
+  e?.deployment_status?.state, e?.review?.state,
+].filter(Boolean);
 function filtersMatch(r, event) {
   let f; try { f = JSON.parse(r.filters || '{}'); } catch { f = {}; }
   const actions = Array.isArray(f.actions) ? f.actions : [];
   const branches = Array.isArray(f.branches) ? f.branches : [];
-  if (actions.length && event?.action && !actions.includes(event.action)) return false;
+  if (actions.length) {
+    // Match against the event's action OR a CI conclusion/state (so "success"/"failure"
+    // work for check_run/workflow_run/status/deployment, and "approved" for reviews).
+    const vals = eventStates(event);
+    if (vals.length && !vals.some((v) => actions.includes(v))) return false;
+  }
   if (branches.length) { const br = branchOf(event); if (br && !branches.includes(br)) return false; }
   return true;
 }
@@ -268,6 +281,118 @@ function tickScheduler() {
 }
 if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(tickScheduler, 30_000).unref?.();
 
+// ── Reactions: watch a routine's downstream entity, fire a follow-up routine ────
+const wid = () => 'w_' + Math.random().toString(36).slice(2, 9);
+const cleanReactions = (arr) => (Array.isArray(arr) ? arr : [])
+  .map((x) => ({ source: String(x.source || '').trim(), kind: String(x.kind || '').trim(), when: String(x.when || '').trim(), run: String(x.run || '').trim() }))
+  .filter((x) => x.source && x.kind && x.run);
+function durationToMs(s) {
+  const m = String(s).trim().match(/^(\d+)\s*(s|sec|m|min|h|hr|d)?$/i);
+  if (!m) return null;
+  const n = +m[1], u = (m[2] || 'm').toLowerCase();
+  return n * (u.startsWith('s') ? 1000 : u.startsWith('h') ? 3_600_000 : u.startsWith('d') ? 86_400_000 : 60_000);
+}
+async function resolvePrRef(event, routine) {
+  const repo = eventRepo(event) || repoTargets(routine)[0];
+  if (!repo) return null;
+  let num = event?.pull_request?.number ?? event?.number ?? null;
+  if (!num) {
+    const branch = branchOf(event);
+    if (branch) {
+      const r = await gh(['pr', 'list', '--repo', repo, '--head', branch, '--state', 'all', '--json', 'number', '--jq', '.[0].number']);
+      if (r.code === 0 && r.out.trim()) num = +r.out.trim();
+    }
+  }
+  return num ? { repo, pr: Number(num) } : null;
+}
+// Arm one watch per declared reaction once the originating run resolves its entity.
+async function armReactions(routine, event, runId) {
+  const reactions = j(routine.reactions);
+  let prRef = null;
+  for (const rx of cleanReactions(reactions)) {
+    if (!one('SELECT 1 FROM routines WHERE slug=? AND enabled=1', rx.run)) { logActivity(`reaction skipped · target ${rx.run} missing/disabled`, 'idle'); continue; }
+    let entity = {}, fireAt = 0;
+    if (rx.source === 'timeout') {
+      const ms = durationToMs(rx.when);
+      if (!ms) { logActivity(`reaction skipped · invalid duration "${rx.when}"`, 'idle'); continue; }
+      entity = { duration_ms: ms }; fireAt = now() + ms;
+    } else if (rx.source === 'github') {
+      if (!prRef) prRef = await resolvePrRef(event, routine);
+      if (!prRef) { logActivity(`reaction skipped · no PR resolved for ${routine.slug} → ${rx.run}`, 'idle'); continue; }
+      entity = prRef;
+    } else { logActivity(`reaction skipped · source "${rx.source}" not yet supported`, 'idle'); continue; }
+    run('INSERT INTO watches (id,origin_run,origin_routine,target_slug,source,kind,when_cond,entity,status,detail,attempts,created_at,fire_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      wid(), runId, routine.slug, rx.run, rx.source, rx.kind, rx.when, JSON.stringify(entity), 'open', '', 0, now(), fireAt);
+    logActivity(`watching ${rx.source}:${rx.kind}${rx.when ? ':' + rx.when : ''} on ${entity.repo ? `${entity.repo}#${entity.pr}` : rx.when} → ${rx.run}`, 'queued');
+  }
+}
+// Source adapter: poll the entity, decide fire | keep | drop.
+async function pollWatch(w) {
+  const entity = jObj(w.entity) || {};
+  if (w.source === 'timeout') {
+    return now() >= w.fire_at ? { action: 'fire', context: { event: 'reaction', source: 'timeout', kind: 'after', when: w.when_cond }, detail: `after ${w.when_cond}` } : { action: 'keep' };
+  }
+  if (w.source === 'github') {
+    const view = async (fields) => { const r = await gh(['pr', 'view', String(entity.pr), '--repo', entity.repo, '--json', fields]); if (r.code !== 0) return { err: r.err }; try { return { pr: JSON.parse(r.out) }; } catch { return { err: 'parse' }; } };
+    if (w.kind === 'checks') {
+      const { pr, err } = await view('statusCheckRollup,state,title,url');
+      if (err) return { action: /no pull requests|not found/i.test(err) ? 'drop' : 'keep', detail: err.slice(0, 60) };
+      const rollup = pr.statusCheckRollup || [];
+      if (!rollup.length) return { action: 'keep', detail: 'no checks yet' };
+      const pending = rollup.some((c) => (c.status && c.status !== 'COMPLETED') || ['PENDING', 'IN_PROGRESS', 'QUEUED', 'EXPECTED'].includes(c.state));
+      if (pending) return { action: 'keep', detail: `${rollup.length} checks running` };
+      const failed = rollup.some((c) => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED'].includes(c.conclusion) || ['FAILURE', 'ERROR'].includes(c.state));
+      const conclusion = failed ? 'failure' : 'success';
+      if (w.when_cond === 'any' || w.when_cond === conclusion) {
+        return { action: 'fire', detail: `checks ${conclusion}`, context: { event: 'reaction', source: 'github', kind: 'checks', when: conclusion, pull_request: { number: entity.pr, title: pr.title, url: pr.url }, checks: rollup.map((c) => ({ name: c.name || c.context, conclusion: c.conclusion || c.state })) } };
+      }
+      return { action: 'drop', detail: `checks ${conclusion} ≠ ${w.when_cond}` };
+    }
+    if (w.kind === 'merge') {
+      const { pr, err } = await view('state,title,url');
+      if (err) return { action: 'keep', detail: err.slice(0, 60) };
+      if (pr.state === 'MERGED') return { action: 'fire', detail: 'merged', context: { event: 'reaction', source: 'github', kind: 'merge', when: 'merged', pull_request: { number: entity.pr, title: pr.title, url: pr.url } } };
+      if (pr.state === 'CLOSED') return { action: 'drop', detail: 'closed without merge' };
+      return { action: 'keep' };
+    }
+    if (w.kind === 'review') {
+      const { pr, err } = await view('reviews,title,url');
+      if (err) return { action: 'keep', detail: err.slice(0, 60) };
+      const last = (pr.reviews || []).filter((x) => ['APPROVED', 'CHANGES_REQUESTED'].includes(x.state)).slice(-1)[0];
+      if (!last) return { action: 'keep', detail: 'no decisive review yet' };
+      const state = last.state === 'APPROVED' ? 'approved' : 'changes_requested';
+      if (w.when_cond === 'any' || w.when_cond === state) return { action: 'fire', detail: `review ${state}`, context: { event: 'reaction', source: 'github', kind: 'review', when: state, pull_request: { number: entity.pr, title: pr.title, url: pr.url } } };
+      return { action: 'keep', detail: `last review ${state}` };
+    }
+  }
+  return { action: 'keep' };
+}
+const WATCH_MAX_ATTEMPTS = 60; // ~45 min at the 45s cadence (timeout watches are exempt)
+async function tickWatches() {
+  if (meta('kill_switch', 'false') === 'true') return;
+  for (const w of all("SELECT * FROM watches WHERE status='open' ORDER BY created_at LIMIT 50")) {
+    let res; try { res = await pollWatch(w); } catch (e) { res = { action: 'keep', detail: String(e.message).slice(0, 60) }; }
+    const attempts = w.attempts + 1;
+    if (res.action === 'fire') {
+      run("UPDATE watches SET status='fired', detail=?, attempts=? WHERE id=?", res.detail || '', attempts, w.id);
+      const tr = one('SELECT * FROM routines WHERE slug=? AND enabled=1', w.target_slug);
+      if (tr) {
+        executeRoutine(tr, { ...(res.context || {}), upstream: { routine: w.origin_routine, run: w.origin_run }, _chainPath: [w.origin_routine] }, `reaction · ${w.source}:${w.kind}${w.when_cond ? ':' + w.when_cond : ''}`);
+        logActivity(`reaction fired · ${w.source}:${w.kind} ${res.detail || ''} → ${w.target_slug}`, 'success');
+      }
+    } else if (res.action === 'drop') {
+      run("UPDATE watches SET status='dropped', detail=?, attempts=? WHERE id=?", res.detail || '', attempts, w.id);
+      logActivity(`reaction dropped · ${w.source}:${w.kind} — ${res.detail || ''}`, 'idle');
+    } else if (attempts >= WATCH_MAX_ATTEMPTS && w.source !== 'timeout') {
+      run("UPDATE watches SET status='expired', detail=?, attempts=? WHERE id=?", 'gave up waiting', attempts, w.id);
+      logActivity(`reaction expired · ${w.source}:${w.kind} → ${w.target_slug}`, 'idle');
+    } else {
+      run('UPDATE watches SET attempts=?, detail=? WHERE id=?', attempts, res.detail || '', w.id);
+    }
+  }
+}
+if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(tickWatches, 45_000).unref?.();
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.get('/api/health', (_q, res) => res.json({ ok: true }));
 
@@ -302,7 +427,8 @@ app.get('/api/routines/:slug', (req, res) => {
   if (!r) return res.status(404).json({ error: 'not found' });
   const runHistory = all('SELECT * FROM runs WHERE routine_slug=? ORDER BY created_at DESC, ord DESC LIMIT 12', r.slug)
     .map((x) => ({ id: x.id, status: x.status, ago: relTime(x.created_at), dur: x.dur, trigger: x.trigger }));
-  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory });
+  const watches = all('SELECT * FROM watches WHERE origin_routine=? ORDER BY created_at DESC LIMIT 20', r.slug).map(shapeWatch);
+  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches });
 });
 
 app.post('/api/routines', (req, res) => {
@@ -320,20 +446,21 @@ app.post('/api/routines', (req, res) => {
   const chain = Array.isArray(b.chain) ? b.chain.filter(Boolean) : [];
   const schedule = (b.schedule || '').trim();
   const filters = cleanFilters(b.filters);
+  const reactions = cleanReactions(b.reactions);
   const enabled = b.enabled === false ? 0 : 1;
   const ord = (one('SELECT MAX(ord) AS m FROM routines').m ?? -1) + 1;
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
 
   run(
     `INSERT INTO routines
-      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     slug, name, (b.summary || '').trim(), owner, team,
     JSON.stringify(triggers), JSON.stringify(connectors),
     'idle', 'never', 'idle', next, null, '$0.00', enabled, '', '', '—',
     ownerColor(owner), initialsOf(owner), ord,
     (b.prompt || '').trim(), (b.model || 'claude-opus-4-8').trim(), (b.repo || '').trim(), (b.branch || 'main').trim(),
-    JSON.stringify(chain), schedule, JSON.stringify(filters)
+    JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions)
   );
   res.status(201).json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', slug)));
 });
@@ -347,10 +474,15 @@ function buildRoutineMd(r) {
     else if (Array.isArray(flt.actions) && flt.actions.length) L.push(`  - ${t}: { actions: [${flt.actions.join(', ')}] }`);
     else L.push(`  - ${t}: {}`);
   });
-  if (j(r.connectors).length) { L.push('tools:'); L.push(`  mcp: [${j(r.connectors).join(', ')}]`); }
+  if (j(r.connectors).length) { L.push('tools:', `  grant: [${j(r.connectors).join(', ')}]`); }
   L.push('runtime:', `  model: ${r.model}`, `  repos: [${(r.repo || '').split(',').map((s) => s.trim()).filter(Boolean).join(', ') || '*'}]`, `  branch: ${r.branch}`);
   const chain = j(r.chain);
   if (chain.length) L.push(`chain: [${chain.join(', ')}]`);
+  const reactions = cleanReactions(j(r.reactions));
+  if (reactions.length) {
+    L.push('react:');
+    reactions.forEach((rx) => L.push(`  - on: ${rx.source}:${rx.kind}${rx.when ? ':' + rx.when : ''}  →  run: ${rx.run}`));
+  }
   L.push('---', '', r.prompt && r.prompt.trim() ? r.prompt : `## Prompt\n${r.summary}`);
   return L.join('\n');
 }
@@ -369,14 +501,15 @@ app.put('/api/routines/:slug', (req, res) => {
   const triggers = Array.isArray(b.triggers) ? b.triggers.filter(Boolean) : j(r.triggers);
   const schedule = b.schedule != null ? String(b.schedule).trim() : (r.schedule || '');
   const filters = b.filters != null ? cleanFilters(b.filters) : (jObj(r.filters) || {});
+  const reactions = b.reactions != null ? cleanReactions(b.reactions) : j(r.reactions);
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
   run(
-    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=? WHERE slug=?`,
+    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
     JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
     JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
     (b.model ?? r.model).trim() || 'claude-opus-4-8', (b.repo ?? r.repo).trim(), (b.branch ?? r.branch).trim() || 'main',
-    (b.prompt ?? r.prompt).trim(), ownerColor(owner), initialsOf(owner), next, schedule, JSON.stringify(filters), r.slug
+    (b.prompt ?? r.prompt).trim(), ownerColor(owner), initialsOf(owner), next, schedule, JSON.stringify(filters), JSON.stringify(reactions), r.slug
   );
   res.json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', r.slug)));
 });
@@ -493,6 +626,14 @@ app.get('/api/connectors', async (_q, res) => {
 
 app.get('/api/activity', (_q, res) =>
   res.json(all('SELECT * FROM activity ORDER BY ord DESC LIMIT 40').map((a) => ({ time: a.time, text: a.text, state: a.state })))
+);
+
+const shapeWatch = (w) => ({
+  id: w.id, origin: w.origin_routine, target: w.target_slug, source: w.source, kind: w.kind, when: w.when_cond,
+  entity: jObj(w.entity) || {}, status: w.status, detail: w.detail, attempts: w.attempts, ago: relTime(w.created_at),
+});
+app.get('/api/watches', (_q, res) =>
+  res.json(all('SELECT * FROM watches ORDER BY created_at DESC LIMIT 100').map(shapeWatch))
 );
 
 app.post('/api/routines/:slug/enable', (req, res) => {

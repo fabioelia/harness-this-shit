@@ -52,7 +52,7 @@ function StatStrip({ s }: { s?: Stats }) {
     <div className="mb-[18px] flex overflow-hidden rounded-xl border border-line bg-surface">
       {cell('Routines', <span>{s?.total ?? '—'} <span className="text-[12px] font-medium text-dim">/ {s?.enabled ?? 0} on</span></span>)}
       {cell('Running now', <span className="flex items-center gap-[9px]">{s?.running ?? 0}<Dot color="#5b9ee6" pulse /></span>)}
-      {cell('Runs today', s?.runsToday ?? '—')}
+      {cell('Runs · 24h', s?.runsToday ?? '—')}
       {cell('Success rate', <span className="text-ok">{s?.successRate == null ? '—' : `${s.successRate}%`}</span>)}
       {cell('Spend', <span>{s?.spend ?? '$0.00'} <span className="text-[12px] font-medium text-dim">total</span></span>, true)}
     </div>
@@ -193,7 +193,7 @@ export function FleetPage() {
       <div className="mb-3.5 flex flex-wrap items-center gap-[9px]">
         <div className="flex h-[34px] w-[280px] items-center gap-[9px] rounded-md border border-line bg-surface px-3">
           <svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="#767063" strokeWidth="1.6"><circle cx="8" cy="8" r="5" /><line x1="11.8" y1="11.8" x2="15.5" y2="15.5" strokeLinecap="round" /></svg>
-          <input ref={searchRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search routines, owners, tags…" className="flex-1 bg-transparent text-[12.5px] text-fg placeholder:text-dim-2 focus:outline-none" />
+          <input ref={searchRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search routines, owners, triggers…" className="flex-1 bg-transparent text-[12.5px] text-fg placeholder:text-dim-2 focus:outline-none" />
           <span className="rounded border border-line px-[5px] font-mono text-[11px] font-semibold text-faint">/</span>
         </div>
         <FilterSelect value={team} onChange={setTeam} label="Team" options={opts.teams} />

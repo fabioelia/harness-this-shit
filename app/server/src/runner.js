@@ -22,7 +22,7 @@ export function allowedToolsFor(connectors = []) {
   return allow;
 }
 
-export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent } = {}) {
+export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, model } = {}) {
   return new Promise((resolve) => {
     const start = Date.now();
     const allow = allowedToolsFor(tools);
@@ -32,6 +32,7 @@ export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent } =
     // (keeps the session clean/fast; tools come only from what we grant).
     // stream-json (NDJSON) so we capture every step; --verbose is required under -p.
     const args = ['-p', '--strict-mcp-config', '--output-format', 'stream-json', '--verbose'];
+    if (model) args.push('--model', model); // honour the routine's chosen model
     if (allow.length) args.push('--allowed-tools', ...allow);
     // tools dir on PATH so `slack-post` (and future tool scripts) resolve by name
     const env = { ...process.env, PATH: `${TOOLS_DIR}:${process.env.PATH}` };
@@ -88,6 +89,7 @@ export function buildPrompt(routine, event, constraints = []) {
     ? routine.connectors
     : (() => { try { return JSON.parse(routine.connectors || '[]'); } catch { return []; } })();
   const repo = typeof event?.repository === 'object' ? event.repository.full_name : event?.repository;
+  const targetRepos = String(routine.repo || '').split(',').map((s) => s.trim()).filter(Boolean);
   const lines = [
     (routine.prompt && routine.prompt.trim()) || routine.summary || '',
     '',
@@ -97,6 +99,9 @@ export function buildPrompt(routine, event, constraints = []) {
     JSON.stringify(event ?? {}, null, 2),
     '```',
   ];
+  if (targetRepos.length || routine.branch) {
+    lines.push('', '## Target', `${targetRepos.length ? `Repositories: ${targetRepos.join(', ')}.` : ''}${routine.branch ? ` Default branch: ${routine.branch}.` : ''} Use these with \`gh --repo\` unless the trigger payload points elsewhere.`.trim());
+  }
   if (constraints.length) lines.push('', '## Hard constraints (must obey)', ...constraints.map((c) => `- ${c}`));
   if (tools.length) {
     const how = [];

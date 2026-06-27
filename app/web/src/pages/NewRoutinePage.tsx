@@ -7,10 +7,22 @@ const TRIGGER_GROUPS: { label: string; items: string[] }[] = [
   { label: 'Control', items: ['schedule', 'manual', 'api', 'webhook'] },
   { label: 'GitHub', items: ['push', 'pull_request', 'pull_request_review', 'issues', 'issue_comment', 'label', 'release'] },
   { label: 'CI / checks', items: ['check_run', 'check_suite', 'workflow_run', 'status', 'deployment_status'] },
-  { label: 'Other sources', items: ['sentry', 'slack'] },
 ];
 // Only tools the runner actually grants (runner.js allowedToolsFor). No phantom MCPs.
 const CONNECTORS = ['github', 'slack', 'web'];
+
+// Reactions the watcher can actually evaluate (index.js pollWatch). Generalizes beyond these.
+const REACTION_PRESETS = [
+  { label: 'PR checks pass', source: 'github', kind: 'checks', when: 'success' },
+  { label: 'PR checks fail', source: 'github', kind: 'checks', when: 'failure' },
+  { label: 'PR checks complete (pass or fail)', source: 'github', kind: 'checks', when: 'any' },
+  { label: 'PR approved', source: 'github', kind: 'review', when: 'approved' },
+  { label: 'PR changes requested', source: 'github', kind: 'review', when: 'changes_requested' },
+  { label: 'PR merged', source: 'github', kind: 'merge', when: 'merged' },
+  { label: 'After a delay (timeout)', source: 'timeout', kind: 'after', when: '' },
+];
+const reactionLabel = (r: { source: string; kind: string; when: string }) =>
+  r.source === 'timeout' ? `after ${r.when || '?'}` : REACTION_PRESETS.find((p) => p.source === r.source && p.kind === r.kind && p.when === r.when)?.label || `${r.source}:${r.kind}:${r.when}`;
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'mb-1.5 font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -92,6 +104,45 @@ function RepoPicker({ value, onChange }: { value: string; onChange: (v: string) 
   );
 }
 
+function ReactionsEditor({ reactions, setReactions }: { reactions: { source: string; kind: string; when: string; run: string }[]; setReactions: (r: { source: string; kind: string; when: string; run: string }[]) => void }) {
+  const [preset, setPreset] = useState(0);
+  const [run, setRun] = useState('');
+  const [dur, setDur] = useState('4h');
+  const p = REACTION_PRESETS[preset];
+  const add = () => {
+    if (!run.trim()) return;
+    const when = p.source === 'timeout' ? dur.trim() : p.when;
+    setReactions([...reactions, { source: p.source, kind: p.kind, when, run: slugify(run) }]);
+    setRun('');
+  };
+  const remove = (i: number) => setReactions(reactions.filter((_, x) => x !== i));
+  return (
+    <div>
+      {reactions.length > 0 && (
+        <div className="mb-2.5 flex flex-col gap-1.5">
+          {reactions.map((r, i) => (
+            <div key={i} className="flex items-center gap-2 rounded-md border border-line-soft bg-surface-2 px-2.5 py-1.5 font-mono text-[11.5px]">
+              <span className="text-lease">when</span><span className="text-t2">{reactionLabel(r)}</span>
+              <span className="text-faint">→ run</span><span className="text-brand">{r.run}</span>
+              <button type="button" onClick={() => remove(i)} className="ml-auto text-dim hover:text-bad" aria-label="remove">✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-[11px] text-dim-2">When</span>
+        <select value={preset} onChange={(e) => setPreset(+e.target.value)} className="h-9 shrink-0 rounded-md border border-line bg-surface-2 px-2 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none">
+          {REACTION_PRESETS.map((x, i) => <option key={i} value={i}>{x.label}</option>)}
+        </select>
+        {p.source === 'timeout' && <input value={dur} onChange={(e) => setDur(e.target.value)} placeholder="4h" className={cn(inputCls, 'w-20 font-mono text-[12px]')} />}
+        <span className="font-mono text-[11px] text-dim-2">→ run</span>
+        <input value={run} onChange={(e) => setRun(e.target.value)} placeholder="routine-slug" onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} className={cn(inputCls, 'min-w-[140px] flex-1 font-mono text-[12px]')} />
+        <button type="button" onClick={add} className="h-9 shrink-0 rounded-md border border-line bg-surface-2 px-3 font-display text-[12px] font-semibold text-t2 hover:border-hair">Add</button>
+      </div>
+    </div>
+  );
+}
+
 const onLine = (t: string, slug: string) =>
   ({
     schedule: '- schedule: { cron: "0 9 * * *" }',
@@ -140,6 +191,7 @@ export function NewRoutinePage() {
   const [schedule, setSchedule] = useState('0 9 * * *');
   const [filterActions, setFilterActions] = useState('');
   const [filterBranches, setFilterBranches] = useState('');
+  const [reactions, setReactions] = useState<{ source: string; kind: string; when: string; run: string }[]>([]);
 
   const slug = slugTouched ? slugInput : slugify(name);
   // CI / GitHub events that carry an `action` and can be filtered.
@@ -165,6 +217,7 @@ export function NewRoutinePage() {
     if (d.schedule) setSchedule(d.schedule);
     setFilterActions((d.filters?.actions ?? []).join(', '));
     setFilterBranches((d.filters?.branches ?? []).join(', '));
+    setReactions(d.reactions ?? []);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existing.data, isEdit]);
 
@@ -182,27 +235,28 @@ export function NewRoutinePage() {
       if (t === 'schedule') L.push(`  - schedule: { cron: "${schedule}" }`);
       else if (t === 'push' && filtersObj.branches.length) L.push(`  - push: { branches: [${filtersObj.branches.join(', ')}] }`);
       else if (actionable && filtersObj.actions.length && t !== 'push') L.push(`  - ${t}: { actions: [${filtersObj.actions.join(', ')}] }`);
-      else L.push(`  ${onLine(t, slug)}`);
+      else L.push(`  - ${t}: {}`);
     });
-    if (connectors.length) {
-      L.push('tools:');
-      L.push(`  mcp: [${connectors.join(', ')}]`);
-    }
+    if (connectors.length) { L.push('tools:'); L.push(`  grant: [${connectors.join(', ')}]`); }
     L.push('runtime:');
     L.push(`  model: ${model || 'claude-opus-4-8'}`);
     L.push(`  repos: [${repo.split(',').map((s) => s.trim()).filter(Boolean).join(', ') || '*'}]`);
     L.push(`  branch: ${branch || 'main'}`);
     if (chainArr.length) L.push(`chain: [${chainArr.join(', ')}]`);
+    if (reactions.length) {
+      L.push('react:');
+      reactions.forEach((rx) => L.push(`  - on: ${rx.source}:${rx.kind}${rx.when ? ':' + rx.when : ''}  →  run: ${rx.run}`));
+    }
     L.push('---');
     L.push('');
     L.push(prompt.trim() || '## Prompt\nDescribe what this routine should do, step by step.');
     return L.join('\n');
-  }, [name, slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, chain, schedule, filterActions, filterBranches]);
+  }, [name, slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, chain, schedule, filterActions, filterBranches, reactions]);
 
   const valid = name.trim().length > 0 && slug.length > 0;
   function submit() {
     if (!valid) return;
-    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj };
+    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions };
     if (isEdit) update.mutate({ slug: editSlug!, body }, { onSuccess: () => navigate(`/routines/${editSlug}`) });
     else create.mutate(body, { onSuccess: (r) => navigate(`/routines/${r.slug}`) });
   }
@@ -316,9 +370,15 @@ export function NewRoutinePage() {
           </div>
 
           <div className={CARD}>
-            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Chain · <span className="font-mono lowercase tracking-normal text-dim-2">kick off downstream routines</span></div>
+            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Chain · <span className="font-mono lowercase tracking-normal text-dim-2">kick off downstream routines now</span></div>
             <input value={chain} onChange={(e) => setChain(e.target.value)} placeholder="other-routine-slug, another-one" className={cn(inputCls, 'font-mono text-[12px]')} />
-            <div className="mt-2.5 text-[11.5px] text-dim-2">On success, these routines fire with this run’s output as <span className="font-mono text-[#ada695]">{'${upstream.output}'}</span>.</div>
+            <div className="mt-2.5 text-[11.5px] text-dim-2">On success, these routines fire <span className="text-t2">immediately</span> — the downstream session gets this run’s output in its event payload at <span className="font-mono text-[#ada695]">upstream.output</span>.</div>
+          </div>
+
+          <div className={CARD}>
+            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>React · <span className="font-mono lowercase tracking-normal text-dim-2">follow the work this routine creates</span></div>
+            <ReactionsEditor reactions={reactions} setReactions={setReactions} />
+            <div className="mt-2.5 text-[11.5px] text-dim-2">After a run resolves a PR, Switchboard <span className="text-t2">watches</span> it and fires the chosen routine <span className="text-t2">later</span> when the condition is met — e.g. when CI checks finish. Polls with <span className="font-mono">gh</span>, so no webhook needed. A <span className="font-mono">timeout</span> fires after a delay if nothing resolved first.</div>
           </div>
 
           <div className={CARD}>

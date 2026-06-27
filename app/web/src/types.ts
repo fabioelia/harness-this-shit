@@ -11,6 +11,7 @@ export interface Routine {
   chain: string[];
   schedule: string;
   filters: { actions?: string[]; branches?: string[] };
+  reactions: Reaction[];
   model: string;
   repo: string;
   branch: string;
@@ -34,6 +35,12 @@ export interface FrontMatter {
 }
 export interface FlowNode { title: string; sub: string; tone?: string }
 export interface RunRow { id: string; status: string; ago: string; dur: string; trigger: string }
+export interface Reaction { source: string; kind: string; when: string; run: string }
+export interface Watch {
+  id: string; origin: string; target: string; source: string; kind: string; when: string;
+  entity: { repo?: string; pr?: number; duration_ms?: number };
+  status: 'open' | 'fired' | 'dropped' | 'expired'; detail: string; attempts: number; ago: string;
+}
 
 export interface RoutineDetail extends Routine {
   breadcrumb: string[];
@@ -42,6 +49,7 @@ export interface RoutineDetail extends Routine {
   flowNodes: FlowNode[];
   prompt: string;
   runHistory: RunRow[];
+  watches: Watch[];
 }
 
 export interface Connector {

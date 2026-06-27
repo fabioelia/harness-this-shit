@@ -38,8 +38,25 @@ CREATE TABLE IF NOT EXISTS routines (
   sinks TEXT NOT NULL DEFAULT '[]',   -- deprecated, unused (the session does its own delivery)
   chain TEXT NOT NULL DEFAULT '[]',   -- json: downstream routine slugs
   schedule TEXT NOT NULL DEFAULT '',  -- 5-field cron for the schedule trigger
-  filters TEXT NOT NULL DEFAULT '{}'  -- json: actions/branches event sub-filters
+  filters TEXT NOT NULL DEFAULT '{}', -- json: actions/branches event sub-filters
+  reactions TEXT NOT NULL DEFAULT '[]' -- json: [{source,kind,when,run}] follow-the-work
 );
+CREATE TABLE IF NOT EXISTS watches (
+  id TEXT PRIMARY KEY,
+  origin_run TEXT NOT NULL DEFAULT '',
+  origin_routine TEXT NOT NULL DEFAULT '',
+  target_slug TEXT NOT NULL,
+  source TEXT NOT NULL,            -- github | timeout | …
+  kind TEXT NOT NULL,             -- checks | review | merge | after
+  when_cond TEXT NOT NULL,        -- success | failure | any | approved | … | duration
+  entity TEXT NOT NULL DEFAULT '{}', -- json: { repo, pr } | { duration_ms }
+  status TEXT NOT NULL DEFAULT 'open', -- open | fired | dropped | expired
+  detail TEXT NOT NULL DEFAULT '',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL DEFAULT 0,
+  fire_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_watches_status ON watches(status);
 CREATE TABLE IF NOT EXISTS activity (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   time TEXT NOT NULL,
@@ -95,6 +112,7 @@ export function getDb() {
   ensure('runs', 'session_id', "session_id TEXT NOT NULL DEFAULT ''");
   ensure('routines', 'schedule', "schedule TEXT NOT NULL DEFAULT ''");
   ensure('routines', 'filters', "filters TEXT NOT NULL DEFAULT '{}'");
+  ensure('routines', 'reactions', "reactions TEXT NOT NULL DEFAULT '[]'");
   ensure('runs', 'dur_ms', 'dur_ms INTEGER');
   const n = _db.prepare('SELECT COUNT(*) AS n FROM routines').get();
   if (fresh || n.n === 0) seed(_db);
