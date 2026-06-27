@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useRoutines, useStats, useToggleRoutine, useKillSwitch } from '@/lib/api';
-import { Avatar, Chip, Dot, Sbar, Spark, StatePill, Toggle, makeHist } from '@/components/sb';
+import { Avatar, Chip, Dot, Empty, Sbar, Spark, StatePill, Toggle, makeHist } from '@/components/sb';
 import type { Routine, Stats } from '@/types';
 
 const GRID = 'grid-template-columns:36px minmax(0,2.2fr) minmax(0,1.5fr) 156px 144px 116px 92px 132px 78px';
@@ -34,7 +34,7 @@ function StatStrip({ s }: { s?: Stats }) {
       {cell('Running now', <span className="flex items-center gap-[9px]">{s?.running ?? 0}<Dot color="#5b9ee6" pulse /></span>)}
       {cell('Needs human', <span className="flex items-center gap-[9px] text-warn">{s?.needsHuman ?? 0}<Dot color="#e6b052" /></span>)}
       {cell('Runs today', s?.runsToday ?? '—')}
-      {cell('Success 7d', <span className="text-ok">{s?.success7d ?? '—'}%</span>)}
+      {cell('Success 7d', <span className="text-ok">{s?.success7d == null ? '—' : `${s.success7d}%`}</span>)}
       {cell('Reactions 24h', <span>{s?.reactions24h ?? '—'} <span className="text-[12px] font-medium text-dim">fired</span></span>, true)}
     </div>
   );
@@ -136,7 +136,18 @@ export function FleetPage() {
         <div className="border-b border-line bg-surface-2 px-4 py-[11px] font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2" style={{ display: 'grid', gridTemplateColumns: '36px minmax(0,2.2fr) minmax(0,1.5fr) 156px 144px 116px 92px 132px 78px', alignItems: 'center' }}>
           <div /><div>Routine</div><div>Triggers</div><div>Owner · team</div><div>State</div><div>Last run</div><div>Next</div><div>7d health</div><div className="text-right">Avg run</div>
         </div>
-        {list.map((r, i) => <FleetRow key={r.slug} r={r} i={i} />)}
+        {list.length === 0 ? (
+          <Empty
+            title={routines && routines.length === 0 ? 'No routines yet' : 'No routines match'}
+            hint={
+              routines && routines.length === 0
+                ? 'Routines are version-controlled *.routine.md files. Connect a repo and add one to see it here.'
+                : 'Try clearing the search.'
+            }
+          />
+        ) : (
+          list.map((r, i) => <FleetRow key={r.slug} r={r} i={i} />)
+        )}
       </div>
     </div>
   );

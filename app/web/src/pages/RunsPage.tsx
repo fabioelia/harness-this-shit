@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useRuns } from '@/lib/api';
-import { Dot, stateMeta } from '@/components/sb';
+import { Dot, Empty, stateMeta } from '@/components/sb';
 
 const GRID = { display: 'grid', gridTemplateColumns: '16px 110px minmax(0,1.4fr) minmax(0,1fr) 90px 80px', alignItems: 'center', gap: 14 } as const;
 
@@ -18,6 +18,7 @@ export function RunsPage() {
           <div className="border-b border-line bg-surface-2 px-[18px] py-[11px] font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2" style={GRID}>
             <div /><div>Run</div><div>Routine</div><div>Trigger</div><div>Duration</div><div className="text-right">When</div>
           </div>
+          {runs && runs.length === 0 && <Empty title="No runs yet" hint="Runs appear here the moment a routine fires — on a schedule, a GitHub event, or a manual dispatch." />}
           {runs?.map((r) => (
             <Link key={r.id} to={`/runs/${r.id}`} className="border-b border-line-soft px-[18px] py-3 last:border-0 hover:bg-white/[0.015]" style={GRID}>
               <Dot state={r.status} size={8} />

@@ -1,6 +1,6 @@
 import { Link, useParams } from 'react-router-dom';
 import { useRun } from '@/lib/api';
-import { Pill, Dot, SIGNAL, stateMeta } from '@/components/sb';
+import { Pill, Dot, Empty, SIGNAL, stateMeta } from '@/components/sb';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -13,8 +13,9 @@ function CheckMark() {
 
 export function RunDetailPage() {
   const { id } = useParams();
-  const { data: r } = useRun(id);
-  if (!r) return <div className="px-6 py-10 text-muted">Loading…</div>;
+  const { data: r, isLoading } = useRun(id);
+  if (isLoading) return <div className="px-6 py-10 text-muted">Loading…</div>;
+  if (!r) return <div className="px-[26px] py-10"><Empty title="Run not found" hint={<Link className="text-brand" to="/runs">Back to Runs ›</Link>} /></div>;
   const m = stateMeta(r.status);
 
   return (

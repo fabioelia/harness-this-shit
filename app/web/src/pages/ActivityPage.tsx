@@ -1,5 +1,5 @@
 import { useActivity } from '@/lib/api';
-import { Dot } from '@/components/sb';
+import { Dot, Empty } from '@/components/sb';
 
 export function ActivityPage() {
   const { data: activity } = useActivity();
@@ -16,6 +16,7 @@ export function ActivityPage() {
           <span className="font-display text-[11px] font-semibold uppercase tracking-[0.1em] text-t2">Live activity</span>
         </div>
         <div className="overflow-hidden rounded-xl border border-line bg-surface">
+          {activity && activity.length === 0 && <Empty title="No activity yet" hint="Every dispatch, lease, push, and decision lands here as it happens." />}
           {activity?.map((a, i) => (
             <div key={i} className="flex items-start gap-3 border-b border-line-soft px-[18px] py-[13px] last:border-0">
               <span className="mt-1 shrink-0"><Dot state={a.state} size={8} /></span>

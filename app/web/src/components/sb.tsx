@@ -145,6 +145,21 @@ export function Toggle({ on, onCheckedChange }: { on: boolean; onCheckedChange?:
   );
 }
 
+/** On-brand empty state for tables/lists with no data yet. */
+export function Empty({ title, hint }: { title: string; hint?: React.ReactNode }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-2 px-6 py-16 text-center">
+      <span className="grid place-items-center rounded-[10px] border border-dashed text-dim-2" style={{ width: 38, height: 38, borderColor: '#3a342c' }}>
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.4">
+          <rect x="2.5" y="4.5" width="13" height="9.5" rx="1.5" /><line x1="2.5" y1="7.5" x2="15.5" y2="7.5" /><line x1="6" y1="2.5" x2="6" y2="4.5" /><line x1="12" y1="2.5" x2="12" y2="4.5" />
+        </svg>
+      </span>
+      <div className="font-display text-[14px] font-semibold text-t2">{title}</div>
+      {hint && <div className="max-w-md font-sans text-[12.5px] leading-[1.5] text-dim-2">{hint}</div>}
+    </div>
+  );
+}
+
 /** Trigger chip — mono, subtle. */
 export function Chip({ children, tone = 'default' }: { children: React.ReactNode; tone?: 'default' | 'copper' | 'blue' }) {
   const styles =

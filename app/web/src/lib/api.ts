@@ -19,10 +19,10 @@ async function post<T>(url: string, body?: unknown): Promise<T> {
 export const useStats = () => useQuery({ queryKey: ['stats'], queryFn: () => get<Stats>('/api/stats'), refetchInterval: 8000 });
 export const useRoutines = () => useQuery({ queryKey: ['routines'], queryFn: () => get<Routine[]>('/api/routines'), refetchInterval: 10000 });
 export const useRoutine = (slug?: string) =>
-  useQuery({ queryKey: ['routine', slug], queryFn: () => get<RoutineDetail>(`/api/routines/${slug}`), enabled: !!slug });
+  useQuery({ queryKey: ['routine', slug], queryFn: () => get<RoutineDetail>(`/api/routines/${slug}`), enabled: !!slug, retry: false });
 export const useRuns = () => useQuery({ queryKey: ['runs'], queryFn: () => get<RunLite[]>('/api/runs'), refetchInterval: 8000 });
 export const useRun = (id?: string) =>
-  useQuery({ queryKey: ['run', id], queryFn: () => get<RunDetail>(`/api/runs/${id}`), enabled: !!id });
+  useQuery({ queryKey: ['run', id], queryFn: () => get<RunDetail>(`/api/runs/${id}`), enabled: !!id, retry: false });
 export const useConnectors = () => useQuery({ queryKey: ['connectors'], queryFn: () => get<Connector[]>('/api/connectors') });
 export const useActivity = () => useQuery({ queryKey: ['activity'], queryFn: () => get<ActivityEntry[]>('/api/activity'), refetchInterval: 10000 });
 

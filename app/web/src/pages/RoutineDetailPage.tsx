@@ -1,6 +1,6 @@
 import { Link, useParams } from 'react-router-dom';
 import { useRoutine, useToggleRoutine, useDispatchRoutine } from '@/lib/api';
-import { Avatar, Chip, Dot, Pill, StatePill, Toggle, SIGNAL } from '@/components/sb';
+import { Avatar, Chip, Dot, Empty, Pill, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import type { FrontMatter, RoutineDetail } from '@/types';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
@@ -163,10 +163,11 @@ function OwnedPRsCard({ d }: { d: RoutineDetail }) {
 
 export function RoutineDetailPage() {
   const { slug } = useParams();
-  const { data: d } = useRoutine(slug);
+  const { data: d, isLoading } = useRoutine(slug);
   const toggle = useToggleRoutine();
   const dispatch = useDispatchRoutine();
-  if (!d) return <div className="px-6 py-10 text-muted">Loading…</div>;
+  if (isLoading) return <div className="px-6 py-10 text-muted">Loading…</div>;
+  if (!d) return <div className="px-[26px] py-10"><Empty title="Routine not found" hint={<Link className="text-brand" to="/">Back to Fleet ›</Link>} /></div>;
 
   return (
     <div className="font-sans text-fg animate-fade-up">

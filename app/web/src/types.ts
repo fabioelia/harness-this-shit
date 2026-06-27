@@ -68,6 +68,6 @@ export interface RunDetail {
 }
 export interface Stats {
   wordmark: string; killSwitch: boolean; total: number; enabled: number; teams: number;
-  running: number; needsHuman: number; failing: number; runsToday: number; success7d: number;
+  running: number; needsHuman: number; failing: number; runsToday: number; success7d: number | null;
   reactions24h: number; leases: number;
 }

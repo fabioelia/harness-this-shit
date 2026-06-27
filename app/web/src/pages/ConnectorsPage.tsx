@@ -1,5 +1,5 @@
 import { useConnectors } from '@/lib/api';
-import { Pill, Dot, SIGNAL } from '@/components/sb';
+import { Pill, Dot, Empty, SIGNAL } from '@/components/sb';
 import type { Connector } from '@/types';
 
 const GRID = { display: 'grid', gridTemplateColumns: '44px minmax(0,1.3fr) 138px minmax(0,1.5fr) minmax(0,1.7fr) 150px', alignItems: 'center', gap: 14 } as const;
@@ -36,6 +36,7 @@ export function ConnectorsPage() {
           <div className="border-b border-line bg-surface-2 px-[18px] py-[11px] font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2" style={GRID}>
             <div /><div>Connector</div><div>Health</div><div>Auth</div><div>Scopes</div><div className="text-right">Used by</div>
           </div>
+          {connectors && connectors.length === 0 && <Empty title="No connectors yet" hint="Add an MCP server or native capability, then grant it to routines with a checkbox. Secrets stay as vault:// references." />}
           {connectors?.map((c) => (
             <div key={c.code} className="border-b border-line-soft px-[18px] py-[15px] last:border-0 hover:bg-white/[0.015]" style={GRID}>
               <div className="grid place-items-center font-mono text-[11px] font-bold text-[#16130f]" style={{ width: 30, height: 30, borderRadius: 8, background: c.avColor }}>{c.code}</div>
