@@ -7,13 +7,13 @@ const PRINT_PR_TITLE = {
   owner: 'fabio',
   team: 'platform',
   triggers: ['push', 'pull_request'],
-  connectors: ['github'],
+  connectors: ['github', 'slack'],
   prompt:
-    'You are a Switchboard routine that fires on a GitHub push / pull_request event. The trigger event payload is provided as JSON (enriched with live GitHub data when available). Print ONLY the title of the pull request — the value of pull_request.title. Output just that title text on one line, with no preamble, quotes, or markdown.',
+    'When a pull request is opened or a commit is pushed to its branch, post the title of the pull request to the Slack channel #dev-ai-slop.',
   model: 'claude-opus-4-8',
   repo: 'fabioelia/harness-this-shit',
   branch: 'main',
-  sinks: [{ type: 'stdout' }, { type: 'slack', target: '#dev-ai-slop' }],
+  sinks: [],
   chain: [],
 };
 

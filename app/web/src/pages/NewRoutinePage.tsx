@@ -3,7 +3,16 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useCreateRoutine, useUpdateRoutine, useRoutine } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
-const TRIGGERS = ['schedule', 'push', 'label', 'comment', 'check_run', 'pull_request', 'release', 'sentry', 'slack', 'webhook', 'manual', 'api', 'after'];
+const TRIGGERS = [
+  // control
+  'schedule', 'manual', 'api', 'webhook', 'after',
+  // github
+  'push', 'pull_request', 'pull_request_review', 'issues', 'issue_comment', 'label', 'release',
+  // CI / checks
+  'check_run', 'check_suite', 'workflow_run', 'status', 'deployment_status',
+  // other sources
+  'sentry', 'slack',
+];
 const CONNECTORS = ['github', 'slack', 'jira', 'sentry', 'notion', 'figma', 'pagerduty', 'linear'];
 const SINKS = ['stdout', 'slack', 'github-comment', 'github-gist', 'confluence'];
 
@@ -37,8 +46,14 @@ const onLine = (t: string, slug: string) =>
     push: '- github: { event: push, branches: [main] }',
     label: '- github: { event: label, name: needs-review, on: added }',
     comment: '- github: { event: issue_comment, on: edited }',
-    check_run: '- github: { event: check_run, status: completed }',
-    pull_request: '- github: { event: pull_request, actions: [opened, synchronize] }',
+    check_run: '- github: { event: check_run, status: completed, conclusion: [success, failure] }',
+    check_suite: '- github: { event: check_suite, status: completed }',
+    workflow_run: '- github: { event: workflow_run, status: completed }',
+    status: '- github: { event: status, state: [success, failure] }',
+    deployment_status: '- github: { event: deployment_status }',
+    pull_request: '- github: { event: pull_request, actions: [opened, synchronize, reopened] }',
+    pull_request_review: '- github: { event: pull_request_review, state: changes_requested }',
+    issues: '- github: { event: issues, actions: [opened, labeled] }',
     release: '- github: { event: release, actions: [published] }',
     sentry: '- sentry: { event: issue, level: error }',
     slack: '- slack: { channel: C0…, on: message }',
@@ -113,10 +128,6 @@ export function NewRoutinePage() {
     L.push(`  model: ${model || 'claude-opus-4-8'}`);
     L.push(`  repo: ${repo || '—'}`);
     L.push(`  branch: ${branch || 'main'}`);
-    if (sinks.length) {
-      L.push('outputs:');
-      sinks.forEach((t) => L.push(`  - ${t}${t === 'slack' && slackChannel ? `: { channel: ${slackChannel} }` : ''}`));
-    }
     if (chainArr.length) L.push(`chain: [${chainArr.join(', ')}]`);
     L.push('---');
     L.push('');
@@ -127,7 +138,7 @@ export function NewRoutinePage() {
   const valid = name.trim().length > 0 && slug.length > 0;
   function submit() {
     if (!valid) return;
-    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, sinks: sinksArr, chain: chainArr };
+    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, sinks: [], chain: chainArr };
     if (isEdit) update.mutate({ slug: editSlug!, body }, { onSuccess: () => navigate(`/routines/${editSlug}`) });
     else create.mutate(body, { onSuccess: (r) => navigate(`/routines/${r.slug}`) });
   }
@@ -194,25 +205,11 @@ export function NewRoutinePage() {
           </div>
 
           <div className={CARD}>
-            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Connectors · <span className="font-mono lowercase tracking-normal text-dim-2">tools.mcp:</span></div>
+            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Tools the session can use</div>
             <div className="flex flex-wrap gap-1.5">
               {CONNECTORS.map((c) => <ChipToggle key={c} on={connectors.includes(c)} onClick={() => toggle(setConnectors, c)}>{c}</ChipToggle>)}
             </div>
-            <div className="mt-2.5 text-[11.5px] text-dim-2">Grants are deny-by-default — the agent only sees what you select here.</div>
-          </div>
-
-          <div className={CARD}>
-            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Output sinks · <span className="font-mono lowercase tracking-normal text-dim-2">normalize where it goes</span></div>
-            <div className="flex flex-wrap gap-1.5">
-              {SINKS.map((s) => <ChipToggle key={s} on={sinks.includes(s)} onClick={() => toggle(setSinks, s)}>{s}</ChipToggle>)}
-            </div>
-            {sinks.includes('slack') && (
-              <div className="mt-3">
-                <div className={LABEL}>Slack channel or @user</div>
-                <input value={slackChannel} onChange={(e) => setSlackChannel(e.target.value)} placeholder="#dev-ai-slop" className={cn(inputCls, 'font-mono text-[12px]')} />
-              </div>
-            )}
-            <div className="mt-2.5 text-[11.5px] text-dim-2">The harness delivers the run output to each sink — Slack via the bot, GitHub via <span className="font-mono">gh</span>.</div>
+            <div className="mt-2.5 text-[11.5px] text-dim-2">Deny-by-default. The session is autonomous and uses these to do the work — <span className="font-mono">github</span> → gh CLI, <span className="font-mono">slack</span> → post via the bot, <span className="font-mono">web</span> → fetch. Just say what to do in the prompt.</div>
           </div>
 
           <div className={CARD}>

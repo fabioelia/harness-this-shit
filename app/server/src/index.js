@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { getDb, all, one, run } from './db.js';
 import { runClaude, buildPrompt } from './runner.js';
-import { enrichEvent, deliverSinks, integrationStatus } from './integrations.js';
+import { integrationStatus } from './integrations.js';
 
 const app = express();
 app.use(cors());
@@ -78,30 +78,27 @@ function executeRoutine(r, rawEvent, triggerLabel) {
   run('UPDATE routines SET state=?, last_ago=?, last_status=? WHERE slug=?', 'running', 'now', 'running', r.slug);
 
   (async () => {
-    const event = await enrichEvent(rawEvent ?? {});
-    run('UPDATE runs SET event=? WHERE id=?', JSON.stringify(event), id);
+    // The session is autonomous: it gets the natural instruction + the raw event +
+    // its granted tools, and does the work itself (gh, slack-post, web…). No harness
+    // enrichment, no harness sinks.
+    const tools = j(r.connectors);
+    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {});
+    run('UPDATE runs SET prompt=? WHERE id=?', prompt, id);
 
-    const res = await runClaude(buildPrompt(r, event));
+    const res = await runClaude(prompt, { tools });
     const ok = res.code === 0 && !!res.output;
     const output = ok ? res.output : (res.output || res.stderr || `claude exited ${res.code}`);
 
-    let sinksResult = [];
-    if (ok) {
-      try { sinksResult = await deliverSinks(j(r.sinks), output, event); } catch (e) { sinksResult = [{ type: 'error', ok: false, detail: e.message }]; }
-    }
-    run('UPDATE runs SET status=?, dur=?, output=?, sinks_result=? WHERE id=?',
-      ok ? 'succeeded' : 'failed', fmtDur(res.ms), output, JSON.stringify(sinksResult), id);
+    run('UPDATE runs SET status=?, dur=?, output=? WHERE id=?', ok ? 'succeeded' : 'failed', fmtDur(res.ms), output, id);
     run('UPDATE routines SET state=?, last_ago=?, last_status=?, success=? WHERE slug=?',
       'idle', 'just now', ok ? 'success' : 'failing', ok ? 100 : 0, r.slug);
-    logActivity(`${r.slug} ${ok ? 'printed output' : 'failed'} · ${triggerLabel}`, ok ? 'success' : 'failing');
-    sinksResult.filter((s) => s.type !== 'stdout').forEach((s) =>
-      logActivity(`${r.slug} → ${s.type} ${s.ok ? 'delivered' : 'skipped'} · ${s.detail}`, s.ok ? 'success' : 'queued'));
+    logActivity(`${r.slug} ${ok ? 'ran · ' + output.split('\n').pop().slice(0, 60) : 'failed'} · ${triggerLabel}`, ok ? 'success' : 'failing');
 
-    // chain: kick off downstream routines with the upstream output
+    // chain: kick off downstream routines with this session's result as context
     if (ok) {
       for (const slug of j(r.chain)) {
         const dr = one('SELECT * FROM routines WHERE slug=? AND enabled=1', slug);
-        if (dr) executeRoutine(dr, { ...event, upstream: { routine: r.slug, output } }, `after · ${r.slug}`);
+        if (dr) executeRoutine(dr, { ...(rawEvent ?? {}), upstream: { routine: r.slug, output } }, `after · ${r.slug}`);
       }
     }
   })().catch((e) => {
@@ -231,16 +228,16 @@ app.post('/api/routines/:slug/validate', async (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
   if (!r) return res.status(404).json({ error: 'not found' });
   const st = await integrationStatus();
-  const sinks = j(r.sinks);
+  const tools = j(r.connectors);
   const checks = [
     { label: 'Identity', ok: !!r.name && !!r.slug, detail: `${r.name} · ${r.slug}.routine.md` },
     { label: 'Triggers', ok: j(r.triggers).length > 0, detail: j(r.triggers).join(', ') || 'no triggers — manual only' },
-    { label: 'Prompt body', ok: !!(r.prompt && r.prompt.trim().length > 12), detail: `${(r.prompt || '').length} chars` },
+    { label: 'Instruction', ok: !!(r.prompt && r.prompt.trim().length > 12), detail: `${(r.prompt || '').length} chars` },
     { label: 'Model', ok: !!r.model, detail: r.model },
   ];
-  const slack = sinks.find((s) => s.type === 'slack');
-  if (slack) checks.push({ label: 'Slack sink', ok: st.slack.connected && !!slack.target, detail: st.slack.connected ? (slack.target ? `→ ${slack.target} (bot must be invited)` : 'no channel set') : 'SLACK_BOT_TOKEN not set' });
-  if (sinks.some((s) => s.type?.startsWith('github'))) checks.push({ label: 'GitHub sink', ok: st.github.connected, detail: st.github.connected ? `gh · @${st.github.account}` : 'gh not authed' });
+  if (tools.includes('github')) checks.push({ label: 'Tool · gh', ok: st.github.connected, detail: st.github.connected ? `authed as @${st.github.account}` : 'gh not authed — run `gh auth login`' });
+  if (tools.includes('slack')) checks.push({ label: 'Tool · slack-post', ok: st.slack.connected, detail: st.slack.connected ? `${st.slack.team} · @${st.slack.bot}` : 'SLACK_BOT_TOKEN not set' });
+  if (tools.includes('web') || tools.includes('webfetch')) checks.push({ label: 'Tool · web', ok: true, detail: 'WebFetch / WebSearch' });
   (j(r.chain)).forEach((c) => checks.push({ label: `Chain → ${c}`, ok: !!one('SELECT 1 FROM routines WHERE slug=?', c), detail: one('SELECT 1 FROM routines WHERE slug=?', c) ? 'resolves' : 'no such routine' }));
   res.json({ ok: checks.every((c) => c.ok), checks });
 });
@@ -276,22 +273,18 @@ app.get('/api/runs/:id', (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', x.routine_slug);
   const running = x.status === 'running';
   const ok = x.status === 'succeeded';
-  const sinks = j(x.sinks_result);
+  const tools = j(r?.connectors);
   const timeline = [
     { t: '00:00', tag: 'dispatch', text: `Dispatcher admitted run · trigger ${x.trigger}`, dot: '#5fbf86' },
-    { t: '00:00', tag: 'enrich', text: `Enriched event via gh (live GitHub data)`, dot: '#7f8a80' },
-    { t: '00:00', tag: 'claude', text: `Spawned a headless Claude instance · claude -p`, dot: '#5b9ee6' },
+    { t: '00:00', tag: 'session', text: `Launched an auto-mode Claude session${tools.length ? ` with tools: ${tools.join(', ')}` : ''}`, dot: '#5b9ee6' },
   ];
-  if (!running) {
-    timeline.push({ t: x.dur, tag: ok ? 'output' : 'error', text: ok ? `Printed ${x.output.length} chars to stdout` : 'Run failed — see output', dot: ok ? '#5fbf86' : '#e5736b' });
-    sinks.filter((s) => s.type !== 'stdout').forEach((s) => timeline.push({ t: x.dur, tag: 'sink', text: `${s.type} → ${s.ok ? 'delivered' : 'skipped'} · ${s.detail}`, dot: s.ok ? '#5fbf86' : '#e6b052' }));
-  }
+  if (!running) timeline.push({ t: x.dur, tag: ok ? 'done' : 'error', text: ok ? (x.output.split('\n').pop() || 'Completed') : 'Run failed — see output', dot: ok ? '#5fbf86' : '#e5736b' });
   res.json({
     id: x.id, routine: x.routine_slug, status: x.status, trigger: x.trigger,
     started: new Date(x.created_at).toLocaleTimeString(), elapsed: x.dur, model: r?.model || 'claude',
-    stdout: x.output, event: jObj(x.event), sinksResult: sinks,
-    timeline, awaiting: running ? 'claude -p still running…' : null,
-    summary: { result: running ? 'Running…' : ok ? (x.output.split('\n')[0].slice(0, 80) || 'Completed') : 'Failed', iteration: '1 of 1', commit: '—', surface: (j(r?.sinks).map((s) => s.type).join(', ') || 'stdout') },
+    stdout: x.output, event: jObj(x.event), sinksResult: [],
+    timeline, awaiting: running ? 'auto-mode session running…' : null,
+    summary: { result: running ? 'Running…' : ok ? (x.output.split('\n').pop()?.slice(0, 80) || 'Completed') : 'Failed', iteration: '1 of 1', commit: '—', surface: (tools.join(', ') || 'session') },
     diff: null, dispatcher: [], outputs: [], leaseBarrier: [['trigger', x.trigger]],
   });
 });

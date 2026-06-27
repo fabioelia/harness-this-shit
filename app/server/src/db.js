@@ -67,7 +67,10 @@ CREATE TABLE IF NOT EXISTS runs (
   output TEXT NOT NULL DEFAULT '',
   event TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL DEFAULT 0,
-  sinks_result TEXT NOT NULL DEFAULT '[]'
+  sinks_result TEXT NOT NULL DEFAULT '[]',
+  exec_mode TEXT NOT NULL DEFAULT 'cloud',   -- cloud (remote session) | local
+  prompt TEXT NOT NULL DEFAULT '',           -- resolved prompt for the cloud worker
+  cloud_url TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `;
