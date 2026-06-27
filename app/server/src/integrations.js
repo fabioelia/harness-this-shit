@@ -72,8 +72,51 @@ export async function listRepos({ owner = '', q = '' } = {}) {
   return repos;
 }
 
+// The Claude account this harness runs sessions as (cached ~60s).
+let _claude = null, _claudeAt = 0;
+export async function claudeAccount() {
+  if (_claude && Date.now() - _claudeAt < 60_000) return _claude;
+  const r = await sh('claude', ['auth', 'status']);
+  let acct = { loggedIn: false };
+  if (r.code === 0) { try { const o = JSON.parse(r.out); acct = { loggedIn: !!o.loggedIn, email: o.email || null, org: o.orgName || null, plan: o.subscriptionType || null, method: o.authMethod || null }; } catch { /* non-json */ } }
+  _claude = acct; _claudeAt = Date.now();
+  return _claude;
+}
+
+// Live, on-demand connectivity test for a connector. Optional {channel,text} for slack.
+export async function testConnector(code, { channel, text } = {}) {
+  const c = String(code || '').toLowerCase();
+  if (c === 'gh' || c === 'github') {
+    const r = await gh(['api', 'user', '--jq', '.login']);
+    return r.code === 0 ? { ok: true, detail: `authenticated as @${r.out.trim()}` } : { ok: false, detail: r.err || 'gh not authed — run `gh auth login`' };
+  }
+  if (c === 'sl' || c === 'slack') {
+    const token = process.env.SLACK_BOT_TOKEN;
+    if (!token) return { ok: false, detail: 'no Slack token configured' };
+    try {
+      const a = await (await fetch('https://slack.com/api/auth.test', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })).json();
+      if (!a.ok) return { ok: false, detail: `auth.test failed: ${a.error}` };
+      if (channel) {
+        const p = await (await fetch('https://slack.com/api/chat.postMessage', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8' }, body: JSON.stringify({ channel, text: text || 'Switchboard connector test ✅' }) })).json();
+        if (p.ok) return { ok: true, detail: `posted a test message to ${p.channel} as @${a.user}` };
+        return { ok: false, detail: p.error === 'not_in_channel' ? `auth ok (${a.team}) — but bot isn't in ${channel}; /invite it` : `auth ok (${a.team}) but post failed: ${p.error}` };
+      }
+      return { ok: true, detail: `token valid · ${a.team} · @${a.user}` };
+    } catch (e) { return { ok: false, detail: `network error: ${e.message}` }; }
+  }
+  if (c === 'wb' || c === 'web') {
+    try { const r = await fetch('https://example.com', { method: 'HEAD' }); return { ok: r.ok, detail: `web reachable · HTTP ${r.status}` }; }
+    catch (e) { return { ok: false, detail: `web unreachable: ${e.message}` }; }
+  }
+  if (c === 'at' || c === 'atlassian') {
+    return process.env.ATLASSIAN_API_TOKEN ? { ok: true, detail: 'token is set (Confluence publish is not yet a granted tool)' } : { ok: false, detail: 'set an Atlassian API token to enable' };
+  }
+  return { ok: false, detail: 'unknown connector' };
+}
+
 // Live status of the harness's real integrations (cached ~30s).
 let _status = null, _statusAt = 0;
+export function bustStatus() { _status = null; _statusAt = 0; }
 export async function integrationStatus() {
   if (_status && Date.now() - _statusAt < 30_000) return _status;
   const who = await gh(['api', 'user', '-q', '.login']);

@@ -3,7 +3,7 @@ import cors from 'cors';
 import crypto from 'node:crypto';
 import { getDb, all, one, run } from './db.js';
 import { runClaude, buildPrompt } from './runner.js';
-import { integrationStatus, listRepos, listOrgs, listChecks, gh } from './integrations.js';
+import { integrationStatus, listRepos, listOrgs, listChecks, claudeAccount, testConnector, bustStatus, gh } from './integrations.js';
 
 const app = express();
 // Same-machine tool: only allow the local web origin to call the API from a browser.
@@ -25,6 +25,14 @@ const PORT = process.env.PORT || 4317;
 const j = (s) => { try { const v = JSON.parse(s); return Array.isArray(v) ? v : []; } catch { return []; } };
 const jObj = (s) => { try { return JSON.parse(s); } catch { return null; } };
 const meta = (k, d) => one('SELECT value FROM meta WHERE key=?', k)?.value ?? d;
+// UI-configured secrets are stored in meta; load them into the process env so the
+// runner's child sessions and the integrations both see them (env wins if already set).
+const TOKEN_ENV = { slack: 'SLACK_BOT_TOKEN', atlassian: 'ATLASSIAN_API_TOKEN' };
+const ENV_BASE = {}; // the real shell-env tokens, so clearing a UI override restores them
+for (const [k, envKey] of Object.entries(TOKEN_ENV)) {
+  ENV_BASE[envKey] = process.env[envKey];
+  const v = meta(`token_${k}`, ''); if (v && !process.env[envKey]) process.env[envKey] = v;
+}
 const now = () => Date.now();
 const cleanFilters = (f) => {
   const o = f && typeof f === 'object' ? f : {};
@@ -591,9 +599,10 @@ function policyConstraints() {
 }
 app.get('/api/settings', async (_q, res) => {
   const st = await integrationStatus();
+  const claude = await claudeAccount();
   const saved = jObj(meta('policies', 'null'));
   const policies = DEFAULT_POLICIES.map((p) => ({ ...p, on: saved && p.key in saved ? !!saved[p.key] : p.on }));
-  res.json({ identities: st, policies });
+  res.json({ identities: { ...st, claude }, policies });
 });
 app.post('/api/settings', (req, res) => {
   const policies = req.body?.policies || {};
@@ -641,12 +650,26 @@ app.get('/api/connectors', async (_q, res) => {
   const rows = all('SELECT connectors FROM routines WHERE enabled=1');
   const uses = (key) => rows.filter((r) => j(r.connectors).includes(key)).length;
   const out = [
-    { code: 'GH', name: 'GitHub', kind: 'CLI · gh', health: st.github.connected ? 'ok' : 'off', auth: st.github.connected ? `gh · @${st.github.account}` : 'run `gh auth login`', scopes: 'read/write PRs, issues, checks, gists', routines: uses('github'), avColor: '#7f9bd1' },
-    { code: 'SL', name: 'Slack', kind: 'Bot', health: st.slack.connected ? 'ok' : 'off', auth: st.slack.connected ? `${st.slack.team} · @${st.slack.bot}` : 'set SLACK_BOT_TOKEN', scopes: 'post messages via slack-post', routines: uses('slack'), avColor: '#c9a24a' },
-    { code: 'WB', name: 'Web fetch', kind: 'Built-in', health: 'ok', auth: 'no auth needed', scopes: 'fetch & read public URLs', routines: uses('web'), avColor: '#8aa0b8' },
-    { code: 'AT', name: 'Atlassian / Confluence', kind: 'API · planned', health: process.env.ATLASSIAN_API_TOKEN ? 'ok' : 'off', auth: process.env.ATLASSIAN_API_TOKEN ? 'token set' : 'set ATLASSIAN_API_TOKEN', scopes: 'publish to Confluence (not yet a granted tool)', routines: uses('confluence'), avColor: '#6fae9a' },
+    { code: 'GH', name: 'GitHub', kind: 'CLI · gh', health: st.github.connected ? 'ok' : 'off', auth: st.github.connected ? `gh · @${st.github.account}` : 'run `gh auth login`', scopes: 'read/write PRs, issues, checks, gists', routines: uses('github'), avColor: '#7f9bd1', testable: true, configKey: '' },
+    { code: 'SL', name: 'Slack', kind: 'Bot', health: st.slack.connected ? 'ok' : 'off', auth: st.slack.connected ? `${st.slack.team} · @${st.slack.bot}` : 'set a bot token', scopes: 'post messages via slack-post', routines: uses('slack'), avColor: '#c9a24a', testable: true, configKey: 'slack' },
+    { code: 'WB', name: 'Web fetch', kind: 'Built-in', health: 'ok', auth: 'no auth needed', scopes: 'fetch & read public URLs', routines: uses('web'), avColor: '#8aa0b8', testable: true, configKey: '' },
+    { code: 'AT', name: 'Atlassian / Confluence', kind: 'API · planned', health: process.env.ATLASSIAN_API_TOKEN ? 'ok' : 'off', auth: process.env.ATLASSIAN_API_TOKEN ? 'token set' : 'set an API token', scopes: 'publish to Confluence (not yet a granted tool)', routines: uses('confluence'), avColor: '#6fae9a', testable: true, configKey: 'atlassian' },
   ];
   res.json(out);
+});
+
+// Live connectivity test for a connector (gh user / slack auth.test+post / web / atlassian).
+app.post('/api/connectors/:code/test', async (req, res) => res.json(await testConnector(req.params.code, req.body || {})));
+// Configure a connector's token (slack/atlassian) — stored in meta, loaded into env now.
+app.post('/api/connectors/:code/config', (req, res) => {
+  const code = String(req.params.code || '').toLowerCase();
+  const envKey = TOKEN_ENV[code];
+  if (!envKey) return res.status(400).json({ error: 'this connector has no configurable token' });
+  const token = String(req.body?.token || '').trim();
+  if (token) { run("INSERT INTO meta (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", `token_${code}`, token); process.env[envKey] = token; }
+  else { run('DELETE FROM meta WHERE key=?', `token_${code}`); if (ENV_BASE[envKey]) process.env[envKey] = ENV_BASE[envKey]; else delete process.env[envKey]; }
+  bustStatus();
+  res.json({ ok: true, configured: !!token });
 });
 
 app.get('/api/activity', (_q, res) =>

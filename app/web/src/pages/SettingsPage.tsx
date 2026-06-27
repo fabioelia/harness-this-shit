@@ -31,10 +31,33 @@ export function SettingsPage() {
         <div className="mt-1 text-[13px] text-muted-2">The identities this harness runs as, and the guardrails injected into every routine session.</div>
       </div>
       <div className="mx-auto max-w-[960px] px-[26px] py-6">
+        {/* The Claude account every routine session runs as. */}
+        <div className="mb-2 font-display text-[11px] font-semibold uppercase tracking-[0.1em] text-dim-2">Claude account · runs every session</div>
+        <div className="mb-6 overflow-hidden rounded-xl border bg-surface" style={{ borderColor: id?.claude?.loggedIn ? 'rgba(95,191,134,.3)' : '#2b2620' }}>
+          <div className="flex items-center gap-3.5 px-5 py-4">
+            <Dot color={id?.claude?.loggedIn ? '#5fbf86' : '#e6b052'} size={9} pulse={!!id?.claude?.loggedIn} />
+            <div className="flex-1">
+              {id?.claude?.loggedIn ? (
+                <>
+                  <div className="font-display text-[14px] font-semibold text-fg">{id.claude.email}</div>
+                  <div className="font-mono text-[11.5px] text-muted-2">{id.claude.org} · {id.claude.plan} plan · via {id.claude.method}</div>
+                </>
+              ) : (
+                <>
+                  <div className="font-display text-[14px] font-semibold text-warn">Not signed in</div>
+                  <div className="font-mono text-[11.5px] text-muted-2">Run <span className="text-[#ada695]">claude auth login</span> (or <span className="text-[#ada695]">! claude auth login</span>) in a terminal to authenticate the account sessions run as.</div>
+                </>
+              )}
+            </div>
+            <span className={`font-display text-[11px] font-semibold ${id?.claude?.loggedIn ? 'text-ok' : 'text-warn'}`}>{id?.claude?.loggedIn ? 'Authenticated' : 'Action needed'}</span>
+          </div>
+        </div>
+
         <div className="mb-2 font-display text-[11px] font-semibold uppercase tracking-[0.1em] text-dim-2">Connected identities</div>
         <div className="mb-7 overflow-hidden rounded-xl border border-line bg-surface">
           <Identity ok={!!id?.github.connected} name="GitHub · gh CLI" detail={id?.github.connected ? `@${id.github.account}` : 'run `gh auth login`'} />
-          <Identity ok={!!id?.slack.connected} name="Slack · bot" detail={id?.slack.connected ? `${id.slack.team} · @${id.slack.bot}` : 'set SLACK_BOT_TOKEN'} />
+          <Identity ok={!!id?.slack.connected} name="Slack · bot" detail={id?.slack.connected ? `${id.slack.team} · @${id.slack.bot}` : 'configure a token on the Connectors page'} />
+          <div className="px-5 py-3 font-mono text-[11px] text-dim">Manage & test these on the <a href="/connectors" className="text-brand">Connectors</a> page.</div>
         </div>
 
         <div className="mb-2 font-display text-[11px] font-semibold uppercase tracking-[0.1em] text-dim-2">Session guardrails</div>

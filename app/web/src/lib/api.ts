@@ -59,7 +59,17 @@ export const useRun = (id?: string) =>
     retry: false,
     refetchInterval: (q) => (q.state.data?.status === 'running' ? 1500 : false),
   });
-export const useConnectors = () => useQuery({ queryKey: ['connectors'], queryFn: () => get<Connector[]>('/api/connectors') });
+export const useConnectors = () => useQuery({ queryKey: ['connectors'], queryFn: () => get<Connector[]>('/api/connectors'), refetchInterval: 15000 });
+export function useTestConnector() {
+  return useMutation({ mutationFn: ({ code, body }: { code: string; body?: unknown }) => post<{ ok: boolean; detail: string }>(`/api/connectors/${code}/test`, body ?? {}) });
+}
+export function useConfigConnector() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ code, token }: { code: string; token: string }) => post<{ ok: boolean; configured: boolean }>(`/api/connectors/${code}/config`, { token }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['connectors'] }); qc.invalidateQueries({ queryKey: ['settings'] }); },
+  });
+}
 export const useActivity = () => useQuery({ queryKey: ['activity'], queryFn: () => get<ActivityEntry[]>('/api/activity'), refetchInterval: 10000 });
 
 export function useToggleRoutine() {
@@ -160,7 +170,11 @@ export const useRoutineRaw = (slug?: string, enabled = false) =>
   useQuery({ queryKey: ['raw', slug], queryFn: () => get<{ file: string; md: string }>(`/api/routines/${slug}/raw`), enabled: !!slug && enabled });
 
 export interface Settings {
-  identities: { github: { connected: boolean; account: string | null }; slack: { connected: boolean; team: string | null; bot: string | null } };
+  identities: {
+    github: { connected: boolean; account: string | null };
+    slack: { connected: boolean; team: string | null; bot: string | null };
+    claude?: { loggedIn: boolean; email?: string | null; org?: string | null; plan?: string | null; method?: string | null };
+  };
   policies: { key: string; title: string; desc: string; on: boolean }[];
 }
 export const useSettings = () => useQuery({ queryKey: ['settings'], queryFn: () => get<Settings>('/api/settings') });

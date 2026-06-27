@@ -1,9 +1,55 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useConnectors } from '@/lib/api';
+import { useConnectors, useTestConnector, useConfigConnector } from '@/lib/api';
 import { Pill, Dot, Empty, SIGNAL } from '@/components/sb';
+import { cn } from '@/lib/utils';
 import type { Connector } from '@/types';
 
 const connSlug = (name: string) => name.toLowerCase().split(/[ /]/)[0];
+const btn = 'h-7 rounded-md border border-line bg-surface-2 px-2.5 font-display text-[11.5px] font-semibold text-t2 hover:border-hair disabled:opacity-40';
+
+function ConnectorRow({ c, GRID }: { c: Connector; GRID: React.CSSProperties }) {
+  const test = useTestConnector();
+  const config = useConfigConnector();
+  const [showCfg, setShowCfg] = useState(false);
+  const [token, setToken] = useState('');
+  const [channel, setChannel] = useState('#dev-ai-slop');
+  const result = test.data;
+  const HEALTH: Record<Connector['health'], { label: string; color: string }> = {
+    ok: { label: 'Connected', color: SIGNAL.success }, degraded: { label: 'Degraded', color: SIGNAL.needs_human }, off: { label: 'Not connected', color: SIGNAL.disabled },
+  };
+  return (
+    <div className="border-b border-line-soft last:border-0">
+      <div className="px-[18px] py-[15px] hover:bg-white/[0.015]" style={GRID}>
+        <div className="grid place-items-center font-mono text-[11px] font-bold text-[#16130f]" style={{ width: 30, height: 30, borderRadius: 8, background: c.avColor }}>{c.code}</div>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="font-display text-[14px] font-semibold text-fg-2">{c.name}</span>
+          <span className="rounded-[4px] border border-white/[0.08] bg-white/[0.045] px-1.5 py-px font-mono text-[9.5px] font-semibold uppercase tracking-[0.05em] text-muted-2">{c.kind}</span>
+        </div>
+        <div><Pill label={HEALTH[c.health].label} color={HEALTH[c.health].color} /></div>
+        <div className="truncate font-mono text-[11.5px] font-medium text-muted-2">{c.auth}</div>
+        <div className="truncate font-mono text-[11.5px] font-medium text-muted">{c.scopes}</div>
+        <div className="flex items-center justify-end gap-2">
+          <span className="font-mono text-[12px] font-semibold text-t2">{c.routines}</span>
+          {c.testable && <button onClick={() => test.mutate({ code: c.code, body: c.configKey === 'slack' ? { channel } : {} })} disabled={test.isPending} className={btn}>{test.isPending ? 'Testing…' : 'Test'}</button>}
+          {c.configKey && <button onClick={() => setShowCfg((v) => !v)} className={btn}>Configure</button>}
+        </div>
+      </div>
+      {(result || showCfg) && (
+        <div className="px-[18px] pb-3.5" style={{ paddingLeft: 72 }}>
+          {result && <div className={cn('font-mono text-[11.5px]', result.ok ? 'text-ok' : 'text-warn')}>{result.ok ? '✓' : '✗'} {result.detail}</div>}
+          {showCfg && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {c.configKey === 'slack' && <input value={channel} onChange={(e) => setChannel(e.target.value)} placeholder="#channel for the test" className="h-8 w-40 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />}
+              <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder={`paste ${c.name} token`} className="h-8 min-w-[240px] flex-1 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+              <button onClick={() => config.mutate({ code: c.configKey, token }, { onSuccess: () => { setToken(''); setShowCfg(false); } })} disabled={config.isPending} className={cn(btn, 'h-8 border-brand/50 bg-brand/10 text-brand-soft')}>{config.isPending ? 'Saving…' : token ? 'Save token' : 'Clear token'}</button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const GRID = { display: 'grid', gridTemplateColumns: '44px minmax(0,1.3fr) 138px minmax(0,1.5fr) minmax(0,1.7fr) 150px', alignItems: 'center', gap: 14 } as const;
 const HEALTH: Record<Connector['health'], { label: string; color: string }> = {
@@ -38,26 +84,11 @@ export function ConnectorsPage() {
             <div /><div>Connector</div><div>Status</div><div>Auth</div><div>Capabilities</div><div className="text-right">Used by</div>
           </div>
           {connectors && connectors.length === 0 && <Empty title="No connectors" hint="Grant github, slack, or web to a routine in its editor." />}
-          {connectors?.map((c) => (
-            <div key={c.code} className="border-b border-line-soft px-[18px] py-[15px] last:border-0 hover:bg-white/[0.015]" style={GRID}>
-              <div className="grid place-items-center font-mono text-[11px] font-bold text-[#16130f]" style={{ width: 30, height: 30, borderRadius: 8, background: c.avColor }}>{c.code}</div>
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="font-display text-[14px] font-semibold text-fg-2">{c.name}</span>
-                <span className="rounded-[4px] border border-white/[0.08] bg-white/[0.045] px-1.5 py-px font-mono text-[9.5px] font-semibold uppercase tracking-[0.05em] text-muted-2">{c.kind}</span>
-              </div>
-              <div><Pill label={HEALTH[c.health].label} color={HEALTH[c.health].color} /></div>
-              <div className="truncate font-mono text-[11.5px] font-medium text-muted-2">{c.auth}</div>
-              <div className="truncate font-mono text-[11.5px] font-medium text-muted">{c.scopes}</div>
-              <div className="flex items-center justify-end gap-3">
-                <span className="font-mono text-[12px] font-semibold text-t2">{c.routines}</span>
-                <Link to={`/?connector=${connSlug(c.name)}`} className="font-mono text-[11px] font-medium text-brand hover:underline">Manage ›</Link>
-              </div>
-            </div>
-          ))}
+          {connectors?.map((c) => <ConnectorRow key={c.code} c={c} GRID={GRID as React.CSSProperties} />)}
         </div>
         <div className="mt-3.5 flex items-center gap-[9px] font-sans text-[11.5px] font-medium text-dim-2">
           <svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="#6f685c" strokeWidth="1.6"><circle cx="9" cy="9" r="6.5" /><line x1="9" y1="8" x2="9" y2="12.5" strokeLinecap="round" /><circle cx="9" cy="5.6" r="0.6" fill="#6f685c" /></svg>
-          Grant a connector to a routine in its editor (deny-by-default). Secrets come from your environment — the gh keychain and <span className="font-mono text-[#ada695]">SLACK_BOT_TOKEN</span> — never the routine file.
+          <span><span className="font-semibold text-t2">Test</span> checks a connector live; <span className="font-semibold text-t2">Configure</span> stores a token (Slack/Atlassian) — it's kept in the harness store and loaded into the session env, never the routine file. GitHub uses your <span className="font-mono">gh</span> login.</span>
         </div>
       </div>
     </div>
