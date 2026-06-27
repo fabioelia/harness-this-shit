@@ -2,6 +2,10 @@ import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+// In-process bus so the run trace can stream live over SSE (no DB polling lag).
+const runBus = new EventEmitter();
+runBus.setMaxListeners(0);
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
@@ -20,12 +24,15 @@ getDb();
 // Verify a GitHub webhook HMAC (X-Hub-Signature-256) when a secret is configured.
 function githubSignatureValid(req) {
   const secret = process.env.GITHUB_WEBHOOK_SECRET;
-  if (!secret) return true; // not configured → accept (local/dev)
+  if (!secret) return process.env.NODE_ENV !== 'production'; // fail-closed in prod, accept in local/dev
   const sig = req.get('x-hub-signature-256') || '';
+  if (!sig) return false; // a secret is set → an unsigned request is rejected
   const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(req.rawBody || Buffer.from('')).digest('hex');
   try { return sig.length === expected.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)); }
   catch { return false; }
 }
+if (process.env.NODE_ENV === 'production' && !process.env.GITHUB_WEBHOOK_SECRET)
+  console.warn('[switchboard] NODE_ENV=production but GITHUB_WEBHOOK_SECRET is unset — /api/webhooks/github will reject all requests until you set it.');
 
 const PORT = process.env.PORT || 4317;
 const j = (s) => { try { const v = JSON.parse(s); return Array.isArray(v) ? v : []; } catch { return []; } };
@@ -317,8 +324,10 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       let p = redact(typeof payload === 'string' ? payload : JSON.stringify(payload));
       const truncated = p.length > MAX_PAYLOAD;
       if (truncated) p = p.slice(0, MAX_PAYLOAD);
+      const s = seq++;
       run('INSERT INTO run_events (run_id,seq,t_offset,type,tool,ok,payload) VALUES (?,?,?,?,?,?,?)',
-        id, seq++, now() - t0, type, tool ?? null, ok == null ? null : (ok ? 1 : 0), JSON.stringify({ d: p, truncated }));
+        id, s, now() - t0, type, tool ?? null, ok == null ? null : (ok ? 1 : 0), JSON.stringify({ d: p, truncated }));
+      runBus.emit(id, { kind: 'event', event: { seq: s, t: fmtOffset(now() - t0), type, tool: tool ?? null, ok: ok == null ? null : (ok ? 1 : 0), text: p, truncated } });
     };
     const onEvent = (o) => {
       try {
@@ -352,6 +361,7 @@ function executeRoutine(r, rawEvent, triggerLabel) {
 
     run('UPDATE runs SET status=?, dur=?, dur_ms=?, output=?, cost_usd=?, num_turns=?, session_id=? WHERE id=?',
       ok ? 'succeeded' : 'failed', fmtDur(res.ms), res.ms, output, res.costUsd, res.numTurns, res.sessionId, id);
+    runBus.emit(id, { kind: 'done', status: ok ? 'succeeded' : 'failed' });
     // Roll up real spend + avg duration onto the routine.
     const agg = one('SELECT COALESCE(SUM(cost_usd),0) AS spend, AVG(dur_ms) AS avgms FROM runs WHERE routine_slug=?', r.slug);
     run('UPDATE routines SET state=?, last_ago=?, last_status=?, success=?, spend=?, avg=? WHERE slug=?',
@@ -898,6 +908,26 @@ app.delete('/api/agents/:name', (req, res) => {
   res.json({ ok: true });
 });
 
+// Live trace stream (SSE): replays the captured steps, then pushes each new one as it
+// happens and a final `done` — so the run page fills in with no polling lag.
+app.get('/api/runs/:id/stream', (req, res) => {
+  const id = req.params.id;
+  const x = one('SELECT status FROM runs WHERE id=?', id);
+  if (!x) return res.status(404).json({ error: 'not found' });
+  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+  res.flushHeaders?.();
+  const send = (m) => res.write(`data: ${JSON.stringify(m)}\n\n`);
+  for (const e of all('SELECT * FROM run_events WHERE run_id=? ORDER BY seq', id)) {
+    let pl; try { pl = JSON.parse(e.payload); } catch { pl = { d: e.payload }; }
+    send({ kind: 'event', event: { seq: e.seq, t: fmtOffset(e.t_offset), type: e.type, tool: e.tool, ok: e.ok, text: pl.d, truncated: !!pl.truncated } });
+  }
+  if (['succeeded', 'failed', 'skipped', 'canceled'].includes(x.status)) { send({ kind: 'done', status: x.status }); return res.end(); }
+  const ping = setInterval(() => res.write(':\n\n'), 25_000);
+  const onMsg = (m) => { send(m); if (m.kind === 'done') { cleanup(); res.end(); } };
+  const cleanup = () => { clearInterval(ping); runBus.off(id, onMsg); };
+  runBus.on(id, onMsg);
+  req.on('close', cleanup);
+});
 app.get('/api/runs/:id', (req, res) => {
   const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
   if (!x) return res.status(404).json({ error: 'not found' });

@@ -55,7 +55,7 @@ export function TeamPage() {
         <div>
           <div className="mb-[5px] font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-brand">Switchboard</div>
           <div className="font-display text-[26px] font-bold tracking-tight">Team</div>
-          <div className="mt-[3px] text-[13px] text-muted-2">Named agents you and your routines can hand tasks to. Grant the <span className="font-mono text-[#ada695]">team</span> tool to a routine so it can delegate.</div>
+          <div className="mt-[3px] text-[13px] text-muted-2">Named agents you and your routines can hand tasks to. Grant the <span className="font-mono text-[var(--code-accent)]">team</span> tool to a routine so it can delegate.</div>
         </div>
         <NewAgent />
       </div>
@@ -79,7 +79,7 @@ export function TeamPage() {
                   <div className="mt-3 flex items-center gap-3 font-mono text-[11px] text-dim">
                     <span>{a.taskCount} task{a.taskCount === 1 ? '' : 's'}</span>
                     <span className="text-hair">·</span><span>last {a.lastActive}</span>
-                    {a.connectors.length > 0 && <><span className="text-hair">·</span><span className="text-[#ada695]">{a.connectors.join(' ')}</span></>}
+                    {a.connectors.length > 0 && <><span className="text-hair">·</span><span className="text-[var(--code-accent)]">{a.connectors.join(' ')}</span></>}
                     {a.memory && <span className="text-lease">memory</span>}
                   </div>
                 </Link>
@@ -113,7 +113,7 @@ export function AgentPage() {
         </div>
         <div className="mt-[11px] flex flex-wrap items-center gap-2.5 font-mono text-[12px] text-muted-2">
           <span>{a.summary || a.role || 'agent'}</span>
-          {a.connectors.map((c) => <span key={c} className="rounded-[5px] border border-white/[0.08] bg-white/[0.045] px-1.5 py-px text-[11px] text-[#ada695]">{c}</span>)}
+          {a.connectors.map((c) => <span key={c} className="rounded-[5px] border border-white/[0.08] bg-white/[0.045] px-1.5 py-px text-[11px] text-[var(--code-accent)]">{c}</span>)}
           <span className="text-hair">|</span><span>{a.model}</span>{a.memory && <span className="text-lease">memory</span>}
         </div>
       </div>

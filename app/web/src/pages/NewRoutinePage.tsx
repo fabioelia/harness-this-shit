@@ -331,7 +331,7 @@ export function NewRoutinePage() {
         <div className="flex items-center justify-between gap-4">
           <div>
             <div className="font-display text-[23px] font-bold tracking-tight">{isEdit ? 'Edit routine' : 'New routine'}</div>
-            <div className="mt-1 text-[13px] text-muted-2">A routine is one definition. Fill these in — the <span className="font-mono text-[#ada695]">.routine.md</span> preview on the right updates live, and is saved on {isEdit ? 'save' : 'create'}.</div>
+            <div className="mt-1 text-[13px] text-muted-2">A routine is one definition. Fill these in — the <span className="font-mono text-[var(--code-accent)]">.routine.md</span> preview on the right updates live, and is saved on {isEdit ? 'save' : 'create'}.</div>
           </div>
           <div className="flex items-center gap-[9px]">
             <Link to={isEdit ? `/routines/${editSlug}` : '/'} className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Cancel</Link>
@@ -454,7 +454,7 @@ export function NewRoutinePage() {
                 </div>
                 <label className="flex cursor-pointer items-start gap-2.5">
                   <input type="checkbox" checked={memory} onChange={(e) => setMemory(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[#5b9ee6]" />
-                  <div><div className="font-display text-[12.5px] font-semibold text-t2">Persistent memory</div><div className="text-[11px] text-dim-2">A <span className="font-mono text-[#ada695]">memory.md</span> the session reads at start and updates as it learns.</div></div>
+                  <div><div className="font-display text-[12.5px] font-semibold text-t2">Persistent memory</div><div className="text-[11px] text-dim-2">A <span className="font-mono text-[var(--code-accent)]">memory.md</span> the session reads at start and updates as it learns.</div></div>
                 </label>
                 <div className="border-t border-line-soft pt-3.5">
                   <div className={LABEL}>Concurrency · <span className="font-mono lowercase tracking-normal text-dim-2">no two routines touch the same thing at once</span></div>
@@ -471,7 +471,7 @@ export function NewRoutinePage() {
                       <option value="drop">drop (stand down)</option>
                     </select>
                   </div>
-                  <div className="mt-1.5 text-[11px] text-dim-2">A run acquires a lease on its scope (e.g. <span className="font-mono text-[#ada695]">pr:acme/x#42</span>). If held, <span className="font-mono">wait</span> serializes; <span className="font-mono">drop</span> stands down. Leases expire after 15m so a crash never wedges. Per-PR scope also runs a <span className="text-t2">SHA barrier</span> — a run whose PR head moved while it waited stands down as stale.</div>
+                  <div className="mt-1.5 text-[11px] text-dim-2">A run acquires a lease on its scope (e.g. <span className="font-mono text-[var(--code-accent)]">pr:acme/x#42</span>). If held, <span className="font-mono">wait</span> serializes; <span className="font-mono">drop</span> stands down. Leases expire after 15m so a crash never wedges. Per-PR scope also runs a <span className="text-t2">SHA barrier</span> — a run whose PR head moved while it waited stands down as stale.</div>
                 </div>
                 <div className="border-t border-line-soft pt-3.5">
                   <div className={LABEL}>Chain · <span className="font-mono lowercase tracking-normal text-dim-2">run routines immediately after</span></div>
@@ -497,7 +497,7 @@ export function NewRoutinePage() {
               </div>
               <pre className="max-h-[70vh] overflow-auto bg-code px-4 py-3.5 font-mono text-[12px] leading-[1.7] text-muted">
                 {md.split('\n').map((line, i) => (
-                  <div key={i} style={line.startsWith('##') ? { color: '#6f685c' } : line === '---' ? { color: '#5d584d' } : undefined}>{line || ' '}</div>
+                  <div key={i} style={line.startsWith('##') ? { color: 'var(--dim-2)' } : line === '---' ? { color: 'var(--faint)' } : undefined}>{line || ' '}</div>
                 ))}
               </pre>
             </div>

@@ -113,7 +113,7 @@ export function Sbar({ pct }: { pct: number | null }) {
       <span className="relative overflow-hidden rounded-[3px]" style={{ width: 58, height: 5, background: 'rgba(255,255,255,.09)' }}>
         <span className="absolute left-0 top-0 bottom-0 rounded-[3px]" style={{ width: `${pct}%`, background: col }} />
       </span>
-      <span className="font-mono text-[11.5px]" style={{ color: '#ada695', minWidth: 30 }}>{pct}%</span>
+      <span className="font-mono text-[11.5px]" style={{ color: 'var(--code-accent)', minWidth: 30 }}>{pct}%</span>
     </span>
   );
 }
@@ -155,7 +155,7 @@ export function Toggle({ on, onCheckedChange }: { on: boolean; onCheckedChange?:
 export function Empty({ title, hint }: { title: string; hint?: React.ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 px-6 py-16 text-center">
-      <span className="grid place-items-center rounded-[10px] border border-dashed text-dim-2" style={{ width: 38, height: 38, borderColor: '#3a342c' }}>
+      <span className="grid place-items-center rounded-[10px] border border-dashed text-dim-2" style={{ width: 38, height: 38, borderColor: 'var(--hair)' }}>
         <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.4">
           <rect x="2.5" y="4.5" width="13" height="9.5" rx="1.5" /><line x1="2.5" y1="7.5" x2="15.5" y2="7.5" /><line x1="6" y1="2.5" x2="6" y2="4.5" /><line x1="12" y1="2.5" x2="12" y2="4.5" />
         </svg>
@@ -173,7 +173,7 @@ export function Chip({ children, tone = 'default' }: { children: React.ReactNode
       ? { color: '#d8b486', background: 'rgba(232,155,60,.07)', border: '1px solid rgba(232,155,60,.2)' }
       : tone === 'blue'
         ? { color: '#5b9ee6', background: 'rgba(91,158,230,.08)', border: '1px solid rgba(91,158,230,.22)' }
-        : { color: '#ada695', background: 'rgba(255,255,255,.045)', border: '1px solid rgba(255,255,255,.08)' };
+        : { color: 'var(--code-accent)', background: 'rgba(255,255,255,.045)', border: '1px solid rgba(255,255,255,.08)' };
   return (
     <span className="whitespace-nowrap rounded-[5px] font-mono font-medium" style={{ ...styles, fontSize: 11, padding: '2px 7px' }}>
       {children}

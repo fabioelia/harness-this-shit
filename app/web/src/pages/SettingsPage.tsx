@@ -33,7 +33,7 @@ export function SettingsPage() {
       <div className="mx-auto max-w-[960px] px-[26px] py-6">
         {/* The Claude account every routine session runs as. */}
         <div className="mb-2 font-display text-[11px] font-semibold uppercase tracking-[0.1em] text-dim-2">Claude account · runs every session</div>
-        <div className="mb-6 overflow-hidden rounded-xl border bg-surface" style={{ borderColor: id?.claude?.loggedIn ? 'rgba(95,191,134,.3)' : '#2b2620' }}>
+        <div className="mb-6 overflow-hidden rounded-xl border bg-surface" style={{ borderColor: id?.claude?.loggedIn ? 'rgba(95,191,134,.3)' : 'var(--line)' }}>
           <div className="flex items-center gap-3.5 px-5 py-4">
             <Dot color={id?.claude?.loggedIn ? '#5fbf86' : '#e6b052'} size={9} pulse={!!id?.claude?.loggedIn} />
             <div className="flex-1">
@@ -45,7 +45,7 @@ export function SettingsPage() {
               ) : (
                 <>
                   <div className="font-display text-[14px] font-semibold text-warn">Not signed in</div>
-                  <div className="font-mono text-[11.5px] text-muted-2">Run <span className="text-[#ada695]">claude auth login</span> (or <span className="text-[#ada695]">! claude auth login</span>) in a terminal to authenticate the account sessions run as.</div>
+                  <div className="font-mono text-[11.5px] text-muted-2">Run <span className="text-[var(--code-accent)]">claude auth login</span> (or <span className="text-[var(--code-accent)]">! claude auth login</span>) in a terminal to authenticate the account sessions run as.</div>
                 </>
               )}
             </div>

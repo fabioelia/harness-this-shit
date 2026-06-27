@@ -30,7 +30,7 @@ function FilterSelect({ value, onChange, label, options }: { value: string; onCh
         style={{ colorScheme: 'dark' }}
         className={cn(
           'h-[34px] appearance-none rounded-md border bg-surface pl-3 pr-7 font-sans text-[12.5px] font-medium hover:border-hair focus:outline-none',
-          value ? 'border-brand/50 text-brand-soft' : 'border-line text-[#ada695]'
+          value ? 'border-brand/50 text-brand-soft' : 'border-line text-[var(--code-accent)]'
         )}
       >
         <option value="">{label}</option>
@@ -85,7 +85,7 @@ function FleetRow({ r, i }: { r: Routine; i: number }) {
       <div className="flex flex-col items-start gap-1">
         <StatePill state={r.state} />
       </div>
-      <div className="flex items-center gap-[7px] font-mono text-[12px] font-medium text-[#ada695]">
+      <div className="flex items-center gap-[7px] font-mono text-[12px] font-medium text-[var(--code-accent)]">
         <Dot state={r.lastStatus} size={8} /> {r.lastAgo}
       </div>
       <div className="font-mono text-[12px] font-medium text-muted-2">{r.next}</div>
@@ -94,12 +94,12 @@ function FleetRow({ r, i }: { r: Routine; i: number }) {
           {r.recent.length === 0
             ? <span className="font-mono text-[11px] text-faint">no runs</span>
             : r.recent.map((s, i) => (
-                <span key={i} title={s} className="w-[5px] rounded-[1px]" style={{ height: s === 'running' ? 8 : 14, background: s === 'succeeded' ? '#5fbf86' : s === 'failed' ? '#e5736b' : '#5d584d' }} />
+                <span key={i} title={s} className="w-[5px] rounded-[1px]" style={{ height: s === 'running' ? 8 : 14, background: s === 'succeeded' ? '#5fbf86' : s === 'failed' ? '#e5736b' : 'var(--faint)' }} />
               ))}
         </div>
-        <span className="font-mono text-[11px] font-medium text-[#ada695]">{r.successRate == null ? '—' : `${r.successRate}%`}</span>
+        <span className="font-mono text-[11px] font-medium text-[var(--code-accent)]">{r.successRate == null ? '—' : `${r.successRate}%`}</span>
       </div>
-      <div className="text-right font-mono text-[12px] font-medium text-[#ada695]">{r.avg}</div>
+      <div className="text-right font-mono text-[12px] font-medium text-[var(--code-accent)]">{r.avg}</div>
     </div>
   );
 }
@@ -207,7 +207,7 @@ export function FleetPage() {
           onClick={() => setNeedsReview((v) => !v)}
           className={cn(
             'flex h-[34px] items-center gap-[7px] rounded-md border px-3 font-sans text-[12.5px] font-medium transition-colors',
-            needsReview ? 'border-copper/40 bg-copper/[0.12] text-copper-text' : 'border-line bg-surface text-[#ada695] hover:border-hair'
+            needsReview ? 'border-copper/40 bg-copper/[0.12] text-copper-text' : 'border-line bg-surface text-[var(--code-accent)] hover:border-hair'
           )}
         >
           Health: needs review

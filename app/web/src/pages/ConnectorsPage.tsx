@@ -61,7 +61,7 @@ function ConnectorRow({ c, GRID }: { c: Connector; GRID: React.CSSProperties }) 
                 <input type="password" value={authToken} onChange={(e) => setAuthToken(e.target.value)} placeholder={`token / API key for ${c.name}`} className="h-8 min-w-[260px] flex-1 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
                 <button onClick={() => authMcp.mutate({ name: c.name, token: authToken, scheme: authScheme, header: authHeader }, { onSuccess: () => { setAuthToken(''); setShowAuth(false); } })} disabled={authMcp.isPending} className={cn(btn, 'h-8 border-brand/50 bg-brand/10 text-brand-soft')}>{authMcp.isPending ? 'Saving…' : authToken ? 'Save auth' : 'Clear auth'}</button>
               </div>
-              <div className="mt-1.5 font-mono text-[10.5px] text-dim">Stored masked, injected at runtime — http → header (<span className="text-[#ada695]">{authScheme === 'bearer' ? 'Bearer <token>' : '<token>'}</span>), stdio → env var. For OAuth servers, run <span className="text-[#ada695]">claude mcp add --transport http {c.name} &lt;url&gt;</span> once.</div>
+              <div className="mt-1.5 font-mono text-[10.5px] text-dim">Stored masked, injected at runtime — http → header (<span className="text-[var(--code-accent)]">{authScheme === 'bearer' ? 'Bearer <token>' : '<token>'}</span>), stdio → env var. For OAuth servers, run <span className="text-[var(--code-accent)]">claude mcp add --transport http {c.name} &lt;url&gt;</span> once.</div>
             </div>
           )}
           {showCfg && (
@@ -109,12 +109,12 @@ function AddMcpServer() {
         {mode === 'remote' ? (
           <>
             <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://mcp.example.com/sse" className="h-9 rounded-md border border-line bg-surface-2 px-3 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
-            <div className="text-[11px] text-dim-2">Wrapped with <span className="font-mono text-[#ada695]">mcp-remote</span> — it handles the OAuth 2.1 browser flow + token storage and proxies the server to Claude. After saving, hit <span className="font-semibold text-t2">OAuth</span> to authenticate once, or set a token under <span className="font-semibold text-t2">Authenticate</span>.</div>
+            <div className="text-[11px] text-dim-2">Wrapped with <span className="font-mono text-[var(--code-accent)]">mcp-remote</span> — it handles the OAuth 2.1 browser flow + token storage and proxies the server to Claude. After saving, hit <span className="font-semibold text-t2">OAuth</span> to authenticate once, or set a token under <span className="font-semibold text-t2">Authenticate</span>.</div>
           </>
         ) : (
           <>
             <textarea value={config} onChange={(e) => setConfig(e.target.value)} rows={6} spellCheck={false} className="resize-y rounded-md border border-line bg-code px-3 py-2.5 font-mono text-[12px] leading-[1.5] text-fg focus:border-brand/60 focus:outline-none" />
-            <div className="text-[11px] text-dim-2"><span className="font-mono text-[#ada695]">command/args/env</span> (stdio) or <span className="font-mono text-[#ada695]">type/url/headers</span> (http/sse). Secrets in <span className="font-mono">env</span>/<span className="font-mono">headers</span> authenticate it.</div>
+            <div className="text-[11px] text-dim-2"><span className="font-mono text-[var(--code-accent)]">command/args/env</span> (stdio) or <span className="font-mono text-[var(--code-accent)]">type/url/headers</span> (http/sse). Secrets in <span className="font-mono">env</span>/<span className="font-mono">headers</span> authenticate it.</div>
           </>
         )}
         {add.isError && <div className="text-[12px] text-bad">{(add.error as Error).message}</div>}
@@ -157,7 +157,7 @@ export function ConnectorsPage() {
         </div>
         <AddMcpServer />
         <div className="mt-3.5 flex items-center gap-[9px] font-sans text-[11.5px] font-medium text-dim-2">
-          <svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="#6f685c" strokeWidth="1.6"><circle cx="9" cy="9" r="6.5" /><line x1="9" y1="8" x2="9" y2="12.5" strokeLinecap="round" /><circle cx="9" cy="5.6" r="0.6" fill="#6f685c" /></svg>
+          <svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="var(--dim-2)" strokeWidth="1.6"><circle cx="9" cy="9" r="6.5" /><line x1="9" y1="8" x2="9" y2="12.5" strokeLinecap="round" /><circle cx="9" cy="5.6" r="0.6" fill="var(--dim-2)" /></svg>
           <span><span className="font-semibold text-t2">Test</span> checks a connector live; <span className="font-semibold text-t2">Configure</span> stores a token (Slack/Atlassian) — it's kept in the harness store and loaded into the session env, never the routine file. GitHub uses your <span className="font-mono">gh</span> login.</span>
         </div>
       </div>

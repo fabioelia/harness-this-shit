@@ -55,7 +55,7 @@ function FrontMatterCard({ fm }: { fm: FrontMatter }) {
         </Row>
         {(fm.filters.actions.length > 0 || fm.filters.branches.length > 0) && (
           <Row k="filters:">
-            <div className="flex flex-col gap-[5px] font-mono text-[11px] font-medium text-[#ada695]">
+            <div className="flex flex-col gap-[5px] font-mono text-[11px] font-medium text-[var(--code-accent)]">
               {fm.filters.actions.length > 0 && <div><span className="text-dim-2">actions</span> [{fm.filters.actions.join(', ')}]</div>}
               {fm.filters.branches.length > 0 && <div><span className="text-dim-2">branches</span> [{fm.filters.branches.join(', ')}]</div>}
             </div>
@@ -76,7 +76,7 @@ function ReactiveFlowCard({ d }: { d: RoutineDetail }) {
             {i > 0 && <span className="text-[16px] text-faint">→</span>}
             <span
               className="flex-1 rounded-md px-2 py-[11px] text-center"
-              style={n.tone === 'run' ? { border: '1px solid rgba(91,158,230,.35)', background: 'rgba(91,158,230,.07)' } : { border: '1px solid #2b2620', background: '#1c1915' }}
+              style={n.tone === 'run' ? { border: '1px solid rgba(91,158,230,.35)', background: 'rgba(91,158,230,.07)' } : { border: '1px solid var(--line)', background: 'var(--surface-2)' }}
             >
               <div className="font-display text-[12px] font-semibold text-t2">{n.title}</div>
               <div className="mt-0.5 font-mono text-[10px] text-dim">{n.sub}</div>
@@ -96,7 +96,7 @@ function MemoryCard({ slug }: { slug: string }) {
       {!data ? (
         <div className="font-mono text-[12px] text-dim">loading…</div>
       ) : !data.exists ? (
-        <div className="font-mono text-[12px] text-dim">No memory yet — <span className="font-mono text-[#ada695]">memory.md</span> is created on the first run.</div>
+        <div className="font-mono text-[12px] text-dim">No memory yet — <span className="font-mono text-[var(--code-accent)]">memory.md</span> is created on the first run.</div>
       ) : (
         <>
           <pre className="max-h-[300px] overflow-auto whitespace-pre-wrap break-words rounded-md border border-line-soft bg-code px-3.5 py-3 font-mono text-[11.5px] leading-[1.6] text-muted">{data.md}</pre>
@@ -217,7 +217,7 @@ export function RoutineDetailPage() {
             </div>
             <pre className="max-h-[70vh] overflow-auto bg-code px-4 py-3.5 font-mono text-[12px] leading-[1.7] text-muted">
               {raw.isLoading ? 'loading…' : (raw.data?.md || '').split('\n').map((line, i) => (
-                <div key={i} style={line.startsWith('##') ? { color: '#6f685c' } : line === '---' ? { color: '#5d584d' } : undefined}>{line || ' '}</div>
+                <div key={i} style={line.startsWith('##') ? { color: 'var(--dim-2)' } : line === '---' ? { color: 'var(--faint)' } : undefined}>{line || ' '}</div>
               ))}
             </pre>
           </div>
@@ -236,7 +236,7 @@ export function RoutineDetailPage() {
             </div>
             <pre className="overflow-auto whitespace-pre-wrap break-words rounded-md border border-line-soft bg-code px-4 py-3.5 font-mono text-[12px] leading-[1.7] text-muted">
               {d.prompt.split('\n').map((line, i) => (
-                <div key={i} style={line.startsWith('##') ? { color: '#6f685c' } : undefined}>{line || ' '}</div>
+                <div key={i} style={line.startsWith('##') ? { color: 'var(--dim-2)' } : undefined}>{line || ' '}</div>
               ))}
             </pre>
           </div>

@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useRun, useDispatchRoutine } from '@/lib/api';
 import { Pill, Dot, Empty, stateMeta } from '@/components/sb';
@@ -23,11 +25,28 @@ export function RunDetailPage() {
   const navigate = useNavigate();
   const { data: r, isLoading } = useRun(id);
   const dispatch = useDispatchRoutine();
+  const qc = useQueryClient();
+  // Live trace over SSE — fills in with no polling lag, then refetches on done.
+  const [liveTrace, setLiveTrace] = useState<TE[]>([]);
+  useEffect(() => {
+    if (!id) return;
+    setLiveTrace([]);
+    const es = new EventSource(`/api/runs/${id}/stream`);
+    es.onmessage = (ev) => {
+      const m = JSON.parse(ev.data);
+      if (m.kind === 'event') setLiveTrace((p) => (p.some((e) => e.seq === m.event.seq) ? p : [...p, m.event]));
+      else if (m.kind === 'done') { es.close(); qc.invalidateQueries({ queryKey: ['run', id] }); }
+    };
+    es.onerror = () => es.close();
+    return () => es.close();
+  }, [id, qc]);
   if (isLoading) return <div className="px-6 py-10 text-muted">Loading…</div>;
   if (!r) return <div className="px-[26px] py-10"><Empty title="Run not found" hint={<Link className="text-brand" to="/runs">Back to Runs ›</Link>} /></div>;
   const m = stateMeta(r.status);
   const running = r.status === 'running';
   const ok = r.status === 'succeeded';
+  // Prefer the live stream whenever it's ahead of the last polled snapshot.
+  const trace = liveTrace.length > r.trace.length ? liveTrace : r.trace;
 
   return (
     <div className="font-sans text-fg animate-fade-up">
@@ -64,7 +83,7 @@ export function RunDetailPage() {
         {/* LEFT */}
         <div className="flex min-w-0 flex-col gap-[18px]">
           {/* Output — the real claude -p stdout */}
-          <div className="rounded-lg border bg-surface p-[18px]" style={{ borderColor: ok ? 'rgba(95,191,134,.3)' : running ? '#2b2620' : 'rgba(229,115,107,.3)' }}>
+          <div className="rounded-lg border bg-surface p-[18px]" style={{ borderColor: ok ? 'rgba(95,191,134,.3)' : running ? 'var(--line)' : 'rgba(229,115,107,.3)' }}>
             <div className="mb-3 flex items-center justify-between">
               <span className={LABEL}>Output · session result</span>
               <Pill label={m.label} color={m.color} />
@@ -74,7 +93,7 @@ export function RunDetailPage() {
                 <Dot color="#5b9ee6" size={8} pulse /> a headless Claude instance is running…
               </div>
             ) : (
-              <pre className="overflow-auto rounded-md border border-line-soft bg-code px-4 py-3.5 font-mono text-[13px] leading-[1.6]" style={{ color: ok ? '#e9e3d7' : '#e5736b' }}>
+              <pre className="overflow-auto rounded-md border border-line-soft bg-code px-4 py-3.5 font-mono text-[13px] leading-[1.6]" style={{ color: ok ? 'var(--fg)' : '#e5736b' }}>
                 {r.stdout || '(no output)'}
               </pre>
             )}
@@ -82,7 +101,7 @@ export function RunDetailPage() {
 
           <div className={CARD}>
             <div className="mb-3.5 flex items-center justify-between">
-              <span className={LABEL}>Trace · {r.trace.length} steps{r.cost != null ? ` · $${Number(r.cost).toFixed(4)}` : ''}</span>
+              <span className={LABEL}>Trace · {trace.length} steps{r.cost != null ? ` · $${Number(r.cost).toFixed(4)}` : ''}</span>
               <span className="font-mono text-[10.5px] font-medium text-dim">secrets redacted</span>
             </div>
             <div className="flex flex-col">
@@ -92,8 +111,8 @@ export function RunDetailPage() {
                 <span className="mt-px w-[80px] shrink-0 rounded-[4px] border border-white/[0.08] bg-white/[0.045] py-0.5 text-center font-mono text-[9.5px] font-semibold uppercase tracking-[0.04em] text-muted-2">dispatch</span>
                 <span className="flex-1 font-sans text-[12.5px] font-medium leading-[1.45] text-t2">Dispatcher admitted run · trigger {r.trigger}</span>
               </div>
-              {r.trace.length === 0 && !running && <div className="py-2.5 font-mono text-[12px] text-dim">no steps captured</div>}
-              {r.trace.map((e) => {
+              {trace.length === 0 && !running && <div className="py-2.5 font-mono text-[12px] text-dim">no steps captured</div>}
+              {trace.map((e) => {
                 const hasBody = !!e.text && ['tool_use', 'tool_result', 'text', 'system', 'result'].includes(e.type);
                 return (
                   <div key={e.seq} className="flex items-start gap-[11px] border-b border-line-soft py-[9px] last:border-0">
