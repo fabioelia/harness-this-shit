@@ -34,7 +34,9 @@ CREATE TABLE IF NOT EXISTS routines (
   prompt TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT 'claude-opus-4-8',
   repo TEXT NOT NULL DEFAULT '',
-  branch TEXT NOT NULL DEFAULT 'main'
+  branch TEXT NOT NULL DEFAULT 'main',
+  sinks TEXT NOT NULL DEFAULT '[]',   -- json: output sinks [{type,target}]
+  chain TEXT NOT NULL DEFAULT '[]'    -- json: downstream routine slugs
 );
 CREATE TABLE IF NOT EXISTS connectors (
   code TEXT PRIMARY KEY,
@@ -61,7 +63,11 @@ CREATE TABLE IF NOT EXISTS runs (
   ago TEXT NOT NULL,
   dur TEXT NOT NULL,
   trigger TEXT NOT NULL,
-  ord INTEGER NOT NULL
+  ord INTEGER NOT NULL,
+  output TEXT NOT NULL DEFAULT '',
+  event TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL DEFAULT 0,
+  sinks_result TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `;

@@ -1,3 +1,6 @@
+export interface Sink { type: string; target?: string }
+export interface SinkResult { type: string; target?: string; ok: boolean; detail: string }
+
 export interface Routine {
   slug: string;
   name: string;
@@ -8,6 +11,8 @@ export interface Routine {
   initials: string;
   triggers: string[];
   connectors: string[];
+  sinks: Sink[];
+  chain: string[];
   state: string;
   enabled: boolean;
   lastAgo: string;
@@ -58,6 +63,7 @@ export interface RunLite {
 }
 export interface RunDetail {
   id: string; routine: string; status: string; trigger: string; started: string; elapsed: string; model: string;
+  stdout: string; event: Record<string, unknown> | null; sinksResult: SinkResult[];
   timeline: { t: string; tag: string; text: string; dot: string }[];
   awaiting: string | null;
   summary: { result: string; iteration: string; commit: string; surface: string };

@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 
 const TRIGGERS = ['schedule', 'push', 'label', 'comment', 'check_run', 'pull_request', 'release', 'sentry', 'slack', 'webhook', 'manual', 'api', 'after'];
 const CONNECTORS = ['github', 'slack', 'jira', 'sentry', 'notion', 'figma', 'pagerduty', 'linear'];
+const SINKS = ['stdout', 'slack', 'github-comment', 'github-gist', 'confluence'];
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'mb-1.5 font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -63,10 +64,15 @@ export function NewRoutinePage() {
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('main');
   const [prompt, setPrompt] = useState('');
+  const [sinks, setSinks] = useState<string[]>(['stdout']);
+  const [slackChannel, setSlackChannel] = useState('#dev-ai-slop');
+  const [chain, setChain] = useState('');
 
   const slug = slugTouched ? slugInput : slugify(name);
   const toggle = (set: React.Dispatch<React.SetStateAction<string[]>>, v: string) =>
     set((arr) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]));
+  const sinksArr = sinks.map((t) => (t === 'slack' ? { type: 'slack', target: slackChannel.trim() } : { type: t }));
+  const chainArr = chain.split(',').map((s) => slugify(s)).filter(Boolean);
 
   const md = useMemo(() => {
     const L: string[] = ['---'];
@@ -86,17 +92,22 @@ export function NewRoutinePage() {
     L.push(`  model: ${model || 'claude-opus-4-8'}`);
     L.push(`  repo: ${repo || '—'}`);
     L.push(`  branch: ${branch || 'main'}`);
+    if (sinks.length) {
+      L.push('outputs:');
+      sinks.forEach((t) => L.push(`  - ${t}${t === 'slack' && slackChannel ? `: { channel: ${slackChannel} }` : ''}`));
+    }
+    if (chainArr.length) L.push(`chain: [${chainArr.join(', ')}]`);
     L.push('---');
     L.push('');
     L.push(prompt.trim() || '## Prompt\nDescribe what this routine should do, step by step.');
     return L.join('\n');
-  }, [name, slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt]);
+  }, [name, slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, sinks, slackChannel, chain]);
 
   const valid = name.trim().length > 0 && slug.length > 0;
   function submit() {
     if (!valid) return;
     create.mutate(
-      { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt },
+      { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, sinks: sinksArr, chain: chainArr },
       { onSuccess: (r) => navigate(`/routines/${r.slug}`) }
     );
   }
@@ -168,6 +179,26 @@ export function NewRoutinePage() {
               {CONNECTORS.map((c) => <ChipToggle key={c} on={connectors.includes(c)} onClick={() => toggle(setConnectors, c)}>{c}</ChipToggle>)}
             </div>
             <div className="mt-2.5 text-[11.5px] text-dim-2">Grants are deny-by-default — the agent only sees what you select here.</div>
+          </div>
+
+          <div className={CARD}>
+            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Output sinks · <span className="font-mono lowercase tracking-normal text-dim-2">normalize where it goes</span></div>
+            <div className="flex flex-wrap gap-1.5">
+              {SINKS.map((s) => <ChipToggle key={s} on={sinks.includes(s)} onClick={() => toggle(setSinks, s)}>{s}</ChipToggle>)}
+            </div>
+            {sinks.includes('slack') && (
+              <div className="mt-3">
+                <div className={LABEL}>Slack channel or @user</div>
+                <input value={slackChannel} onChange={(e) => setSlackChannel(e.target.value)} placeholder="#dev-ai-slop" className={cn(inputCls, 'font-mono text-[12px]')} />
+              </div>
+            )}
+            <div className="mt-2.5 text-[11.5px] text-dim-2">The harness delivers the run output to each sink — Slack via the bot, GitHub via <span className="font-mono">gh</span>.</div>
+          </div>
+
+          <div className={CARD}>
+            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Chain · <span className="font-mono lowercase tracking-normal text-dim-2">kick off downstream routines</span></div>
+            <input value={chain} onChange={(e) => setChain(e.target.value)} placeholder="other-routine-slug, another-one" className={cn(inputCls, 'font-mono text-[12px]')} />
+            <div className="mt-2.5 text-[11.5px] text-dim-2">On success, these routines fire with this run’s output as <span className="font-mono text-[#ada695]">{'${upstream.output}'}</span>.</div>
           </div>
 
           <div className={CARD}>

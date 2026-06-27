@@ -31,7 +31,13 @@ export const useRoutine = (slug?: string) =>
   useQuery({ queryKey: ['routine', slug], queryFn: () => get<RoutineDetail>(`/api/routines/${slug}`), enabled: !!slug, retry: false });
 export const useRuns = () => useQuery({ queryKey: ['runs'], queryFn: () => get<RunLite[]>('/api/runs'), refetchInterval: 8000 });
 export const useRun = (id?: string) =>
-  useQuery({ queryKey: ['run', id], queryFn: () => get<RunDetail>(`/api/runs/${id}`), enabled: !!id, retry: false });
+  useQuery({
+    queryKey: ['run', id],
+    queryFn: () => get<RunDetail>(`/api/runs/${id}`),
+    enabled: !!id,
+    retry: false,
+    refetchInterval: (q) => (q.state.data?.status === 'running' ? 1500 : false),
+  });
 export const useConnectors = () => useQuery({ queryKey: ['connectors'], queryFn: () => get<Connector[]>('/api/connectors') });
 export const useActivity = () => useQuery({ queryKey: ['activity'], queryFn: () => get<ActivityEntry[]>('/api/activity'), refetchInterval: 10000 });
 
@@ -46,14 +52,35 @@ export function useToggleRoutine() {
     },
   });
 }
+interface DispatchResult { ok: boolean; runId: string; status: string }
 export function useDispatchRoutine() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (slug: string) => post(`/api/routines/${slug}/dispatch`),
+    mutationFn: (slug: string) => post<DispatchResult>(`/api/routines/${slug}/dispatch`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['routines'] });
+      qc.invalidateQueries({ queryKey: ['runs'] });
       qc.invalidateQueries({ queryKey: ['stats'] });
       qc.invalidateQueries({ queryKey: ['activity'] });
+    },
+  });
+}
+
+export interface PushResult {
+  matched: string[];
+  runs: { slug: string; runId: string }[];
+  event: Record<string, unknown>;
+}
+export function useSimulatePush() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload?: Record<string, unknown>) => post<PushResult>('/api/events/push', payload ?? {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['routines'] });
+      qc.invalidateQueries({ queryKey: ['runs'] });
+      qc.invalidateQueries({ queryKey: ['stats'] });
+      qc.invalidateQueries({ queryKey: ['activity'] });
+      qc.invalidateQueries({ queryKey: ['routine'] });
     },
   });
 }
@@ -69,6 +96,8 @@ export interface CreateRoutineInput {
   repo?: string;
   branch?: string;
   prompt?: string;
+  sinks?: { type: string; target?: string }[];
+  chain?: string[];
 }
 export function useCreateRoutine() {
   const qc = useQueryClient();

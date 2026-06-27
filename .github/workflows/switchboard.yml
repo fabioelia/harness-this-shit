@@ -1,0 +1,29 @@
+# Switchboard — forward real GitHub events to the harness so routines fire on
+# push / pull_request. Point it at your harness with the SWITCHBOARD_URL secret
+# (e.g. a tunnel like `cloudflared`/`ngrok` to http://localhost:4317, or a deploy).
+# No-ops safely when the secret is unset.
+name: Switchboard dispatch
+
+on:
+  push:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Forward event to Switchboard
+        env:
+          SWITCHBOARD_URL: ${{ secrets.SWITCHBOARD_URL }}
+        run: |
+          if [ -z "$SWITCHBOARD_URL" ]; then
+            echo "SWITCHBOARD_URL secret not set — skipping (this is the harness webhook target)."
+            exit 0
+          fi
+          echo "Dispatching ${{ github.event_name }} → $SWITCHBOARD_URL/api/webhooks/github"
+          curl -sS -X POST "$SWITCHBOARD_URL/api/webhooks/github" \
+            -H "X-GitHub-Event: ${{ github.event_name }}" \
+            -H "Content-Type: application/json" \
+            --data @"$GITHUB_EVENT_PATH" \
+            --max-time 30 || echo "harness unreachable (ok — non-blocking)"

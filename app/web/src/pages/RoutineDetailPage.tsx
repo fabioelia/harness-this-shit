@@ -1,5 +1,5 @@
-import { Link, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine } from '@/lib/api';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, Pill, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import type { FrontMatter, RoutineDetail } from '@/types';
 
@@ -163,11 +163,24 @@ function OwnedPRsCard({ d }: { d: RoutineDetail }) {
 
 export function RoutineDetailPage() {
   const { slug } = useParams();
+  const navigate = useNavigate();
   const { data: d, isLoading } = useRoutine(slug);
   const toggle = useToggleRoutine();
   const dispatch = useDispatchRoutine();
+  const push = useSimulatePush();
   if (isLoading) return <div className="px-6 py-10 text-muted">Loading…</div>;
   if (!d) return <div className="px-[26px] py-10"><Empty title="Routine not found" hint={<Link className="text-brand" to="/">Back to Fleet ›</Link>} /></div>;
+
+  const runNow = () => dispatch.mutate(d.slug, { onSuccess: (res) => navigate(`/runs/${res.runId}`) });
+  const simulatePush = () =>
+    push.mutate(undefined, {
+      onSuccess: (res) => {
+        const mine = res.runs.find((x) => x.slug === d.slug);
+        if (mine) navigate(`/runs/${mine.runId}`);
+      },
+    });
+  const hasPush = d.triggers.includes('push');
+  const busy = dispatch.isPending || push.isPending;
 
   return (
     <div className="font-sans text-fg animate-fade-up">
@@ -183,11 +196,16 @@ export function RoutineDetailPage() {
             <Toggle on={d.enabled} onCheckedChange={(v) => toggle.mutate({ slug: d.slug, enabled: v })} />
           </div>
           <div className="flex items-center gap-[9px]">
-            <button onClick={() => dispatch.mutate(d.slug)} className="flex h-[34px] items-center gap-[7px] rounded-md bg-brand px-3.5 font-display text-[12.5px] font-semibold text-[#16130f] hover:bg-brand-deep">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M3 2 L10 6 L3 10 Z" /></svg>Run now
+            {hasPush && (
+              <button onClick={simulatePush} disabled={busy} className="flex h-[34px] items-center gap-[7px] rounded-md border border-brand/50 bg-brand/10 px-3.5 font-display text-[12.5px] font-semibold text-brand-soft transition-colors hover:bg-brand/20 disabled:opacity-40">
+                <svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M9 14 V4" /><path d="M5 8 L9 4 L13 8" /></svg>
+                {push.isPending ? 'Pushing…' : 'Simulate push'}
+              </button>
+            )}
+            <button onClick={runNow} disabled={busy} className="flex h-[34px] items-center gap-[7px] rounded-md bg-brand px-3.5 font-display text-[12.5px] font-semibold text-[#16130f] transition-colors hover:bg-brand-deep disabled:opacity-40">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M3 2 L10 6 L3 10 Z" /></svg>{dispatch.isPending ? 'Running…' : 'Run now'}
             </button>
             <button className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Edit</button>
-            <button className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Validate</button>
             <button className="flex h-[34px] items-center rounded-md border border-bad/40 px-[13px] font-display text-[12.5px] font-semibold text-bad hover:bg-bad/10">Kill</button>
           </div>
         </div>
@@ -220,6 +238,27 @@ export function RoutineDetailPage() {
         <div className="flex min-w-0 flex-col gap-[18px]">
           <LeaseCard d={d} />
           <OwnedPRsCard d={d} />
+          {(d.sinks?.length > 0 || d.chain?.length > 0) && (
+            <div className={CARD}>
+              <div className={`${LABEL} mb-3`}>Outputs &amp; chain</div>
+              <div className="flex flex-col gap-2.5">
+                {d.sinks.map((s, i) => (
+                  <div key={i} className="flex items-center gap-2.5">
+                    <Dot color="#5fbf86" size={7} />
+                    <span className="font-mono text-[12px] font-semibold text-t2">{s.type}</span>
+                    {s.target && <span className="font-mono text-[11px] text-dim">→ {s.target}</span>}
+                  </div>
+                ))}
+                {d.chain.map((c) => (
+                  <div key={c} className="flex items-center gap-2.5">
+                    <span className="text-faint">↳</span>
+                    <Link to={`/routines/${c}`} className="font-mono text-[12px] font-semibold text-brand">{c}</Link>
+                    <span className="font-mono text-[11px] text-dim">chained on success</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className={CARD}>
             <div className="mb-3.5 flex items-center justify-between">
               <span className={LABEL}>Recent runs</span>
