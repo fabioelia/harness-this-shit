@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useConnectors, useTestConnector, useConfigConnector, useMcp, useAddMcp, useDeleteMcp, useAuthMcp } from '@/lib/api';
+import { useConnectors, useTestConnector, useConfigConnector, useMcp, useAddMcp, useDeleteMcp, useAuthMcp, useMcpOauth } from '@/lib/api';
 import { Pill, Dot, Empty, SIGNAL } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { Connector } from '@/types';
@@ -13,6 +13,7 @@ function ConnectorRow({ c, GRID }: { c: Connector; GRID: React.CSSProperties }) 
   const config = useConfigConnector();
   const delMcp = useDeleteMcp();
   const authMcp = useAuthMcp();
+  const oauth = useMcpOauth();
   const [showCfg, setShowCfg] = useState(false);
   const [showAuth, setShowAuth] = useState(false);
   const [token, setToken] = useState('');
@@ -39,13 +40,15 @@ function ConnectorRow({ c, GRID }: { c: Connector; GRID: React.CSSProperties }) 
           <span className="font-mono text-[12px] font-semibold text-t2">{c.routines}</span>
           {c.testable && <button onClick={() => test.mutate({ code: c.code, body: c.configKey === 'slack' ? { channel } : {} })} disabled={test.isPending} className={btn}>{test.isPending ? 'Testing…' : 'Test'}</button>}
           {c.configKey && <button onClick={() => setShowCfg((v) => !v)} className={btn}>Configure</button>}
+          {c.remote && <button onClick={() => oauth.mutate(c.name)} disabled={oauth.isPending} className={cn(btn, 'border-lease/50 text-lease')}>{oauth.isPending ? 'Opening…' : 'OAuth'}</button>}
           {c.mcp && <button onClick={() => setShowAuth((v) => !v)} className={cn(btn, c.authed && 'border-brand/40 text-brand-soft')}>{c.authed ? '🔑 Auth' : 'Authenticate'}</button>}
           {c.mcp && <button onClick={() => { if (confirm(`Remove MCP server "${c.name}"?`)) delMcp.mutate(c.name); }} className={cn(btn, 'border-bad/40 text-bad')}>Remove</button>}
         </div>
       </div>
-      {(result || showCfg || showAuth) && (
+      {(result || showCfg || showAuth || oauth.data) && (
         <div className="px-[18px] pb-3.5" style={{ paddingLeft: 72 }}>
           {result && <div className={cn('font-mono text-[11.5px]', result.ok ? 'text-ok' : 'text-warn')}>{result.ok ? '✓' : '✗'} {result.detail}</div>}
+          {oauth.data && <div className="font-mono text-[11.5px] text-lease">🔓 {oauth.data.detail}</div>}
           {showAuth && (
             <div className="mt-2">
               <div className="mb-1.5 flex items-center gap-2">
@@ -84,21 +87,40 @@ const HEALTH: Record<Connector['health'], { label: string; color: string }> = {
 function AddMcpServer() {
   const add = useAddMcp();
   const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<'remote' | 'stdio'>('remote');
   const [name, setName] = useState('');
+  const [url, setUrl] = useState('');
   const [config, setConfig] = useState('{\n  "command": "npx",\n  "args": ["-y", "@your/mcp-server"],\n  "env": { "API_KEY": "your-key" }\n}');
-  const submit = () => add.mutate({ name, config }, { onSuccess: () => { setOpen(false); setName(''); } });
+  const reset = () => { setOpen(false); setName(''); setUrl(''); };
+  const submit = () => mode === 'remote'
+    ? add.mutate({ name, remote: true, url }, { onSuccess: reset })
+    : add.mutate({ name, config }, { onSuccess: reset });
   if (!open) return <button onClick={() => setOpen(true)} className="mt-4 flex h-9 items-center gap-2 rounded-md border border-line bg-surface-2 px-3.5 font-display text-[12.5px] font-semibold text-t2 hover:border-hair"><span className="text-[15px] leading-none">+</span>Add MCP server</button>;
   return (
     <div className="mt-4 rounded-xl border border-line bg-surface p-[18px]">
-      <div className="mb-3 font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim-2">Add MCP server</div>
+      <div className="mb-3 flex items-center gap-3">
+        <span className="font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim-2">Add MCP server</span>
+        <span className="inline-flex overflow-hidden rounded-md border border-line text-[11px] font-semibold">
+          {(['remote', 'stdio'] as const).map((mw) => <button key={mw} type="button" onClick={() => setMode(mw)} className={cn('px-2.5 py-0.5 font-mono', mode === mw ? 'bg-brand/15 text-brand-soft' : 'text-dim hover:text-t2')}>{mw === 'remote' ? 'remote URL' : 'stdio config'}</button>)}
+        </span>
+      </div>
       <div className="flex flex-col gap-2.5">
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="server name — e.g. linear (letters, digits, -, _)" className="h-9 rounded-md border border-line bg-surface-2 px-3 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
-        <textarea value={config} onChange={(e) => setConfig(e.target.value)} rows={7} spellCheck={false} className="resize-y rounded-md border border-line bg-code px-3 py-2.5 font-mono text-[12px] leading-[1.5] text-fg focus:border-brand/60 focus:outline-none" />
-        <div className="text-[11px] text-dim-2">Drop in a server def — <span className="font-mono text-[#ada695]">command/args/env</span> (stdio) or <span className="font-mono text-[#ada695]">type/url/headers</span> (http/sse). Secrets in <span className="font-mono">env</span>/<span className="font-mono">headers</span> authenticate it. Grant it to a routine by adding its name as a tool; <span className="font-semibold text-t2">Test</span> boots it and lists its tools.</div>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder={mode === 'remote' ? 'name (optional — derived from the URL host)' : 'server name — e.g. linear'} className="h-9 rounded-md border border-line bg-surface-2 px-3 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+        {mode === 'remote' ? (
+          <>
+            <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://mcp.example.com/sse" className="h-9 rounded-md border border-line bg-surface-2 px-3 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+            <div className="text-[11px] text-dim-2">Wrapped with <span className="font-mono text-[#ada695]">mcp-remote</span> — it handles the OAuth 2.1 browser flow + token storage and proxies the server to Claude. After saving, hit <span className="font-semibold text-t2">OAuth</span> to authenticate once, or set a token under <span className="font-semibold text-t2">Authenticate</span>.</div>
+          </>
+        ) : (
+          <>
+            <textarea value={config} onChange={(e) => setConfig(e.target.value)} rows={6} spellCheck={false} className="resize-y rounded-md border border-line bg-code px-3 py-2.5 font-mono text-[12px] leading-[1.5] text-fg focus:border-brand/60 focus:outline-none" />
+            <div className="text-[11px] text-dim-2"><span className="font-mono text-[#ada695]">command/args/env</span> (stdio) or <span className="font-mono text-[#ada695]">type/url/headers</span> (http/sse). Secrets in <span className="font-mono">env</span>/<span className="font-mono">headers</span> authenticate it.</div>
+          </>
+        )}
         {add.isError && <div className="text-[12px] text-bad">{(add.error as Error).message}</div>}
         <div className="flex gap-2">
-          <button onClick={submit} disabled={add.isPending} className="h-9 rounded-md bg-brand px-3.5 font-display text-[12.5px] font-semibold text-[#16130f] hover:bg-brand-deep disabled:opacity-40">{add.isPending ? 'Saving…' : 'Save server'}</button>
-          <button onClick={() => setOpen(false)} className="h-9 rounded-md border border-line bg-surface-2 px-3.5 font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Cancel</button>
+          <button onClick={submit} disabled={add.isPending || (mode === 'remote' && !url.trim())} className="h-9 rounded-md bg-brand px-3.5 font-display text-[12.5px] font-semibold text-[#16130f] hover:bg-brand-deep disabled:opacity-40">{add.isPending ? 'Saving…' : 'Save server'}</button>
+          <button onClick={reset} className="h-9 rounded-md border border-line bg-surface-2 px-3.5 font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Cancel</button>
         </div>
       </div>
     </div>

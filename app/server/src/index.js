@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
@@ -48,6 +49,12 @@ const maskConfig = (cfg) => {
   if (c.headers) for (const k of Object.keys(c.headers)) c.headers[k] = '••••';
   return c;
 };
+// Wrap a remote MCP URL with mcp-remote — the drop-in proxy that handles the OAuth 2.1
+// browser flow + token storage (~/.mcp-auth) and --header token auth for Claude.
+const mcpRemoteDef = (url) => ({ command: 'npx', args: ['-y', 'mcp-remote', url] });
+const isMcpRemote = (def) => def?.command === 'npx' && Array.isArray(def?.args) && def.args.includes('mcp-remote');
+const mcpRemoteUrl = (def) => (isMcpRemote(def) ? def.args.find((a) => /^https?:\/\//.test(a)) : def?.url) || '';
+
 // Normalize whatever the user pasted into { name, def }. Accepts a bare def,
 // a single-key wrapper { betterstack: {...} }, or a full { mcpServers: { name: def } }.
 const isDef = (o) => o && typeof o === 'object' && (o.command || o.url);
@@ -77,10 +84,10 @@ function writeMcpConfig(grantedNames) {
     const def = jObj(row.config) || {};
     const auth = jObj(row.auth) || {};
     if (auth.token) {
-      const headerName = auth.header || (def.url ? 'Authorization' : 'API_KEY');
       const value = auth.scheme === 'raw' ? auth.token : `Bearer ${auth.token}`;
-      if (def.url) def.headers = { ...(def.headers || {}), [headerName]: value };
-      else def.env = { ...(def.env || {}), [headerName]: auth.token };
+      if (isMcpRemote(def)) def.args = [...def.args, '--header', `${auth.header || 'Authorization'}: ${value}`];
+      else if (def.url) def.headers = { ...(def.headers || {}), [auth.header || 'Authorization']: value };
+      else def.env = { ...(def.env || {}), [auth.header || 'API_KEY']: auth.token };
     }
     mcpServers[n] = def;
   }
@@ -856,8 +863,9 @@ app.get('/api/connectors', async (_q, res) => {
   for (const s of all('SELECT name, config, auth FROM mcp_servers ORDER BY name')) {
     const cfg = jObj(s.config) || {};
     const authed = !!(jObj(s.auth) || {}).token;
-    const transport = cfg.command ? `stdio · ${cfg.command}` : cfg.url ? `http · ${cfg.url}` : 'custom MCP';
-    out.push({ code: s.name, name: s.name, kind: 'MCP', health: 'ok', auth: `${transport}${authed ? ' · 🔑 authed' : ''}`, scopes: `mcp__${s.name}__*`, routines: uses(s.name), avColor: '#b49ae6', testable: true, configKey: '', mcp: true, authed });
+    const remote = isMcpRemote(cfg);
+    const transport = remote ? `remote · ${mcpRemoteUrl(cfg)}` : cfg.command ? `stdio · ${cfg.command}` : cfg.url ? `http · ${cfg.url}` : 'custom MCP';
+    out.push({ code: s.name, name: s.name, kind: remote ? 'MCP · remote' : 'MCP', health: 'ok', auth: `${transport}${authed ? ' · 🔑 token' : ''}`, scopes: `mcp__${s.name}__*`, routines: uses(s.name), avColor: '#b49ae6', testable: true, configKey: '', mcp: true, authed, remote });
   }
   res.json(out);
 });
@@ -870,7 +878,8 @@ app.post('/api/connectors/:code/test', async (req, res) => {
 // Custom MCP servers — drop in a config + auth (env/headers); routines grant them by name.
 app.get('/api/mcp', (_q, res) => res.json(all('SELECT * FROM mcp_servers ORDER BY name').map((s) => {
   const auth = jObj(s.auth) || {};
-  return { name: s.name, config: maskConfig(jObj(s.config) || {}), auth: { configured: !!auth.token, scheme: auth.scheme || 'bearer', header: auth.header || '' } };
+  const cfg = jObj(s.config) || {};
+  return { name: s.name, config: maskConfig(cfg), remote: isMcpRemote(cfg), url: mcpRemoteUrl(cfg), auth: { configured: !!auth.token, scheme: auth.scheme || 'bearer', header: auth.header || '' } };
 })));
 // Authenticate an MCP server — store a bearer token / API key, injected at runtime
 // into the server's headers (http) or env (stdio). Masked in all responses.
@@ -883,13 +892,38 @@ app.post('/api/mcp/:name/auth', (req, res) => {
   res.json({ ok: true, configured: !!token });
 });
 app.post('/api/mcp', (req, res) => {
+  const b = req.body || {};
+  // Remote mode: just a URL → wrapped with mcp-remote (handles OAuth + token auth).
+  if (b.remote && b.url) {
+    let url; try { url = new URL(String(b.url).trim()).toString(); } catch { return res.status(400).json({ error: 'enter a valid https URL' }); }
+    const host = new URL(url).hostname.split('.');
+    const sld = host.length >= 2 ? host[host.length - 2] : host[0]; // mcp.betterstack.com → betterstack
+    const name = (String(b.name || '').trim() || sld).replace(/[^a-z0-9_-]/gi, '');
+    if (!name) return res.status(400).json({ error: 'a server name is required' });
+    run("INSERT INTO mcp_servers (name,config,created_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET config=excluded.config", name, JSON.stringify(mcpRemoteDef(url)), now());
+    return res.json({ ok: true, name, remote: true });
+  }
   let parsed;
-  try { parsed = normalizeMcp(String(req.body?.name || '').trim(), req.body?.config); } catch { return res.status(400).json({ error: 'config must be valid JSON' }); }
+  try { parsed = normalizeMcp(String(b.name || '').trim(), b.config); } catch { return res.status(400).json({ error: 'config must be valid JSON' }); }
   const name = String(parsed.name || '').trim().replace(/[^a-z0-9_-]/gi, '');
   if (!name) return res.status(400).json({ error: 'a server name is required — type one, or paste a { "name": { … } } config' });
   if (!isDef(parsed.def)) return res.status(400).json({ error: 'config needs a "command" (stdio) or a "url" (http/sse)' });
   run("INSERT INTO mcp_servers (name,config,created_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET config=excluded.config", name, JSON.stringify(parsed.def), now());
   res.json({ ok: true, name });
+});
+// Kick off the mcp-remote OAuth flow in the browser (one-time). Tokens persist in ~/.mcp-auth.
+app.post('/api/mcp/:name/oauth', (req, res) => {
+  const row = one('SELECT config FROM mcp_servers WHERE name=?', req.params.name);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const url = mcpRemoteUrl(jObj(row.config) || {});
+  if (!url) return res.status(400).json({ error: 'this server has no remote URL (add it in Remote mode to use OAuth)' });
+  try {
+    const child = spawn('npx', ['-y', 'mcp-remote', url], { detached: true, stdio: 'ignore', env: process.env });
+    child.unref();
+    res.json({ ok: true, detail: `Opening the OAuth flow for ${url} — approve it in your browser. mcp-remote saves the token to ~/.mcp-auth, so sessions authenticate from then on.` });
+  } catch (e) {
+    res.status(500).json({ error: `couldn't start mcp-remote: ${e.message}` });
+  }
 });
 app.delete('/api/mcp/:name', (req, res) => { run('DELETE FROM mcp_servers WHERE name=?', req.params.name); res.json({ ok: true }); });
 // Configure a connector's token (slack/atlassian) — stored in meta, loaded into env now.

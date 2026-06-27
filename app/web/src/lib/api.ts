@@ -95,7 +95,10 @@ export function useConfigConnector() {
 export const useMcp = () => useQuery({ queryKey: ['mcp'], queryFn: () => get<{ name: string; config: Record<string, unknown> }[]>('/api/mcp') });
 export function useAddMcp() {
   const qc = useQueryClient();
-  return useMutation({ mutationFn: (b: { name: string; config: string }) => post<{ ok: boolean; name: string }>('/api/mcp', b), onSuccess: () => { qc.invalidateQueries({ queryKey: ['mcp'] }); qc.invalidateQueries({ queryKey: ['connectors'] }); } });
+  return useMutation({ mutationFn: (b: { name?: string; config?: string; remote?: boolean; url?: string }) => post<{ ok: boolean; name: string }>('/api/mcp', b), onSuccess: () => { qc.invalidateQueries({ queryKey: ['mcp'] }); qc.invalidateQueries({ queryKey: ['connectors'] }); } });
+}
+export function useMcpOauth() {
+  return useMutation({ mutationFn: (name: string) => post<{ ok: boolean; detail: string }>(`/api/mcp/${name}/oauth`, {}) });
 }
 export function useDeleteMcp() {
   const qc = useQueryClient();
