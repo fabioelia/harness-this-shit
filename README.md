@@ -1,8 +1,19 @@
 # Switchboard — a team harness for Claude Code routines
 
-> **Status:** Design / research only. No code in this repo yet. This package is the shared
-> understanding of *what we are building and why*, the canonical shape that powers it, and the
-> tools we'll want. "Switchboard" is a working codename — rename freely.
+> **Status:** Design package **plus a working reference implementation**. [`docs/`](docs) holds the
+> shared understanding (what we're building and why, the canonical shape, the tools). [`app/`](app)
+> is a runnable slice — the **Fleet** console — built on a real component-library design system
+> (React + Express + `node:sqlite`). "Switchboard" is a working codename — rename freely.
+
+## Try the app
+
+```bash
+cd app && npm run install:all && npm run dev      # web → http://localhost:5317
+```
+
+A live Fleet board, routine detail with the reactive **flow diagram** + collision guard stack +
+owned-PR budgets, runs log, connectors, activity, and the org-wide kill switch — all wired to a
+SQLite store seeded from Newton's real automations. See [`app/README.md`](app/README.md).
 
 ## The one-paragraph version
 

@@ -1,0 +1,16 @@
+{
+  "name": "switchboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Switchboard — a team harness for Claude Code routines (reference implementation)",
+  "scripts": {
+    "dev": "concurrently -n api,web -c magenta,cyan \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm --prefix server run start",
+    "dev:web": "npm --prefix web run dev",
+    "build": "npm --prefix web run build",
+    "install:all": "npm --prefix server install && npm --prefix web install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

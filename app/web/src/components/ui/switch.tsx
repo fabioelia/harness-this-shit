@@ -1,0 +1,28 @@
+import * as React from 'react';
+import * as SwitchPrimitive from '@radix-ui/react-switch';
+import { cn } from '@/lib/utils';
+
+export const Switch = React.forwardRef<
+  React.ElementRef<typeof SwitchPrimitive.Root>,
+  React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root>
+>(({ className, ...props }, ref) => (
+  <SwitchPrimitive.Root
+    ref={ref}
+    className={cn(
+      'peer inline-flex h-[20px] w-[34px] shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors',
+      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
+      'data-[state=checked]:bg-ok/80 data-[state=unchecked]:bg-surface-2 data-[state=unchecked]:border-line',
+      'disabled:cursor-not-allowed disabled:opacity-50',
+      className
+    )}
+    {...props}
+  >
+    <SwitchPrimitive.Thumb
+      className={cn(
+        'pointer-events-none block h-[15px] w-[15px] rounded-full bg-white shadow-sm transition-transform',
+        'data-[state=checked]:translate-x-[15px] data-[state=unchecked]:translate-x-[2px]'
+      )}
+    />
+  </SwitchPrimitive.Root>
+));
+Switch.displayName = 'Switch';
