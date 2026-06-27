@@ -5,7 +5,7 @@
 // memory and per-PR concurrency the way a team would actually wire them up.
 
 export const DEFAULT_REPO = 'fabioelia/harness-this-shit';
-export const SLACK = '#dev-ai-slop';
+export const SLACK = '@fabio';
 
 // ── Agent team — each is multi-tool, opinionated, and most carry memory so they get
 //    sharper over time. Routines delegate to them with `agent-message <name> "…"`. ──
