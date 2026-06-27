@@ -71,7 +71,19 @@ function writeMcpConfig(grantedNames) {
   const names = [...new Set((grantedNames || []).filter((n) => set.has(n)))];
   if (!names.length) return null;
   const mcpServers = {};
-  for (const n of names) { const row = one('SELECT config FROM mcp_servers WHERE name=?', n); if (row) mcpServers[n] = jObj(row.config) || {}; }
+  for (const n of names) {
+    const row = one('SELECT config, auth FROM mcp_servers WHERE name=?', n);
+    if (!row) continue;
+    const def = jObj(row.config) || {};
+    const auth = jObj(row.auth) || {};
+    if (auth.token) {
+      const headerName = auth.header || (def.url ? 'Authorization' : 'API_KEY');
+      const value = auth.scheme === 'raw' ? auth.token : `Bearer ${auth.token}`;
+      if (def.url) def.headers = { ...(def.headers || {}), [headerName]: value };
+      else def.env = { ...(def.env || {}), [headerName]: auth.token };
+    }
+    mcpServers[n] = def;
+  }
   const path = join(tmpdir(), `sb-mcp-${Math.random().toString(36).slice(2)}.json`);
   writeFileSync(path, JSON.stringify({ mcpServers }));
   return path;
@@ -841,9 +853,11 @@ app.get('/api/connectors', async (_q, res) => {
     { code: 'WB', name: 'Web fetch', kind: 'Built-in', health: 'ok', auth: 'no auth needed', scopes: 'fetch & read public URLs', routines: uses('web'), avColor: '#8aa0b8', testable: true, configKey: '' },
     { code: 'AT', name: 'Atlassian / Confluence', kind: 'API · planned', health: process.env.ATLASSIAN_API_TOKEN ? 'ok' : 'off', auth: process.env.ATLASSIAN_API_TOKEN ? 'token set' : 'set an API token', scopes: 'publish to Confluence (not yet a granted tool)', routines: uses('confluence'), avColor: '#6fae9a', testable: true, configKey: 'atlassian' },
   ];
-  for (const s of all('SELECT name, config FROM mcp_servers ORDER BY name')) {
+  for (const s of all('SELECT name, config, auth FROM mcp_servers ORDER BY name')) {
     const cfg = jObj(s.config) || {};
-    out.push({ code: s.name, name: s.name, kind: 'MCP', health: 'ok', auth: cfg.command ? `stdio · ${cfg.command}` : cfg.url ? `http · ${cfg.url}` : 'custom MCP', scopes: `mcp__${s.name}__*`, routines: uses(s.name), avColor: '#b49ae6', testable: true, configKey: '', mcp: true });
+    const authed = !!(jObj(s.auth) || {}).token;
+    const transport = cfg.command ? `stdio · ${cfg.command}` : cfg.url ? `http · ${cfg.url}` : 'custom MCP';
+    out.push({ code: s.name, name: s.name, kind: 'MCP', health: 'ok', auth: `${transport}${authed ? ' · 🔑 authed' : ''}`, scopes: `mcp__${s.name}__*`, routines: uses(s.name), avColor: '#b49ae6', testable: true, configKey: '', mcp: true, authed });
   }
   res.json(out);
 });
@@ -854,7 +868,20 @@ app.post('/api/connectors/:code/test', async (req, res) => {
   res.json(await testConnector(req.params.code, req.body || {}));
 });
 // Custom MCP servers — drop in a config + auth (env/headers); routines grant them by name.
-app.get('/api/mcp', (_q, res) => res.json(all('SELECT * FROM mcp_servers ORDER BY name').map((s) => ({ name: s.name, config: maskConfig(jObj(s.config) || {}) }))));
+app.get('/api/mcp', (_q, res) => res.json(all('SELECT * FROM mcp_servers ORDER BY name').map((s) => {
+  const auth = jObj(s.auth) || {};
+  return { name: s.name, config: maskConfig(jObj(s.config) || {}), auth: { configured: !!auth.token, scheme: auth.scheme || 'bearer', header: auth.header || '' } };
+})));
+// Authenticate an MCP server — store a bearer token / API key, injected at runtime
+// into the server's headers (http) or env (stdio). Masked in all responses.
+app.post('/api/mcp/:name/auth', (req, res) => {
+  if (!one('SELECT 1 FROM mcp_servers WHERE name=?', req.params.name)) return res.status(404).json({ error: 'not found' });
+  const token = String(req.body?.token || '').trim();
+  const scheme = ['bearer', 'raw'].includes(req.body?.scheme) ? req.body.scheme : 'bearer';
+  const header = String(req.body?.header || '').trim();
+  run('UPDATE mcp_servers SET auth=? WHERE name=?', JSON.stringify(token ? { scheme, header, token } : {}), req.params.name);
+  res.json({ ok: true, configured: !!token });
+});
 app.post('/api/mcp', (req, res) => {
   let parsed;
   try { parsed = normalizeMcp(String(req.body?.name || '').trim(), req.body?.config); } catch { return res.status(400).json({ error: 'config must be valid JSON' }); }

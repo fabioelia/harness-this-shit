@@ -132,6 +132,7 @@ export function getDb() {
   ensure('routines', 'reactions', "reactions TEXT NOT NULL DEFAULT '[]'");
   ensure('routines', 'effort', "effort TEXT NOT NULL DEFAULT ''");
   ensure('routines', 'memory', 'memory INTEGER NOT NULL DEFAULT 0');
+  ensure('mcp_servers', 'auth', "auth TEXT NOT NULL DEFAULT '{}'");
   ensure('runs', 'dur_ms', 'dur_ms INTEGER');
   const n = _db.prepare('SELECT COUNT(*) AS n FROM routines').get();
   if (fresh || n.n === 0) seed(_db);

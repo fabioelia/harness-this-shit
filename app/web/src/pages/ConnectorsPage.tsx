@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useConnectors, useTestConnector, useConfigConnector, useMcp, useAddMcp, useDeleteMcp } from '@/lib/api';
+import { useConnectors, useTestConnector, useConfigConnector, useMcp, useAddMcp, useDeleteMcp, useAuthMcp } from '@/lib/api';
 import { Pill, Dot, Empty, SIGNAL } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { Connector } from '@/types';
@@ -12,8 +12,13 @@ function ConnectorRow({ c, GRID }: { c: Connector; GRID: React.CSSProperties }) 
   const test = useTestConnector();
   const config = useConfigConnector();
   const delMcp = useDeleteMcp();
+  const authMcp = useAuthMcp();
   const [showCfg, setShowCfg] = useState(false);
+  const [showAuth, setShowAuth] = useState(false);
   const [token, setToken] = useState('');
+  const [authToken, setAuthToken] = useState('');
+  const [authHeader, setAuthHeader] = useState('');
+  const [authScheme, setAuthScheme] = useState<'bearer' | 'raw'>('bearer');
   const [channel, setChannel] = useState('#dev-ai-slop');
   const result = test.data;
   const HEALTH: Record<Connector['health'], { label: string; color: string }> = {
@@ -34,12 +39,28 @@ function ConnectorRow({ c, GRID }: { c: Connector; GRID: React.CSSProperties }) 
           <span className="font-mono text-[12px] font-semibold text-t2">{c.routines}</span>
           {c.testable && <button onClick={() => test.mutate({ code: c.code, body: c.configKey === 'slack' ? { channel } : {} })} disabled={test.isPending} className={btn}>{test.isPending ? 'Testing…' : 'Test'}</button>}
           {c.configKey && <button onClick={() => setShowCfg((v) => !v)} className={btn}>Configure</button>}
+          {c.mcp && <button onClick={() => setShowAuth((v) => !v)} className={cn(btn, c.authed && 'border-brand/40 text-brand-soft')}>{c.authed ? '🔑 Auth' : 'Authenticate'}</button>}
           {c.mcp && <button onClick={() => { if (confirm(`Remove MCP server "${c.name}"?`)) delMcp.mutate(c.name); }} className={cn(btn, 'border-bad/40 text-bad')}>Remove</button>}
         </div>
       </div>
-      {(result || showCfg) && (
+      {(result || showCfg || showAuth) && (
         <div className="px-[18px] pb-3.5" style={{ paddingLeft: 72 }}>
           {result && <div className={cn('font-mono text-[11.5px]', result.ok ? 'text-ok' : 'text-warn')}>{result.ok ? '✓' : '✗'} {result.detail}</div>}
+          {showAuth && (
+            <div className="mt-2">
+              <div className="mb-1.5 flex items-center gap-2">
+                <span className="inline-flex overflow-hidden rounded-md border border-line text-[11px] font-semibold">
+                  {(['bearer', 'raw'] as const).map((s) => <button key={s} type="button" onClick={() => setAuthScheme(s)} className={cn('px-2 py-0.5 font-mono', authScheme === s ? 'bg-brand/15 text-brand-soft' : 'text-dim hover:text-t2')}>{s}</button>)}
+                </span>
+                <input value={authHeader} onChange={(e) => setAuthHeader(e.target.value)} placeholder="header / env (default Authorization)" className="h-8 w-56 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[11.5px] text-fg focus:border-brand/60 focus:outline-none" />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input type="password" value={authToken} onChange={(e) => setAuthToken(e.target.value)} placeholder={`token / API key for ${c.name}`} className="h-8 min-w-[260px] flex-1 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+                <button onClick={() => authMcp.mutate({ name: c.name, token: authToken, scheme: authScheme, header: authHeader }, { onSuccess: () => { setAuthToken(''); setShowAuth(false); } })} disabled={authMcp.isPending} className={cn(btn, 'h-8 border-brand/50 bg-brand/10 text-brand-soft')}>{authMcp.isPending ? 'Saving…' : authToken ? 'Save auth' : 'Clear auth'}</button>
+              </div>
+              <div className="mt-1.5 font-mono text-[10.5px] text-dim">Stored masked, injected at runtime — http → header (<span className="text-[#ada695]">{authScheme === 'bearer' ? 'Bearer <token>' : '<token>'}</span>), stdio → env var. For OAuth servers, run <span className="text-[#ada695]">claude mcp add --transport http {c.name} &lt;url&gt;</span> once.</div>
+            </div>
+          )}
           {showCfg && (
             <div className="mt-2 flex flex-wrap items-center gap-2">
               {c.configKey === 'slack' && <input value={channel} onChange={(e) => setChannel(e.target.value)} placeholder="#channel for the test" className="h-8 w-40 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />}

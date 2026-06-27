@@ -101,6 +101,10 @@ export function useDeleteMcp() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (name: string) => del(`/api/mcp/${name}`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['mcp'] }); qc.invalidateQueries({ queryKey: ['connectors'] }); } });
 }
+export function useAuthMcp() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ name, token, scheme, header }: { name: string; token: string; scheme?: string; header?: string }) => post<{ ok: boolean; configured: boolean }>(`/api/mcp/${name}/auth`, { token, scheme, header }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['mcp'] }); qc.invalidateQueries({ queryKey: ['connectors'] }); } });
+}
 export const useActivity = () => useQuery({ queryKey: ['activity'], queryFn: () => get<ActivityEntry[]>('/api/activity'), refetchInterval: 10000 });
 
 export function useToggleRoutine() {
