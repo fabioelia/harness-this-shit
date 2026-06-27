@@ -18,39 +18,30 @@ body,
 
 body {
   margin: 0;
-  background-color: theme('colors.bg');
+  background: #100e0a;
   color: theme('colors.fg');
   font-family: theme('fontFamily.sans');
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  /* faint patch-bay grid — the switchboard texture, very low contrast */
-  background-image:
-    radial-gradient(circle at 50% -10%, rgba(139, 124, 255, 0.08), transparent 55%),
-    linear-gradient(theme('colors.line-soft') 1px, transparent 1px),
-    linear-gradient(90deg, theme('colors.line-soft') 1px, transparent 1px);
-  background-size: 100% 100%, 44px 44px, 44px 44px;
-  background-position: 0 0, 0 0, 0 0;
-  background-attachment: fixed;
 }
 
 ::selection {
-  background: theme('colors.brand.glow');
+  background: rgba(91, 158, 230, 0.28);
   color: #fff;
 }
 
-/* Thin, quiet scrollbars to suit a dense console */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #28324a;
+  background: #2b2620;
   border-radius: 999px;
   border: 3px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #34405c;
+  background: #3a342c;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-track {
@@ -61,7 +52,6 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* skeleton shimmer */
 .shimmer {
   position: relative;
   overflow: hidden;
@@ -71,7 +61,7 @@ body {
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.04), transparent);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.035), transparent);
   animation: shimmer 1.6s infinite;
 }
 @keyframes shimmer {

@@ -1,151 +1,100 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import {
-  LayoutGrid,
-  ListChecks,
-  Cable,
-  ScrollText,
-  Settings,
-  Search,
-  OctagonX,
-  Plus,
-  ChevronDown,
-  type LucideIcon,
-} from 'lucide-react';
-import { Logo } from '@/components/Logo';
-import { Button } from '@/components/ui/button';
-import { Avatar } from '@/components/ui/avatar';
-import { Tip, TooltipProvider } from '@/components/ui/tooltip';
+import { NavLink, Outlet } from 'react-router-dom';
+import { TooltipProvider, Tip } from '@/components/ui/tooltip';
+import { useKillSwitch, useStats } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { useStats, useKillSwitch } from '@/lib/api';
 
-const NAV: { to: string; label: string; icon: LucideIcon; end?: boolean }[] = [
-  { to: '/', label: 'Fleet', icon: LayoutGrid, end: true },
-  { to: '/runs', label: 'Runs', icon: ListChecks },
-  { to: '/connectors', label: 'Connectors', icon: Cable },
-  { to: '/activity', label: 'Activity', icon: ScrollText },
+const ICONS = {
+  fleet: (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6">
+      <rect x="2.5" y="2.5" width="5" height="5" rx="1" /><rect x="10.5" y="2.5" width="5" height="5" rx="1" />
+      <rect x="2.5" y="10.5" width="5" height="5" rx="1" /><rect x="10.5" y="10.5" width="5" height="5" rx="1" />
+    </svg>
+  ),
+  runs: (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      <line x1="3" y1="5" x2="15" y2="5" /><line x1="3" y1="9" x2="12" y2="9" /><line x1="3" y1="13" x2="14" y2="13" />
+    </svg>
+  ),
+  mcps: (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6">
+      <circle cx="5" cy="5" r="2.4" /><circle cx="13" cy="13" r="2.4" /><line x1="6.8" y1="6.8" x2="11.2" y2="11.2" strokeLinecap="round" />
+    </svg>
+  ),
+  audit: (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      <circle cx="4" cy="5" r="1" /><line x1="7" y1="5" x2="15" y2="5" /><circle cx="4" cy="9" r="1" /><line x1="7" y1="9" x2="15" y2="9" /><circle cx="4" cy="13" r="1" /><line x1="7" y1="13" x2="15" y2="13" />
+    </svg>
+  ),
+  config: (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      <line x1="3" y1="6" x2="15" y2="6" /><circle cx="11" cy="6" r="2" fill="#1a1712" /><line x1="3" y1="12" x2="15" y2="12" /><circle cx="7" cy="12" r="2" fill="#1a1712" />
+    </svg>
+  ),
+  stop: (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      <path d="M9 2.5 V 8.5" /><path d="M4.7 5.2 a5.6 5.6 0 1 0 8.6 0" />
+    </svg>
+  ),
+};
+
+const NAV = [
+  { to: '/', label: 'Fleet', icon: ICONS.fleet, end: true },
+  { to: '/runs', label: 'Runs', icon: ICONS.runs },
+  { to: '/connectors', label: 'MCPs', icon: ICONS.mcps },
+  { to: '/activity', label: 'Audit', icon: ICONS.audit },
+  { to: '/settings', label: 'Config', icon: ICONS.config },
 ];
-
-function NavItem({ to, label, icon: Icon, end, badge }: (typeof NAV)[number] & { badge?: number }) {
-  return (
-    <NavLink
-      to={to}
-      end={end}
-      className={({ isActive }) =>
-        cn(
-          'group flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
-          isActive ? 'bg-surface-2 text-fg' : 'text-muted hover:bg-surface hover:text-fg'
-        )
-      }
-    >
-      {({ isActive }) => (
-        <>
-          <Icon
-            className={cn('h-[18px] w-[18px] transition-colors', isActive ? 'text-brand-soft' : 'text-muted-2 group-hover:text-muted')}
-            strokeWidth={2}
-          />
-          <span>{label}</span>
-          {badge ? (
-            <span className="ml-auto rounded-full bg-warn/15 px-1.5 py-0.5 text-[10px] font-semibold text-warn">{badge}</span>
-          ) : null}
-        </>
-      )}
-    </NavLink>
-  );
-}
 
 export function AppShell() {
   const { data: stats } = useStats();
   const kill = useKillSwitch();
-  const navigate = useNavigate();
+  const halted = !!stats?.killSwitch;
 
   return (
-    <TooltipProvider delayDuration={250}>
-      <div className="flex h-screen overflow-hidden">
-        {/* Sidebar */}
-        <aside className="flex w-[232px] shrink-0 flex-col border-r border-line bg-panel/60">
-          <div className="flex items-center gap-2.5 px-5 py-4">
-            <Logo />
-            <div className="leading-tight">
-              <div className="font-display text-[15px] font-semibold tracking-tight text-fg">Switchboard</div>
-              <div className="text-[10px] uppercase tracking-[0.14em] text-muted-2">routine harness</div>
-            </div>
-          </div>
+    <TooltipProvider delayDuration={200}>
+      <div className="flex h-screen overflow-hidden bg-bg">
+        {/* 64px icon rail */}
+        <nav className="flex w-16 shrink-0 flex-col items-center gap-[3px] border-r border-line bg-surface py-4">
+          <div className="mb-4 grid h-8 w-8 place-items-center rounded-[9px] bg-brand font-mono text-[16px] font-bold text-[#16130f]">S</div>
+          {NAV.map((n) => (
+            <NavLink
+              key={n.to}
+              to={n.to}
+              end={n.end}
+              className={({ isActive }) =>
+                cn(
+                  'flex w-12 flex-col items-center gap-[5px] rounded-[11px] py-[9px] transition-colors',
+                  isActive ? 'bg-white/[0.05] text-brand' : 'text-dim hover:text-t2'
+                )
+              }
+            >
+              {n.icon}
+              <span className="font-display text-[8.5px] font-semibold tracking-[0.04em]">{n.label}</span>
+            </NavLink>
+          ))}
+          <Tip label={halted ? 'Fleet halted — release the kill switch' : 'Emergency stop — halt every routine'} side="right">
+            <button
+              onClick={() => kill.mutate(!halted)}
+              className={cn(
+                'mt-auto flex w-12 flex-col items-center gap-[5px] rounded-[11px] py-[9px] transition-colors',
+                halted ? 'bg-bad/15 text-bad animate-sbpulse' : 'text-bad/90 hover:text-bad'
+              )}
+            >
+              {ICONS.stop}
+              <span className="font-display text-[8.5px] font-semibold tracking-[0.04em]">Stop</span>
+            </button>
+          </Tip>
+        </nav>
 
-          <button className="mx-3 mb-2 flex items-center gap-2 rounded-md border border-line-soft bg-surface px-3 py-2 text-left transition-colors hover:border-line">
-            <span className="grid h-6 w-6 place-items-center rounded bg-brand/15 text-[11px] font-bold text-brand-soft">
-              {(stats?.org || 'N')[0]}
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-[13px] font-medium text-fg">{stats?.org || 'Organization'}</div>
-              <div className="text-[10px] text-muted-2">Platform · QA · Solutions</div>
-            </div>
-            <ChevronDown className="h-3.5 w-3.5 text-muted-2" />
-          </button>
-
-          <nav className="flex flex-1 flex-col gap-0.5 px-3 py-2">
-            {NAV.map((n) => (
-              <NavItem key={n.to} {...n} badge={n.to === '/' ? stats?.needsHuman : undefined} />
-            ))}
-            <div className="mt-auto">
-              <NavItem to="/settings" label="Settings" icon={Settings} />
-            </div>
-          </nav>
-
-          <div className="border-t border-line px-4 py-3 text-[11px] text-muted-2">
-            <div className="flex items-center justify-between">
-              <span>{stats ? `${stats.enabled}/${stats.total} enabled` : '—'}</span>
-              <span className="font-mono">v0.1</span>
-            </div>
-          </div>
-        </aside>
-
-        {/* Main column */}
-        <div className="flex min-w-0 flex-1 flex-col">
-          {/* Topbar */}
-          <header className="flex h-14 shrink-0 items-center gap-3 border-b border-line bg-panel/40 px-5 backdrop-blur">
-            <label className="relative flex-1 max-w-md">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-2" />
-              <input
-                placeholder="Search routines, runs, PRs…"
-                onKeyDown={(e) => e.key === 'Enter' && navigate('/')}
-                className="h-9 w-full rounded-md border border-line bg-surface pl-9 pr-3 text-sm text-fg placeholder:text-muted-2 focus-visible:border-brand/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/15"
-              />
-            </label>
-
-            <div className="ml-auto flex items-center gap-2.5">
-              <Tip label={stats?.killSwitch ? 'Fleet halted — click to resume' : 'Emergency stop — halt every routine'}>
-                <Button
-                  variant={stats?.killSwitch ? 'danger' : 'subtle'}
-                  size="sm"
-                  onClick={() => kill.mutate(!stats?.killSwitch)}
-                  className={cn(stats?.killSwitch && 'animate-pulse')}
-                >
-                  <OctagonX className="h-4 w-4" />
-                  {stats?.killSwitch ? 'Halted' : 'Stop'}
-                </Button>
-              </Tip>
-              <Button variant="primary" size="sm">
-                <Plus className="h-4 w-4" />
-                New routine
-              </Button>
-              <div className="ml-1">
-                <Avatar name="Fabio Elia" accent="#8B7CFF" size={28} />
-              </div>
-            </div>
-          </header>
-
-          {stats?.killSwitch && (
-            <div className="flex items-center gap-2 border-b border-bad/30 bg-bad/10 px-5 py-1.5 text-xs text-bad">
-              <OctagonX className="h-3.5 w-3.5" />
-              Org-wide kill switch engaged — no routine will dispatch until released.
+        {/* content */}
+        <main className="min-w-0 flex-1 overflow-y-auto">
+          {halted && (
+            <div className="flex items-center justify-center gap-2 border-b border-bad/30 bg-bad/10 py-1.5 text-[12px] text-bad">
+              {ICONS.stop} Org-wide kill switch engaged — no routine will dispatch until released.
             </div>
           )}
-
-          {/* Routed content */}
-          <main className="min-h-0 flex-1 overflow-y-auto">
-            <Outlet />
-          </main>
-        </div>
+          <Outlet />
+        </main>
       </div>
     </TooltipProvider>
   );

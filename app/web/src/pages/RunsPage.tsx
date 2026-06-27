@@ -1,89 +1,35 @@
 import { Link } from 'react-router-dom';
-import { GitPullRequest } from 'lucide-react';
-import { Page, PageHeader } from '@/components/page';
-import { Card } from '@/components/ui/card';
-import { Skeleton } from '@/components/ui/skeleton';
-import { RunStatusPill } from '@/components/status';
-import { Tip } from '@/components/ui/tooltip';
 import { useRuns } from '@/lib/api';
-import { duration, money, relativeTime } from '@/lib/format';
+import { Dot, stateMeta } from '@/components/sb';
 
-const DECISION_TONE: Record<string, string> = {
-  'lease-held': 'text-muted',
-  'budget-exhausted': 'text-warn',
-  admit: 'text-muted-2',
-};
+const GRID = { display: 'grid', gridTemplateColumns: '16px 110px minmax(0,1.4fr) minmax(0,1fr) 90px 80px', alignItems: 'center', gap: 14 } as const;
 
 export function RunsPage() {
-  const { data: runs, isLoading } = useRuns(60);
-
+  const { data: runs } = useRuns();
   return (
-    <Page>
-      <PageHeader
-        eyebrow="Switchboard"
-        title="Runs"
-        subtitle="Every execution across the fleet — what triggered it, what it touched, and the dispatcher's decision."
-      />
-      <Card className="overflow-hidden">
-        <div className="grid grid-cols-[130px_minmax(0,1fr)_150px_84px_92px_80px] items-center gap-3 border-b border-line bg-surface/40 px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-2">
-          <span>Status</span>
-          <span>Routine · summary</span>
-          <span>Target</span>
-          <span className="text-right">Duration</span>
-          <span className="text-right">Started</span>
-          <span className="text-right">Cost</span>
+    <div className="font-sans text-fg animate-fade-up">
+      <div className="border-b border-line-soft bg-head px-[26px] py-[22px]">
+        <div className="mb-3 font-mono text-[12px] font-medium text-dim"><span className="text-brand">Switchboard</span> › Runs</div>
+        <div className="font-display text-[23px] font-bold tracking-tight">Runs</div>
+        <div className="mt-1 text-[13px] text-muted-2">Every execution across the fleet — status, trigger, and how long it took.</div>
+      </div>
+      <div className="px-[26px] py-5 pb-[26px]">
+        <div className="overflow-hidden rounded-xl border border-line bg-surface">
+          <div className="border-b border-line bg-surface-2 px-[18px] py-[11px] font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2" style={GRID}>
+            <div /><div>Run</div><div>Routine</div><div>Trigger</div><div>Duration</div><div className="text-right">When</div>
+          </div>
+          {runs?.map((r) => (
+            <Link key={r.id} to={`/runs/${r.id}`} className="border-b border-line-soft px-[18px] py-3 last:border-0 hover:bg-white/[0.015]" style={GRID}>
+              <Dot state={r.status} size={8} />
+              <span className="font-mono text-[12px] font-semibold text-t2">{r.id}</span>
+              <span className="truncate font-display text-[13px] font-medium text-fg-2">{r.routineName}</span>
+              <span className="truncate font-mono text-[11.5px] font-medium text-dim">{r.trigger}</span>
+              <span className="font-mono text-[12px] font-medium text-muted-2">{r.dur}</span>
+              <span className="text-right font-mono text-[11.5px] font-medium" style={{ color: stateMeta(r.status).color }}>{r.ago}</span>
+            </Link>
+          ))}
         </div>
-
-        {isLoading ? (
-          <div className="space-y-px">
-            {Array.from({ length: 10 }).map((_, i) => (
-              <div key={i} className="px-4 py-3"><Skeleton className="h-5 w-full" /></div>
-            ))}
-          </div>
-        ) : (
-          <div>
-            {runs?.map((run) => (
-              <div
-                key={run.id}
-                className="grid grid-cols-[130px_minmax(0,1fr)_150px_84px_92px_80px] items-center gap-3 border-b border-line-soft px-4 py-2.5 text-sm transition-colors last:border-0 hover:bg-surface/40"
-              >
-                <div>
-                  <RunStatusPill status={run.status} />
-                  {run.decision && run.decision !== 'admit' && (
-                    <div className={`mt-0.5 font-mono text-[10px] ${DECISION_TONE[run.decision] ?? 'text-muted-2'}`}>
-                      {run.decision}
-                    </div>
-                  )}
-                </div>
-                <div className="min-w-0">
-                  <Link
-                    to={`/routines/${run.routine?.slug}`}
-                    className="font-medium text-fg hover:text-brand-soft"
-                  >
-                    {run.routine?.name ?? 'unknown'}
-                  </Link>
-                  {run.summary && <p className="line-clamp-1 text-[12px] text-muted">{run.summary}</p>}
-                </div>
-                <div className="min-w-0">
-                  {run.target ? (
-                    <Tip label={run.pushed_sha ? `Pushed ${run.pushed_sha}` : 'Targeted, no push'}>
-                      <span className="inline-flex items-center gap-1 font-mono text-[11px] text-muted">
-                        <GitPullRequest className="h-3 w-3 text-muted-2" />
-                        {run.target.replace('pr:newton', '')}
-                      </span>
-                    </Tip>
-                  ) : (
-                    <span className="text-[11px] text-muted-2">—</span>
-                  )}
-                </div>
-                <div className="tabular text-right text-[12px] text-muted">{duration(run.duration_sec)}</div>
-                <div className="text-right text-[12px] text-muted-2">{relativeTime(run.started_at)}</div>
-                <div className="tabular text-right text-[12px] text-muted">{money(run.cost)}</div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-    </Page>
+      </div>
+    </div>
   );
 }

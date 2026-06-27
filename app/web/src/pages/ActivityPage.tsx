@@ -1,73 +1,32 @@
-import { Link } from 'react-router-dom';
-import { Power, PenLine, Play, KeyRound, ShieldAlert, OctagonX, Dot } from 'lucide-react';
-import { Page, PageHeader } from '@/components/page';
-import { Card } from '@/components/ui/card';
-import { Avatar } from '@/components/ui/avatar';
-import { Skeleton } from '@/components/ui/skeleton';
 import { useActivity } from '@/lib/api';
-import { relativeTime } from '@/lib/format';
-import type { LucideIcon } from 'lucide-react';
-
-function iconFor(action: string): { Icon: LucideIcon; tone: string } {
-  if (action.includes('kill')) return { Icon: OctagonX, tone: 'text-bad' };
-  if (action.startsWith('enabled')) return { Icon: Power, tone: 'text-ok' };
-  if (action.startsWith('disabled')) return { Icon: Power, tone: 'text-muted' };
-  if (action.startsWith('edited')) return { Icon: PenLine, tone: 'text-brand-soft' };
-  if (action.startsWith('dispatched')) return { Icon: Play, tone: 'text-run' };
-  if (action.startsWith('granted')) return { Icon: KeyRound, tone: 'text-warn' };
-  return { Icon: ShieldAlert, tone: 'text-muted' };
-}
+import { Dot } from '@/components/sb';
 
 export function ActivityPage() {
-  const { data: entries, isLoading } = useActivity();
-
+  const { data: activity } = useActivity();
   return (
-    <Page className="max-w-[900px]">
-      <PageHeader
-        eyebrow="Switchboard"
-        title="Activity"
-        subtitle="The audit trail — every change to the fleet, who made it, and why."
-      />
-      <Card className="p-2">
-        {isLoading ? (
-          <div className="space-y-2 p-3">
-            {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10" />)}
-          </div>
-        ) : (
-          <ul className="divide-y divide-line-soft">
-            {entries?.map((e) => {
-              const { Icon, tone } = iconFor(e.action);
-              return (
-                <li key={e.id} className="flex items-center gap-3 px-3 py-3">
-                  <Avatar name={e.actor === 'you' ? 'You' : e.actor} size={28} accent="#5B9DFF" />
-                  <div className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-surface-2">
-                    <Icon className={`h-4 w-4 ${tone}`} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm text-fg">
-                      <span className="font-medium">{e.actor === 'you' ? 'You' : e.actor}</span>{' '}
-                      <span className="text-muted">{e.action}</span>{' '}
-                      {e.target !== 'org' ? (
-                        <Link to={`/routines/${e.target}`} className="font-medium text-brand-soft hover:underline">
-                          {e.target}
-                        </Link>
-                      ) : (
-                        <span className="font-medium text-fg">the fleet</span>
-                      )}
-                    </p>
-                    {e.detail && (
-                      <p className="flex items-center gap-1 text-[12px] text-muted-2">
-                        <Dot className="h-3 w-3" /> {e.detail}
-                      </p>
-                    )}
-                  </div>
-                  <span className="shrink-0 text-[11px] text-muted-2">{relativeTime(e.ts)}</span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </Card>
-    </Page>
+    <div className="font-sans text-fg animate-fade-up">
+      <div className="border-b border-line-soft bg-head px-[26px] py-[22px]">
+        <div className="mb-3 font-mono text-[12px] font-medium text-dim"><span className="text-brand">Switchboard</span> › Audit</div>
+        <div className="font-display text-[23px] font-bold tracking-tight">Audit &amp; activity</div>
+        <div className="mt-1 text-[13px] text-muted-2">The live event log — what fired, what the dispatcher decided, and what it touched.</div>
+      </div>
+      <div className="mx-auto max-w-[860px] px-[26px] py-6">
+        <div className="mb-3 flex items-center gap-2">
+          <Dot color="#5fbf86" size={8} pulse />
+          <span className="font-display text-[11px] font-semibold uppercase tracking-[0.1em] text-t2">Live activity</span>
+        </div>
+        <div className="overflow-hidden rounded-xl border border-line bg-surface">
+          {activity?.map((a, i) => (
+            <div key={i} className="flex items-start gap-3 border-b border-line-soft px-[18px] py-[13px] last:border-0">
+              <span className="mt-1 shrink-0"><Dot state={a.state} size={8} /></span>
+              <div className="min-w-0 flex-1">
+                <div className="font-sans text-[12.5px] font-medium leading-[1.4] text-t2">{a.text}</div>
+                <div className="mt-0.5 font-mono text-[10.5px] font-medium text-dim-3">{a.time}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }

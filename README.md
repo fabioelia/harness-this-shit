@@ -11,9 +11,10 @@
 cd app && npm run install:all && npm run dev      # web → http://localhost:5317
 ```
 
-A live Fleet board, routine detail with the reactive **flow diagram** + collision guard stack +
-owned-PR budgets, runs log, connectors, activity, and the org-wide kill switch — all wired to a
-SQLite store seeded from Newton's real automations. See [`app/README.md`](app/README.md).
+A pixel-close recreation of the **Switchboard Fleet** Claude Design file: the dense Fleet table,
+routine detail (front-matter contract, reactive flow, live lease & budget, owned PRs), run detail
+(timeline, dispatcher decision, outputs), and the connectors registry — all wired to a SQLite
+store and live controls (toggles, run-now, kill switch). See [`app/README.md`](app/README.md).
 
 ## The one-paragraph version
 

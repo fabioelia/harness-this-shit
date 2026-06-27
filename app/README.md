@@ -4,21 +4,32 @@ A working slice of the [Switchboard design](../docs) — the **Fleet** console f
 Code routines, built on a real component-library design system. This is the app the
 `Switchboard Fleet` design maps to.
 
-> The design file was authored in Claude Design (`Switchboard Fleet.dc.html`). It couldn't be
-> imported in the headless build environment (the design MCP needs an interactive `/design-login`),
-> so the UI here is built faithfully from our own design spec — [`docs/08-team-web-ui.md`](../docs/08-team-web-ui.md)
-> §1.1 specifies the Fleet board — and reconciles cleanly when the design is later synced.
+> The design was authored in Claude Design as `Switchboard Fleet.dc.html` and delivered as a
+> handoff bundle. This UI is a faithful, pixel-close recreation of that file — exact tokens (warm
+> brown-black surfaces `#100e0a`/`#16130f`/`#1a1712`, blue accent `#5b9ee6`), Hanken Grotesk +
+> JetBrains Mono, the 64px icon rail, the dense Fleet table, and the component primitives
+> (badge/toggle/dot/spark/success-bar) ported 1:1 from the design's runtime.
 
 ## Stack
 
 | Layer | Choice |
 |---|---|
 | Frontend | React 18 + TypeScript + Vite |
-| Styling / design system | Tailwind CSS + Radix UI primitives (shadcn-style), `class-variance-authority` |
-| Fonts (self-hosted) | Space Grotesk (display) · Inter (UI) · JetBrains Mono (data) via `@fontsource` |
+| Styling / design system | Tailwind CSS + Radix UI primitives, tokens from the `.dc.html` |
+| Fonts (self-hosted) | Hanken Grotesk (UI/display) · JetBrains Mono (data) via `@fontsource` |
 | Data | TanStack Query |
 | Backend | Express + **`node:sqlite`** (Node's built-in SQLite — zero native deps) |
-| Icons | lucide-react |
+| Icons | inline SVG (matched to the design) |
+
+## Frames implemented (from `Switchboard Fleet.dc.html`)
+
+| Frame | Route | What |
+|---|---|---|
+| A — Fleet board | `/` | Icon rail, 6-cell stat strip, filter bar, dense routine table |
+| D — Routine detail | `/routines/:slug` | Front-matter contract, reactive flow, live lease & budget, owned PRs, recent runs |
+| E — Run detail | `/runs/:id` | Execution timeline, dispatcher decision, outputs & effects, lease & barrier |
+| F — Connectors | `/connectors` | MCP registry table (health, auth, scopes, used-by) |
+| + Runs · Audit · Config | `/runs` `/activity` `/settings` | Run log, live activity feed, team roles + org policy |
 
 ## Run it
 
@@ -53,11 +64,11 @@ npm --prefix web run dev          # web  → http://localhost:5317
 
 ## Design system
 
-The component library lives in `web/src/components/ui/` (Button, Badge, Card, Switch, Tabs, Tooltip,
-DropdownMenu, Avatar, …) layered on Radix primitives, with tokens defined in `web/tailwind.config.js`
-(a control-room palette: signal colors kept distinct from the iris brand accent). The signature
-element is the **patch-bay status signal** (`web/src/components/status.tsx`) — a live indicator that
-encodes a routine's real-time state.
+Tokens live in `web/tailwind.config.js`, lifted verbatim from the `.dc.html` (warm brown-black
+surfaces, blue `#5b9ee6` accent, the signal palette: success/running/needs-human/failing/lease/
+disabled). The reusable primitives are in `web/src/components/sb.tsx` — `Dot`, `Pill`/`StatePill`,
+`Spark` (14-bar history), `Sbar` (success meter), `Avatar`, `Toggle`, `Chip` — each a 1:1 port of
+the design's `support.js` render helpers, so the app and the mock share one component vocabulary.
 
 ## Layout
 
@@ -67,7 +78,7 @@ app/
     src/{index,db,seed}.js
   web/      Vite + React + TS
     src/
-      components/{ui/*, status, FlowDiagram, RoutineRow, StatStrip, AppShell, …}
-      pages/{FleetPage, RoutineDetailPage, RunsPage, ConnectorsPage, ActivityPage, SettingsPage}
-      lib/{api, format, utils}, types.ts
+      components/{sb (design-system primitives), AppShell, ui/*}
+      pages/{FleetPage, RoutineDetailPage, RunsPage, RunDetailPage, ConnectorsPage, ActivityPage, SettingsPage}
+      lib/{api, utils}, types.ts
 ```

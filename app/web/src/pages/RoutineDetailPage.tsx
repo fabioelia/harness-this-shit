@@ -1,332 +1,243 @@
 import { Link, useParams } from 'react-router-dom';
-import {
-  ArrowLeft,
-  Play,
-  Pencil,
-  Cable,
-  GitBranch,
-  Cpu,
-  FileCode2,
-  ShieldHalf,
-  Eye,
-  GitPullRequest,
-} from 'lucide-react';
-import { Page } from '@/components/page';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Switch } from '@/components/ui/switch';
-import { Avatar } from '@/components/ui/avatar';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { StateSignal, RunStatusPill } from '@/components/status';
-import { FlowDiagram } from '@/components/FlowDiagram';
 import { useRoutine, useToggleRoutine, useDispatchRoutine } from '@/lib/api';
-import { duration, money, relativeTime } from '@/lib/format';
-import { cn } from '@/lib/utils';
-import type { RoutineDetail, Subscription } from '@/types';
+import { Avatar, Chip, Dot, Pill, StatePill, Toggle, SIGNAL } from '@/components/sb';
+import type { FrontMatter, RoutineDetail } from '@/types';
 
-const SUB_TONE: Record<Subscription['status'], { tone: string; label: string }> = {
-  watching: { tone: 'text-run', label: 'Watching' },
-  reacting: { tone: 'text-brand-soft', label: 'Reacting' },
-  done: { tone: 'text-ok', label: 'Merged' },
-  needs_human: { tone: 'text-warn', label: 'Needs human' },
-};
+const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
+const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
+const toneColor: Record<string, string> = { ok: SIGNAL.success, bad: SIGNAL.failing, lease: SIGNAL.lease, run: SIGNAL.running, accent: '#5b9ee6', warn: SIGNAL.needs_human };
 
-function Meta({ icon: Icon, label, value }: { icon: typeof Cpu; label: string; value: React.ReactNode }) {
+function FrontMatterCard({ fm }: { fm: FrontMatter }) {
+  const Row = ({ k, children }: { k: string; children: React.ReactNode }) => (
+    <div className="grid items-start gap-3.5" style={{ gridTemplateColumns: '96px 1fr' }}>
+      <div className="pt-[3px] font-mono text-[10.5px] font-semibold text-dim">{k}</div>
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
   return (
-    <div className="flex items-center gap-2">
-      <Icon className="h-3.5 w-3.5 text-muted-2" />
-      <span className="text-[11px] uppercase tracking-wide text-muted-2">{label}</span>
-      <span className="font-mono text-[12px] text-fg">{value}</span>
+    <div className={CARD}>
+      <div className={`${LABEL} mb-4`}>Front matter · contract</div>
+      <div className="flex flex-col gap-[15px]">
+        <Row k="on:">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {fm.on.map((o, i) => (
+              <span key={i} className="flex items-center gap-1.5">
+                <Chip tone={o.tone === 'lease' ? 'blue' : 'default'}>
+                  <span style={o.tone === 'lease' ? { color: SIGNAL.lease } : undefined}>{o.key}</span>
+                </Chip>
+                {o.detail && <span className="font-mono text-[11px] text-muted-2">{o.detail}</span>}
+              </span>
+            ))}
+          </div>
+        </Row>
+        {fm.tools.length > 0 && (
+          <Row k="tools:">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {fm.tools.map((t, i) =>
+                t.sep ? (
+                  <span key={i} className="mx-0.5 h-[15px] w-px bg-line" />
+                ) : (
+                  <span key={i} className="rounded-[5px] font-mono text-[11px] font-medium" style={{ padding: '3px 8px', color: toneColor[t.tone ?? 'ok'], background: `${toneColor[t.tone ?? 'ok']}1a`, border: `1px solid ${toneColor[t.tone ?? 'ok']}3d` }}>
+                    {t.sign} {t.name}
+                  </span>
+                )
+              )}
+            </div>
+          </Row>
+        )}
+        <Row k="runtime:">
+          <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px] font-medium">
+            {fm.runtime.map((s, i) => (
+              <span key={i} style={{ color: i === 0 ? '#5b9ee6' : '#8a8474' }}>{s}</span>
+            ))}
+          </div>
+        </Row>
+        <Row k="concurrency:">
+          <div className="flex flex-col gap-[5px] font-mono text-[11px] font-medium text-[#ada695]">
+            {fm.concurrency.map((line, i) => (
+              <div key={i}>
+                <span className="text-dim-2">{line[0]}</span> {line[1]}
+                {line[2] != null && <> · <span className="text-dim-2">{line[2]}</span> {line[3]}</>}
+              </div>
+            ))}
+          </div>
+        </Row>
+      </div>
     </div>
   );
 }
 
-function GrantsCard({ d }: { d: RoutineDetail }) {
-  const mcp = d.grants.filter((g) => g.kind === 'mcp');
-  const caps = d.grants.filter((g) => g.kind === 'capability');
+function ReactiveFlowCard({ d }: { d: RoutineDetail }) {
   return (
-    <Card>
-      <CardHeader><CardTitle>Grants</CardTitle><Badge tone="neutral">least privilege</Badge></CardHeader>
-      <CardContent className="space-y-3 pt-1">
-        <div>
-          <div className="mb-1.5 text-[10px] uppercase tracking-wide text-muted-2">MCP connectors</div>
-          <div className="flex flex-wrap gap-1.5">
-            {mcp.length ? mcp.map((g) => (
-              <Link key={g.name} to="/connectors" className="inline-flex items-center gap-1.5 rounded-md border border-brand/25 bg-brand/10 px-2 py-1 text-[12px] text-brand-soft hover:border-brand/50">
-                <Cable className="h-3 w-3" /> {g.name}
-              </Link>
-            )) : <span className="text-[12px] text-muted-2">none</span>}
+    <div className={CARD}>
+      <div className={`${LABEL} mb-4`}>Reactive flow</div>
+      <div className="mb-[18px] flex items-center gap-2.5">
+        {d.flowNodes.map((n, i) => (
+          <span key={i} className="flex items-center gap-2.5">
+            {i > 0 && <span className="text-[16px] text-faint">→</span>}
+            <span
+              className="flex-1 rounded-md px-2 py-[11px] text-center"
+              style={n.tone === 'run' ? { border: '1px solid rgba(91,158,230,.35)', background: 'rgba(91,158,230,.07)' } : { border: '1px solid #2b2620', background: '#1c1915' }}
+            >
+              <div className="font-display text-[12px] font-semibold text-t2">{n.title}</div>
+              <div className="mt-0.5 font-mono text-[10px] text-dim">{n.sub}</div>
+            </span>
+          </span>
+        ))}
+      </div>
+      {d.reactions.length > 0 && (
+        <>
+          <div className="mb-2.5 font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2">On the opened PR — reactions</div>
+          <div className="flex flex-col gap-[9px]">
+            {d.reactions.map((r, i) => (
+              <div key={i} className="flex items-center gap-2.5">
+                <Dot color={r.dot} size={7} />
+                <span className="flex-1 font-mono text-[11px] font-medium text-[#ada695]">{r.when}</span>
+                <span className="text-faint">→</span>
+                <span className="rounded-[5px] font-mono text-[11px] font-semibold" style={{ padding: '2px 8px', color: toneColor[r.toTone], background: `${r.toTone === 'ok' ? 'rgba(95,191,134,.1)' : 'rgba(91,158,230,.1)'}`, border: `1px solid ${r.toTone === 'ok' ? 'rgba(95,191,134,.25)' : 'rgba(91,158,230,.25)'}` }}>{r.to}</span>
+              </div>
+            ))}
           </div>
-        </div>
-        <div>
-          <div className="mb-1.5 text-[10px] uppercase tracking-wide text-muted-2">Capabilities</div>
-          <div className="flex flex-wrap gap-1.5">
-            {caps.length ? caps.map((g) => (
-              <span key={g.name} className="rounded-md border border-line bg-surface-2 px-2 py-1 font-mono text-[11px] text-muted">{g.name}</span>
-            )) : <span className="text-[12px] text-muted-2">none</span>}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+        </>
+      )}
+    </div>
   );
 }
 
-function ConcurrencyCard({ d }: { d: RoutineDetail }) {
-  const isWrite = d.risk === 'write';
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Concurrency &amp; collisions</CardTitle>
-        <Badge tone={isWrite ? 'warn' : 'neutral'}>{isWrite ? 'guarded' : 'read-only'}</Badge>
-      </CardHeader>
-      <CardContent className="space-y-2.5 pt-1 text-[12px]">
-        {d.lease ? (
-          <div className="flex items-center justify-between rounded-md border border-brand/25 bg-brand/10 px-3 py-2">
-            <span className="inline-flex items-center gap-1.5 text-brand-soft"><Cable className="h-3.5 w-3.5" /> Holding lease</span>
-            <span className="font-mono text-[11px] text-brand-soft">{d.lease.resource} · {relativeTime(d.lease.expires_at)}</span>
-          </div>
-        ) : (
-          <div className="rounded-md border border-line-soft bg-surface px-3 py-2 text-muted-2">No active lease.</div>
-        )}
-        {isWrite ? (
-          <ul className="space-y-1.5">
-            <Guard on label="Concurrency group" detail="per-PR; serialized (cancel_in_progress: false)" />
-            <Guard on label="Lease" detail={`pr:<repo>#<n> · claim before act`} />
-            <Guard on label="SHA barrier" detail="stale verdict self-drops once head moves" />
-            <Guard on label="Yield to human" detail="stand down if a human pushed after our last fix" />
-            <Guard on label="Budget" detail={`${d.reactions[0]?.budget ?? '3'} iterations → needs-human`} />
-          </ul>
-        ) : (
-          <p className="text-muted-2">Read-only routine — emits signals, never mutates a shared target, so it needs no lease.</p>
-        )}
-      </CardContent>
-    </Card>
+function LeaseCard({ d }: { d: RoutineDetail }) {
+  if (!d.lease) return null;
+  const l = d.lease;
+  const bar = (pct: number, color: string) => (
+    <div className="relative h-[6px] overflow-hidden rounded-[3px]" style={{ background: 'rgba(255,255,255,.09)' }}>
+      <div className="absolute left-0 top-0 bottom-0 rounded-[3px]" style={{ width: `${pct}%`, background: color }} />
+    </div>
   );
-}
-
-function Guard({ on, label, detail }: { on?: boolean; label: string; detail: string }) {
   return (
-    <li className="flex items-start gap-2">
-      <ShieldHalf className={cn('mt-0.5 h-3.5 w-3.5 shrink-0', on ? 'text-ok' : 'text-muted-2')} />
-      <span><span className="font-medium text-fg">{label}</span> <span className="text-muted-2">— {detail}</span></span>
-    </li>
+    <div className="rounded-lg border bg-surface p-[18px]" style={{ borderColor: 'rgba(180,154,230,.28)' }}>
+      <div className="mb-[15px] font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-lease">Live lease &amp; budget</div>
+      <div className="mb-3.5 flex items-center justify-between">
+        <span className="font-sans text-[12px] font-medium text-muted">Claiming</span>
+        <span className="font-mono text-[12px] font-semibold text-lease">{l.claiming}</span>
+      </div>
+      <div className="mb-3.5">
+        <div className="mb-1.5 flex justify-between font-mono text-[11px] font-medium text-muted-2"><span>Lease TTL</span><span className="text-t2">{l.ttlLeft}</span></div>
+        {bar(l.ttlPct, SIGNAL.lease)}
+      </div>
+      <div className="mb-3.5">
+        <div className="mb-1.5 flex justify-between font-mono text-[11px] font-medium text-muted-2"><span>Iteration budget</span><span className="text-t2">{l.budget}</span></div>
+        {bar(l.budgetPct, SIGNAL.needs_human)}
+      </div>
+      <div className="flex items-center justify-between border-t border-line-soft pt-[11px] font-mono text-[11px] font-medium">
+        <span className="text-muted-2">yield_to_human <span className="text-ok">{l.yield ? 'on' : 'off'}</span></span>
+        <span className="text-muted-2">barrier <span className="text-[#ada695]">{l.barrier}</span></span>
+      </div>
+    </div>
   );
 }
 
 function OwnedPRsCard({ d }: { d: RoutineDetail }) {
-  if (!d.subscriptions.length) return null;
+  if (!d.ownedPRs.length) return null;
   return (
-    <Card>
-      <CardHeader><CardTitle>Owned PRs</CardTitle><Badge tone="brand"><Eye className="h-3 w-3" /> {d.subscriptions.length} watched</Badge></CardHeader>
-      <CardContent className="space-y-2 pt-1">
-        {d.subscriptions.map((s) => {
-          const m = SUB_TONE[s.status];
-          const pct = Math.round((s.budget_used / s.budget_max) * 100);
-          return (
-            <div key={s.id} className="rounded-md border border-line-soft bg-surface px-3 py-2.5">
-              <div className="flex items-center justify-between">
-                <span className="inline-flex items-center gap-1.5 font-mono text-[12px] text-fg">
-                  <GitPullRequest className="h-3.5 w-3.5 text-muted-2" /> {s.pr_ref}
-                </span>
-                <span className={cn('text-[11px] font-medium', m.tone)}>{m.label}</span>
-              </div>
-              <p className="mt-0.5 line-clamp-1 text-[12px] text-muted">{s.pr_title}</p>
-              {s.last_reaction && <p className="mt-1 text-[11px] text-muted-2">↳ {s.last_reaction}</p>}
-              <div className="mt-2 flex items-center gap-2">
-                <div className="h-1 flex-1 overflow-hidden rounded-full bg-surface-2">
-                  <div className={cn('h-full rounded-full', pct >= 100 ? 'bg-warn' : 'bg-brand')} style={{ width: `${pct}%` }} />
-                </div>
-                <span className="tabular text-[10px] text-muted-2">budget {s.budget_used}/{s.budget_max}</span>
-              </div>
+    <div className={CARD}>
+      <div className="mb-3.5 flex items-center gap-2">
+        <span className={LABEL}>Owned PRs · subscriptions</span>
+        <span className="rounded-[5px] bg-white/[0.05] px-1.5 font-mono text-[10px] font-semibold text-dim">{d.ownedPRs.length}</span>
+      </div>
+      <div className="flex flex-col gap-3">
+        {d.ownedPRs.map((p) => (
+          <div key={p.ref} className="border-b border-line-soft pb-3 last:border-0 last:pb-0">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="font-mono text-[12px] font-semibold text-brand">{p.ref}</span>
+                <span className="truncate font-sans text-[12px] font-medium text-t2">{p.title}</span>
+              </span>
+              <Pill label={p.label} color={SIGNAL[p.status as keyof typeof SIGNAL] ?? SIGNAL.idle} />
             </div>
-          );
-        })}
-      </CardContent>
-    </Card>
+            <div className="font-mono text-[10.5px] font-medium text-dim">{p.waiting} · last {p.last} · budget {p.budget}</div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
-}
-
-function buildRoutineMd(d: RoutineDetail): string {
-  const lines: string[] = ['---'];
-  lines.push(`name: ${d.name}`);
-  lines.push(`slug: ${d.slug}`);
-  lines.push(`summary: >-`);
-  lines.push(`  ${d.summary}`);
-  lines.push(`owner: ${d.owner.handle}`);
-  lines.push(`team: ${d.team?.id ?? 'team'}`);
-  lines.push(`tags: [${d.tags.join(', ')}]`);
-  lines.push(`enabled: ${d.enabled}`);
-  lines.push(`visibility: ${d.visibility}`);
-  lines.push('on:');
-  d.triggers.forEach((t) => lines.push(`  - ${t.type}: { ${t.label}${t.detail ? ` }   # ${t.detail}` : ' }'}`));
-  lines.push('tools:');
-  const mcp = d.grants.filter((g) => g.kind === 'mcp').map((g) => g.name);
-  const caps = d.grants.filter((g) => g.kind === 'capability').map((g) => g.name);
-  lines.push(`  mcp: [${mcp.join(', ')}]`);
-  lines.push(`  capabilities: [${caps.join(', ')}]`);
-  lines.push('runtime:');
-  lines.push(`  model: ${d.model}`);
-  lines.push(`  repo: ${d.repo}`);
-  lines.push(`  branch: ${d.branch}`);
-  if (d.risk === 'write') {
-    lines.push('concurrency:');
-    lines.push('  group: "${{ event.pr.number }}"');
-    lines.push('  lease: { resource: "pr:${{ event.repo }}#${{ event.pr.number }}", ttl: 20m }');
-    lines.push('  barrier: { stale_if_sha_changed: "${{ event.pr.head_sha }}" }');
-    lines.push('  yield_to_human: true');
-    if (d.reactions[0]?.budget) lines.push(`  budget: { max_iterations: ${d.reactions[0].budget}, on_exhausted: needs-human }`);
-  }
-  if (d.reactions.length) {
-    lines.push('flow:');
-    lines.push('  subscribe: { events: [check_run, pull_request_review, pull_request], until: [merged, closed] }');
-    lines.push('  reactions:');
-    d.reactions.forEach((r) => {
-      lines.push(`    - when: { ${r.whenLabel} }`);
-      lines.push(`      do: ${r.doLabel}${r.budget ? `   # budget ${r.budget}` : ''}`);
-    });
-  }
-  lines.push('---');
-  lines.push('');
-  lines.push('## Prompt');
-  lines.push('');
-  lines.push(d.prompt);
-  return lines.join('\n');
 }
 
 export function RoutineDetailPage() {
   const { slug } = useParams();
-  const { data: d, isLoading } = useRoutine(slug);
+  const { data: d } = useRoutine(slug);
   const toggle = useToggleRoutine();
   const dispatch = useDispatchRoutine();
-
-  if (isLoading || !d) {
-    return (
-      <Page>
-        <Skeleton className="mb-4 h-6 w-40" />
-        <Skeleton className="mb-3 h-24 w-full" />
-        <Skeleton className="h-72 w-full" />
-      </Page>
-    );
-  }
+  if (!d) return <div className="px-6 py-10 text-muted">Loading…</div>;
 
   return (
-    <Page>
-      <Link to="/" className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted hover:text-fg">
-        <ArrowLeft className="h-4 w-4" /> Fleet
-      </Link>
-
-      {/* Header */}
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <div className="flex items-center gap-3">
-            <StateSignal state={d.state} />
-            <h1 className="font-display text-2xl font-semibold tracking-tight text-fg">{d.name}</h1>
-            {d.team && (
-              <span className="rounded-full border px-2 py-0.5 text-[11px] font-medium"
-                style={{ borderColor: `${d.team.accent}33`, background: `${d.team.accent}12`, color: d.team.accent }}>
-                {d.team.name}
-              </span>
-            )}
-            {d.risk === 'write' && <Badge tone="warn">write</Badge>}
+    <div className="font-sans text-fg animate-fade-up">
+      {/* header band */}
+      <div className="border-b border-line-soft bg-head px-[26px] py-[22px]">
+        <div className="mb-3 font-mono text-[12px] font-medium text-dim">
+          <Link to="/" className="text-brand">{d.breadcrumb?.[0] ?? 'Fleet'}</Link> › {d.slug}
+        </div>
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-3.5">
+            <span className="font-display text-[23px] font-bold tracking-tight">{d.name}</span>
+            <StatePill state={d.state} />
+            <Toggle on={d.enabled} onCheckedChange={(v) => toggle.mutate({ slug: d.slug, enabled: v })} />
           </div>
-          <p className="mt-1.5 max-w-2xl text-sm text-muted">{d.summary}</p>
-          <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
-            <div className="flex items-center gap-2">
-              <Avatar name={d.owner.name} accent={d.owner.accent} size={20} />
-              <span className="text-[12px] text-muted">{d.owner.name}</span>
-            </div>
-            <Meta icon={Cpu} label="model" value={d.model} />
-            <Meta icon={GitBranch} label="repo" value={`${d.repo.split('/')[1]}@${d.branch}`} />
-            <Meta icon={FileCode2} label="file" value={d.filePath} />
+          <div className="flex items-center gap-[9px]">
+            <button onClick={() => dispatch.mutate(d.slug)} className="flex h-[34px] items-center gap-[7px] rounded-md bg-brand px-3.5 font-display text-[12.5px] font-semibold text-[#16130f] hover:bg-brand-deep">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M3 2 L10 6 L3 10 Z" /></svg>Run now
+            </button>
+            <button className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Edit</button>
+            <button className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Validate</button>
+            <button className="flex h-[34px] items-center rounded-md border border-bad/40 px-[13px] font-display text-[12.5px] font-semibold text-bad hover:bg-bad/10">Kill</button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-2 rounded-md border border-line bg-surface px-3 py-1.5">
-            <span className="text-[12px] text-muted">{d.enabled ? 'Enabled' : 'Disabled'}</span>
-            <Switch checked={d.enabled} onCheckedChange={(v) => toggle.mutate({ slug: d.slug, enabled: v })} />
-          </div>
-          <Button variant="secondary"><Pencil className="h-4 w-4" /> Edit</Button>
-          <Button variant="primary" onClick={() => dispatch.mutate(d.slug)}><Play className="h-4 w-4" /> Run now</Button>
+        <div className="mt-[11px] flex flex-wrap items-center gap-2.5">
+          <span className="font-sans text-[13px] text-muted">{d.summary}</span>
+          <span className="h-[13px] w-px bg-line" />
+          <span className="inline-flex items-center gap-[7px]"><Avatar color={d.ownerColor} initials={d.initials} size={20} /><span className="font-sans text-[12px] font-medium text-t2">{d.owner}</span><span className="text-faint">·</span><span className="font-mono text-[11px] font-medium text-dim">{d.team}</span></span>
+          {d.connectors.slice(0, 2).map((c) => <Chip key={c}>{c}</Chip>)}
+          <span className="ml-auto font-mono text-[12px] font-medium text-brand">View raw {d.file} ›</span>
         </div>
       </div>
 
-      <Tabs defaultValue="overview">
-        <TabsList className="mb-5">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="runs">Runs <span className="text-muted-2">{d.runs.length}</span></TabsTrigger>
-          <TabsTrigger value="definition">Definition</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="overview">
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <div className="space-y-4 lg:col-span-2">
-              <Card>
-                <CardHeader><CardTitle>Flow</CardTitle>
-                  <Badge tone={d.reactions.length ? 'brand' : 'neutral'}>{d.reactions.length ? 'reactive' : 'one-shot'}</Badge>
-                </CardHeader>
-                <CardContent className="pt-1">
-                  <FlowDiagram name={d.name} triggers={d.triggers} reactions={d.reactions} statusSurface="pr-comment" />
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader><CardTitle>Recent runs</CardTitle>
-                  <Link to="/runs" className="text-[12px] text-brand-soft hover:underline">View all</Link>
-                </CardHeader>
-                <div className="border-t border-line-soft">
-                  {d.runs.slice(0, 6).map((run) => (
-                    <div key={run.id} className="flex items-center gap-3 border-b border-line-soft px-5 py-2.5 last:border-0">
-                      <div className="w-32"><RunStatusPill status={run.status} /></div>
-                      <p className="min-w-0 flex-1 truncate text-[12px] text-muted">{run.summary ?? run.trigger_summary}</p>
-                      {run.target && <span className="font-mono text-[11px] text-muted-2">{run.target.replace('pr:newton', '')}</span>}
-                      <span className="tabular w-14 text-right text-[11px] text-muted-2">{duration(run.duration_sec)}</span>
-                      <span className="w-16 text-right text-[11px] text-muted-2">{relativeTime(run.started_at)}</span>
-                    </div>
-                  ))}
-                </div>
-              </Card>
+      {/* body */}
+      <div className="grid gap-[22px] px-[26px] py-[22px] pb-[26px]" style={{ gridTemplateColumns: 'minmax(0,1.55fr) minmax(0,1fr)' }}>
+        <div className="flex min-w-0 flex-col gap-[18px]">
+          <FrontMatterCard fm={d.frontMatter} />
+          <ReactiveFlowCard d={d} />
+          <div className={CARD}>
+            <div className="mb-3 flex items-center justify-between">
+              <div className={LABEL}>Prompt body</div>
+              <div className="font-mono text-[11px] font-medium text-brand">Open in editor ›</div>
             </div>
-
-            <div className="space-y-4">
-              <ConcurrencyCard d={d} />
-              <OwnedPRsCard d={d} />
-              <GrantsCard d={d} />
+            <pre className="overflow-auto rounded-md border border-line-soft bg-code px-4 py-3.5 font-mono text-[12px] leading-[1.7] text-muted">
+              {d.prompt.split('\n').map((line, i) => (
+                <div key={i} style={line.startsWith('##') ? { color: '#6f685c' } : undefined}>{line || ' '}</div>
+              ))}
+            </pre>
+          </div>
+        </div>
+        <div className="flex min-w-0 flex-col gap-[18px]">
+          <LeaseCard d={d} />
+          <OwnedPRsCard d={d} />
+          <div className={CARD}>
+            <div className="mb-3.5 flex items-center justify-between">
+              <span className={LABEL}>Recent runs</span>
+              <Link to="/runs" className="font-mono text-[11px] font-medium text-brand">All runs ›</Link>
+            </div>
+            <div className="flex flex-col">
+              {d.runHistory.map((h) => (
+                <Link key={h.id} to={`/runs/${h.id}`} className="flex items-center gap-[11px] border-b border-line-soft py-[9px] last:border-0 hover:opacity-80">
+                  <Dot state={h.status} size={8} />
+                  <span className="w-[74px] shrink-0 font-mono text-[11.5px] font-semibold text-t2">{h.id}</span>
+                  <span className="flex-1 truncate font-mono text-[11px] font-medium text-dim">{h.trigger}</span>
+                  <span className="shrink-0 font-mono text-[11px] font-medium text-muted-2">{h.dur}</span>
+                  <span className="w-[58px] shrink-0 text-right font-mono text-[11px] font-medium text-faint">{h.ago}</span>
+                </Link>
+              ))}
             </div>
           </div>
-        </TabsContent>
-
-        <TabsContent value="runs">
-          <Card className="overflow-hidden">
-            {d.runs.map((run) => (
-              <div key={run.id} className="flex items-center gap-3 border-b border-line-soft px-5 py-3 last:border-0">
-                <div className="w-32"><RunStatusPill status={run.status} /></div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13px] text-fg">{run.summary ?? run.trigger_summary}</p>
-                  <p className="font-mono text-[11px] text-muted-2">{run.trigger_type} · {run.decision}</p>
-                </div>
-                {run.target && <span className="font-mono text-[11px] text-muted-2">{run.target.replace('pr:newton', '')}</span>}
-                <span className="tabular w-16 text-right text-[12px] text-muted">{duration(run.duration_sec)}</span>
-                <span className="w-20 text-right text-[12px] text-muted-2">{relativeTime(run.started_at)}</span>
-                <span className="tabular w-14 text-right text-[12px] text-muted">{money(run.cost)}</span>
-              </div>
-            ))}
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="definition">
-          <Card className="overflow-hidden">
-            <CardHeader>
-              <CardTitle className="font-mono">{d.filePath}</CardTitle>
-              <Badge tone="ok">source of truth</Badge>
-            </CardHeader>
-            <pre className="max-h-[640px] overflow-auto border-t border-line-soft bg-bg px-5 py-4 font-mono text-[12px] leading-relaxed text-muted">
-              <code>{buildRoutineMd(d)}</code>
-            </pre>
-          </Card>
-        </TabsContent>
-      </Tabs>
-    </Page>
+        </div>
+      </div>
+    </div>
   );
 }
