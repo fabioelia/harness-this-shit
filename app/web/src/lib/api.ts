@@ -61,6 +61,13 @@ export const useRun = (id?: string) =>
   });
 export const useConnectors = () => useQuery({ queryKey: ['connectors'], queryFn: () => get<Connector[]>('/api/connectors'), refetchInterval: 15000 });
 export const useAgents = () => useQuery({ queryKey: ['agents'], queryFn: () => get<Agent[]>('/api/agents'), refetchInterval: 5000 });
+export function useLoadSamples() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => post<{ repo: string; routines: string[]; agents: string[] }>('/api/samples/load', {}),
+    onSuccess: () => { ['routines', 'agents', 'stats'].forEach((k) => qc.invalidateQueries({ queryKey: [k] })); },
+  });
+}
 export const useAgent = (name?: string) =>
   useQuery({ queryKey: ['agent', name], enabled: !!name, queryFn: () => get<AgentDetail>(`/api/agents/${name}`), refetchInterval: (q) => (q.state.data?.status === 'working' ? 2000 : 8000) });
 export function useCreateAgent() {

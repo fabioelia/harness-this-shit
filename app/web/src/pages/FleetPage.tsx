@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { useRoutines, useStats, useToggleRoutine, useKillSwitch, useConnectors } from '@/lib/api';
+import { useRoutines, useStats, useToggleRoutine, useKillSwitch, useConnectors, useLoadSamples } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { Routine, Stats } from '@/types';
@@ -109,6 +109,7 @@ export function FleetPage() {
   const { data: stats } = useStats();
   const { data: connectors } = useConnectors();
   const kill = useKillSwitch();
+  const loadSamples = useLoadSamples();
   const ghOff = connectors?.find((c) => c.code === 'GH')?.health === 'off';
   const slackOff = connectors?.find((c) => c.code === 'SL')?.health === 'off';
   const [q, setQ] = useState('');
@@ -166,6 +167,9 @@ export function FleetPage() {
             className="flex h-9 items-center gap-[7px] rounded-md border border-bad/40 px-3.5 font-display text-[12.5px] font-semibold text-bad transition-colors hover:bg-bad/10"
           >
             <StopIcon />{stats?.killSwitch ? 'Halted' : 'Stop all'}
+          </button>
+          <button onClick={() => loadSamples.mutate()} disabled={loadSamples.isPending} className="flex h-9 items-center gap-2 rounded-md border border-line bg-surface-2 px-3.5 font-display text-[12.5px] font-semibold text-t2 hover:border-hair disabled:opacity-40" title="Seed 3 real developer flows (routines + agents)">
+            {loadSamples.isPending ? 'Loading…' : 'Load examples'}
           </button>
           <Link to="/routines/new" className="flex h-9 items-center gap-2 rounded-md bg-brand px-[15px] font-display text-[12.5px] font-semibold text-[#16130f] transition-colors hover:bg-brand-deep">
             <span className="-mt-px text-[16px] leading-none">+</span>New routine
@@ -229,7 +233,7 @@ export function FleetPage() {
               routines.length === 0 ? (
                 <>
                   A routine is a saved prompt + granted tools + triggers.{' '}
-                  <Link to="/routines/new" className="text-brand hover:underline">Create your first one ›</Link>
+                  <button onClick={() => loadSamples.mutate()} disabled={loadSamples.isPending} className="text-brand hover:underline disabled:opacity-50">{loadSamples.isPending ? 'Loading…' : 'Load 3 example flows'}</button>{' '}or <Link to="/routines/new" className="text-brand hover:underline">create your own ›</Link>
                 </>
               ) : (
                 'Try clearing the search or filters.'

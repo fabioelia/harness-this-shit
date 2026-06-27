@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { getDb, all, one, run } from './db.js';
 import { runClaude, buildPrompt } from './runner.js';
 import { integrationStatus, listRepos, listOrgs, listChecks, claudeAccount, testConnector, bustStatus, gh } from './integrations.js';
+import { SAMPLE_ROUTINES, SAMPLE_AGENTS } from './samples.js';
 
 const app = express();
 // Same-machine tool: only allow the local web origin to call the API from a browser.
@@ -533,14 +534,8 @@ app.get('/api/routines/:slug', (req, res) => {
   res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches });
 });
 
-app.post('/api/routines', (req, res) => {
-  const b = req.body || {};
-  const name = (b.name || '').trim();
-  if (!name) return res.status(400).json({ error: 'A routine name is required.' });
-  const slug = (b.slug || slugify(name)).trim();
-  if (!slug) return res.status(400).json({ error: 'A valid slug is required.' });
-  if (one('SELECT 1 FROM routines WHERE slug=?', slug)) return res.status(409).json({ error: `A routine with slug "${slug}" already exists.` });
-
+function insertRoutine(b) {
+  const slug = (b.slug || slugify(b.name)).trim();
   const owner = (b.owner || '').trim() || 'unassigned';
   const team = (b.team || '').trim() || 'general';
   const triggers = Array.isArray(b.triggers) ? b.triggers.filter(Boolean) : [];
@@ -552,18 +547,53 @@ app.post('/api/routines', (req, res) => {
   const enabled = b.enabled === false ? 0 : 1;
   const ord = (one('SELECT MAX(ord) AS m FROM routines').m ?? -1) + 1;
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
-
   run(
     `INSERT INTO routines
       (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    slug, name, (b.summary || '').trim(), owner, team,
+    slug, (b.name || '').trim(), (b.summary || '').trim(), owner, team,
     JSON.stringify(triggers), JSON.stringify(connectors),
     'idle', 'never', 'idle', next, null, '$0.00', enabled, '', '', '—',
     ownerColor(owner), initialsOf(owner), ord,
     (b.prompt || '').trim(), normModel(b.model), (b.repo || '').trim(), (b.branch || 'main').trim(),
     JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions), normEffort(b.effort), b.memory ? 1 : 0
   );
+  return slug;
+}
+// One-click: seed three real developer flows (routines + agents). Idempotent.
+app.get('/api/samples', (_q, res) => res.json({
+  scenarios: [...new Set(SAMPLE_ROUTINES.map((r) => r.scenario))].map((s) => ({
+    scenario: s, routines: SAMPLE_ROUTINES.filter((r) => r.scenario === s).map((r) => ({ slug: r.slug, name: r.name, summary: r.summary, exists: !!one('SELECT 1 FROM routines WHERE slug=?', r.slug) })),
+  })),
+  agents: SAMPLE_AGENTS.map((a) => ({ name: a.name, summary: a.summary, exists: !!one('SELECT 1 FROM agents WHERE name=?', a.name) })),
+}));
+app.post('/api/samples/load', async (req, res) => {
+  const repos = await listRepos({});
+  const repo = String(req.body?.repo || '').trim() || repos[0] || '';
+  const fill = (s) => String(s).split('__REPO__').join(repo || 'OWNER/REPO');
+  const routines = [], agents = [], skipped = [];
+  for (const a of SAMPLE_AGENTS) {
+    if (one('SELECT 1 FROM agents WHERE name=?', a.name)) { skipped.push(`@${a.name}`); continue; }
+    run('INSERT INTO agents (name,role,summary,connectors,model,memory,av_color,created_at) VALUES (?,?,?,?,?,?,?,?)',
+      a.name, fill(a.role), a.summary, JSON.stringify(a.connectors || []), normModel(a.model), a.memory ? 1 : 0, ownerColor(a.name), now());
+    agents.push(a.name);
+  }
+  for (const rt of SAMPLE_ROUTINES) {
+    if (one('SELECT 1 FROM routines WHERE slug=?', rt.slug)) { skipped.push(rt.slug); continue; }
+    insertRoutine({ ...rt, repo: rt.repo === '__REPO__' ? repo : rt.repo, prompt: fill(rt.prompt) });
+    routines.push(rt.slug);
+  }
+  if (routines.length || agents.length) logActivity(`loaded ${routines.length} example routines + ${agents.length} agents${repo ? ` for ${repo}` : ''}`, 'success');
+  res.json({ repo, routines, agents, skipped });
+});
+app.post('/api/routines', (req, res) => {
+  const b = req.body || {};
+  const name = (b.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'A routine name is required.' });
+  const slug = (b.slug || slugify(name)).trim();
+  if (!slug) return res.status(400).json({ error: 'A valid slug is required.' });
+  if (one('SELECT 1 FROM routines WHERE slug=?', slug)) return res.status(409).json({ error: `A routine with slug "${slug}" already exists.` });
+  insertRoutine(b);
   res.status(201).json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', slug)));
 });
 
