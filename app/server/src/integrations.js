@@ -58,6 +58,26 @@ export async function enrichEvent(event) {
   };
 }
 
+// Live status of the harness's real integrations (cached ~30s).
+let _status = null, _statusAt = 0;
+export async function integrationStatus() {
+  if (_status && Date.now() - _statusAt < 30_000) return _status;
+  const who = await gh(['api', 'user', '-q', '.login']);
+  let slack = { ok: false };
+  if (process.env.SLACK_BOT_TOKEN) {
+    try {
+      const r = await fetch('https://slack.com/api/auth.test', { method: 'POST', headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` } });
+      slack = await r.json();
+    } catch { /* offline */ }
+  }
+  _status = {
+    github: { connected: who.code === 0, account: who.code === 0 ? who.out : null },
+    slack: { connected: !!slack.ok, team: slack.team || null, bot: slack.user || null },
+  };
+  _statusAt = Date.now();
+  return _status;
+}
+
 export async function postSlack(channel, text) {
   const token = process.env.SLACK_BOT_TOKEN;
   if (!token) return { ok: false, detail: 'SLACK_BOT_TOKEN not set' };

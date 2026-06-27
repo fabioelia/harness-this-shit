@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { useCreateRoutine } from '@/lib/api';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useCreateRoutine, useUpdateRoutine, useRoutine } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 const TRIGGERS = ['schedule', 'push', 'label', 'comment', 'check_run', 'pull_request', 'release', 'sentry', 'slack', 'webhook', 'manual', 'api', 'after'];
@@ -50,7 +50,12 @@ const onLine = (t: string, slug: string) =>
 
 export function NewRoutinePage() {
   const navigate = useNavigate();
+  const { slug: editSlug } = useParams();
+  const isEdit = !!editSlug;
+  const existing = useRoutine(editSlug);
   const create = useCreateRoutine();
+  const update = useUpdateRoutine();
+  const mut = isEdit ? update : create;
 
   const [name, setName] = useState('');
   const [slugTouched, setSlugTouched] = useState(false);
@@ -73,6 +78,22 @@ export function NewRoutinePage() {
     set((arr) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]));
   const sinksArr = sinks.map((t) => (t === 'slack' ? { type: 'slack', target: slackChannel.trim() } : { type: t }));
   const chainArr = chain.split(',').map((s) => slugify(s)).filter(Boolean);
+
+  // Prefill when editing
+  useEffect(() => {
+    const d = existing.data;
+    if (!isEdit || !d) return;
+    setName(d.name); setSlugTouched(true); setSlugInput(d.slug);
+    setSummary(d.summary); setOwner(d.owner); setTeam(d.team);
+    setTriggers(d.triggers); setConnectors(d.connectors);
+    setModel(d.model || 'claude-opus-4-8'); setRepo(d.repo || ''); setBranch(d.branch || 'main');
+    setPrompt(d.prompt || '');
+    setSinks(d.sinks.map((s) => s.type));
+    const slk = d.sinks.find((s) => s.type === 'slack');
+    if (slk?.target) setSlackChannel(slk.target);
+    setChain(d.chain.join(', '));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existing.data, isEdit]);
 
   const md = useMemo(() => {
     const L: string[] = ['---'];
@@ -106,35 +127,34 @@ export function NewRoutinePage() {
   const valid = name.trim().length > 0 && slug.length > 0;
   function submit() {
     if (!valid) return;
-    create.mutate(
-      { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, sinks: sinksArr, chain: chainArr },
-      { onSuccess: (r) => navigate(`/routines/${r.slug}`) }
-    );
+    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, sinks: sinksArr, chain: chainArr };
+    if (isEdit) update.mutate({ slug: editSlug!, body }, { onSuccess: () => navigate(`/routines/${editSlug}`) });
+    else create.mutate(body, { onSuccess: (r) => navigate(`/routines/${r.slug}`) });
   }
 
   return (
     <div className="font-sans text-fg animate-fade-up">
       <div className="border-b border-line-soft bg-head px-[26px] py-[22px]">
         <div className="mb-3 font-mono text-[12px] font-medium text-dim">
-          <span className="text-brand">Switchboard</span> › <Link to="/" className="text-brand">Fleet</Link> › New routine
+          <span className="text-brand">Switchboard</span> › <Link to="/" className="text-brand">Fleet</Link> › {isEdit ? <><Link to={`/routines/${editSlug}`} className="text-brand">{editSlug}</Link> › Edit</> : 'New routine'}
         </div>
         <div className="flex items-center justify-between gap-4">
           <div>
-            <div className="font-display text-[23px] font-bold tracking-tight">New routine</div>
-            <div className="mt-1 text-[13px] text-muted-2">A routine is one file. Fill these in — the <span className="font-mono text-[#ada695]">.routine.md</span> on the right updates live, and is committed on create.</div>
+            <div className="font-display text-[23px] font-bold tracking-tight">{isEdit ? 'Edit routine' : 'New routine'}</div>
+            <div className="mt-1 text-[13px] text-muted-2">A routine is one file. Fill these in — the <span className="font-mono text-[#ada695]">.routine.md</span> on the right updates live, and is committed on {isEdit ? 'save' : 'create'}.</div>
           </div>
           <div className="flex items-center gap-[9px]">
-            <Link to="/" className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Cancel</Link>
+            <Link to={isEdit ? `/routines/${editSlug}` : '/'} className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Cancel</Link>
             <button
               onClick={submit}
-              disabled={!valid || create.isPending}
+              disabled={!valid || mut.isPending}
               className="flex h-[34px] items-center gap-[7px] rounded-md bg-brand px-3.5 font-display text-[12.5px] font-semibold text-[#16130f] transition-colors hover:bg-brand-deep disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {create.isPending ? 'Creating…' : 'Create routine'}
+              {mut.isPending ? (isEdit ? 'Saving…' : 'Creating…') : isEdit ? 'Save changes' : 'Create routine'}
             </button>
           </div>
         </div>
-        {create.isError && <div className="mt-3 inline-block rounded-md border border-bad/30 bg-bad/10 px-3 py-1.5 text-[12px] text-bad">{(create.error as Error).message}</div>}
+        {mut.isError && <div className="mt-3 inline-block rounded-md border border-bad/30 bg-bad/10 px-3 py-1.5 text-[12px] text-bad">{(mut.error as Error).message}</div>}
       </div>
 
       <div className="grid gap-[22px] px-[26px] py-[22px] pb-[26px]" style={{ gridTemplateColumns: 'minmax(0,1.35fr) minmax(0,1fr)' }}>
@@ -150,7 +170,7 @@ export function NewRoutinePage() {
               <div>
                 <div className={LABEL}>Slug · file name</div>
                 <div className="flex items-center gap-2">
-                  <input value={slug} onChange={(e) => { setSlugTouched(true); setSlugInput(slugify(e.target.value)); }} placeholder="pr-attention-digest" className={cn(inputCls, 'font-mono')} />
+                  <input value={slug} readOnly={isEdit} onChange={(e) => { setSlugTouched(true); setSlugInput(slugify(e.target.value)); }} placeholder="pr-attention-digest" className={cn(inputCls, 'font-mono', isEdit && 'opacity-60')} />
                   <span className="shrink-0 font-mono text-[12px] text-dim">.routine.md</span>
                 </div>
               </div>

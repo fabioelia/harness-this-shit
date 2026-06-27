@@ -16,6 +16,7 @@ export function App() {
         <Route element={<AppShell />}>
           <Route path="/" element={<FleetPage />} />
           <Route path="/routines/new" element={<NewRoutinePage />} />
+          <Route path="/routines/:slug/edit" element={<NewRoutinePage />} />
           <Route path="/routines/:slug" element={<RoutineDetailPage />} />
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />

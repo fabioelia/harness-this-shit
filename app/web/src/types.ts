@@ -13,6 +13,9 @@ export interface Routine {
   connectors: string[];
   sinks: Sink[];
   chain: string[];
+  model: string;
+  repo: string;
+  branch: string;
   state: string;
   enabled: boolean;
   lastAgo: string;

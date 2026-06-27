@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useRoutines, useStats, useToggleRoutine, useKillSwitch } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, Sbar, Spark, StatePill, Toggle, makeHist } from '@/components/sb';
+import { cn } from '@/lib/utils';
 import type { Routine, Stats } from '@/types';
 
 const GRID = 'grid-template-columns:36px minmax(0,2.2fr) minmax(0,1.5fr) 156px 144px 116px 92px 132px 78px';
@@ -18,6 +19,26 @@ function Caret() {
     <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="#767063" strokeWidth="1.4">
       <path d="M2 4 L5 7 L8 4" strokeLinecap="round" />
     </svg>
+  );
+}
+
+function FilterSelect({ value, onChange, label, options }: { value: string; onChange: (v: string) => void; label: string; options: string[] }) {
+  return (
+    <div className="relative">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        style={{ colorScheme: 'dark' }}
+        className={cn(
+          'h-[34px] appearance-none rounded-md border bg-surface pl-3 pr-7 font-sans text-[12.5px] font-medium hover:border-hair focus:outline-none',
+          value ? 'border-brand/50 text-brand-soft' : 'border-line text-[#ada695]'
+        )}
+      >
+        <option value="">{label}</option>
+        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+      <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2"><Caret /></span>
+    </div>
   );
 }
 
@@ -83,10 +104,25 @@ export function FleetPage() {
   const { data: stats } = useStats();
   const kill = useKillSwitch();
   const [q, setQ] = useState('');
+  const [team, setTeam] = useState('');
+  const [trig, setTrig] = useState('');
+  const [conn, setConn] = useState('');
+  const [needsReview, setNeedsReview] = useState(false);
 
-  const list = (routines ?? []).filter((r) =>
-    !q.trim() || (r.name + r.summary + r.team + r.owner + r.triggers.join(' ')).toLowerCase().includes(q.toLowerCase())
-  );
+  const opts = useMemo(() => {
+    const teams = new Set<string>(), trigs = new Set<string>(), conns = new Set<string>();
+    (routines ?? []).forEach((r) => { if (r.team) teams.add(r.team); r.triggers.forEach((t) => trigs.add(t)); r.connectors.forEach((c) => conns.add(c)); });
+    return { teams: [...teams], trigs: [...trigs], conns: [...conns] };
+  }, [routines]);
+
+  const list = (routines ?? []).filter((r) => {
+    if (q.trim() && !(r.name + r.summary + r.team + r.owner + r.triggers.join(' ')).toLowerCase().includes(q.toLowerCase())) return false;
+    if (team && r.team !== team) return false;
+    if (trig && !r.triggers.includes(trig)) return false;
+    if (conn && !r.connectors.includes(conn)) return false;
+    if (needsReview && !(r.state === 'failing' || r.state === 'needs_human' || (r.success != null && r.success < 75))) return false;
+    return true;
+  });
 
   return (
     <div className="mx-auto max-w-[1400px] px-6 py-6 font-sans text-fg animate-fade-up">
@@ -121,13 +157,22 @@ export function FleetPage() {
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search routines, owners, tags…" className="flex-1 bg-transparent text-[12.5px] text-fg placeholder:text-dim-2 focus:outline-none" />
           <span className="rounded border border-line px-[5px] font-mono text-[11px] font-semibold text-faint">/</span>
         </div>
-        {['Team', 'Trigger', 'Connector'].map((d) => (
-          <button key={d} className="flex h-[34px] items-center gap-[7px] rounded-md border border-line bg-surface px-3 font-sans text-[12.5px] font-medium text-[#ada695] hover:border-hair">{d}<Caret /></button>
-        ))}
-        <button className="flex h-[34px] items-center gap-[7px] rounded-md border border-copper/30 bg-copper/[0.07] px-3 font-sans text-[12.5px] font-medium text-copper-text">
+        <FilterSelect value={team} onChange={setTeam} label="Team" options={opts.teams} />
+        <FilterSelect value={trig} onChange={setTrig} label="Trigger" options={opts.trigs} />
+        <FilterSelect value={conn} onChange={setConn} label="Connector" options={opts.conns} />
+        <button
+          onClick={() => setNeedsReview((v) => !v)}
+          className={cn(
+            'flex h-[34px] items-center gap-[7px] rounded-md border px-3 font-sans text-[12.5px] font-medium transition-colors',
+            needsReview ? 'border-copper/40 bg-copper/[0.12] text-copper-text' : 'border-line bg-surface text-[#ada695] hover:border-hair'
+          )}
+        >
           Health: needs review
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="#d8b486" strokeWidth="1.4"><path d="M3 3 L7 7 M7 3 L3 7" strokeLinecap="round" /></svg>
+          {needsReview && <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="#d8b486" strokeWidth="1.4"><path d="M3 3 L7 7 M7 3 L3 7" strokeLinecap="round" /></svg>}
         </button>
+        {(team || trig || conn || needsReview || q) && (
+          <button onClick={() => { setTeam(''); setTrig(''); setConn(''); setNeedsReview(false); setQ(''); }} className="font-mono text-[11px] text-dim hover:text-fg">clear</button>
+        )}
         <span className="ml-auto text-[12px] text-dim">{list.length} of {routines?.length ?? 0}</span>
       </div>
 

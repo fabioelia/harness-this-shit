@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush } from '@/lib/api';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, Pill, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import type { FrontMatter, RoutineDetail } from '@/types';
 
@@ -168,10 +169,16 @@ export function RoutineDetailPage() {
   const toggle = useToggleRoutine();
   const dispatch = useDispatchRoutine();
   const push = useSimulatePush();
+  const validate = useValidateRoutine();
+  const del = useDeleteRoutine();
+  const [showRaw, setShowRaw] = useState(false);
+  const raw = useRoutineRaw(slug, showRaw);
   if (isLoading) return <div className="px-6 py-10 text-muted">Loading…</div>;
   if (!d) return <div className="px-[26px] py-10"><Empty title="Routine not found" hint={<Link className="text-brand" to="/">Back to Fleet ›</Link>} /></div>;
 
   const runNow = () => dispatch.mutate(d.slug, { onSuccess: (res) => navigate(`/runs/${res.runId}`) });
+  const onKill = () => { if (confirm(`Disable “${d.name}”? It will stop firing on its triggers.`)) toggle.mutate({ slug: d.slug, enabled: false }); };
+  const onDelete = () => { if (confirm(`Delete “${d.name}” and its run history? This cannot be undone.`)) del.mutate(d.slug, { onSuccess: () => navigate('/') }); };
   const simulatePush = () =>
     push.mutate(undefined, {
       onSuccess: (res) => {
@@ -205,18 +212,52 @@ export function RoutineDetailPage() {
             <button onClick={runNow} disabled={busy} className="flex h-[34px] items-center gap-[7px] rounded-md bg-brand px-3.5 font-display text-[12.5px] font-semibold text-[#16130f] transition-colors hover:bg-brand-deep disabled:opacity-40">
               <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M3 2 L10 6 L3 10 Z" /></svg>{dispatch.isPending ? 'Running…' : 'Run now'}
             </button>
-            <button className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Edit</button>
-            <button className="flex h-[34px] items-center rounded-md border border-bad/40 px-[13px] font-display text-[12.5px] font-semibold text-bad hover:bg-bad/10">Kill</button>
+            <button onClick={() => navigate(`/routines/${d.slug}/edit`)} className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Edit</button>
+            <button onClick={() => validate.mutate(d.slug)} disabled={validate.isPending} className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair disabled:opacity-40">{validate.isPending ? 'Validating…' : 'Validate'}</button>
+            <button onClick={onKill} className="flex h-[34px] items-center rounded-md border border-bad/40 px-[13px] font-display text-[12.5px] font-semibold text-bad hover:bg-bad/10">{d.enabled ? 'Kill' : 'Delete'}</button>
           </div>
         </div>
+
+        {validate.data && (
+          <div className={`mt-3 rounded-md border px-3.5 py-2.5 ${validate.data.ok ? 'border-ok/30 bg-ok/[0.06]' : 'border-warn/30 bg-warn/[0.06]'}`}>
+            <div className="mb-1.5 flex items-center gap-2 font-display text-[11px] font-semibold uppercase tracking-wide text-dim-2">
+              Validation {validate.data.ok ? <span className="text-ok">passed</span> : <span className="text-warn">needs attention</span>}
+            </div>
+            <div className="flex flex-col gap-1">
+              {validate.data.checks.map((c, i) => (
+                <div key={i} className="flex items-center gap-2 text-[12px]">
+                  <span className={c.ok ? 'text-ok' : 'text-warn'}>{c.ok ? '✓' : '✗'}</span>
+                  <span className="font-medium text-t2">{c.label}</span>
+                  <span className="font-mono text-[11px] text-muted-2">· {c.detail}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="mt-[11px] flex flex-wrap items-center gap-2.5">
           <span className="font-sans text-[13px] text-muted">{d.summary}</span>
           <span className="h-[13px] w-px bg-line" />
           <span className="inline-flex items-center gap-[7px]"><Avatar color={d.ownerColor} initials={d.initials} size={20} /><span className="font-sans text-[12px] font-medium text-t2">{d.owner}</span><span className="text-faint">·</span><span className="font-mono text-[11px] font-medium text-dim">{d.team}</span></span>
           {d.connectors.slice(0, 2).map((c) => <Chip key={c}>{c}</Chip>)}
-          <span className="ml-auto font-mono text-[12px] font-medium text-brand">View raw {d.file} ›</span>
+          <button onClick={() => setShowRaw(true)} className="ml-auto font-mono text-[12px] font-medium text-brand hover:underline">View raw {d.file} ›</button>
         </div>
       </div>
+
+      {showRaw && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-8" onClick={() => setShowRaw(false)}>
+          <div className="mt-12 w-full max-w-[760px] overflow-hidden rounded-lg border border-line bg-surface shadow-pop" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-line-soft px-4 py-2.5">
+              <span className="font-mono text-[12px] font-medium text-t2">{d.file}</span>
+              <button onClick={() => setShowRaw(false)} className="font-mono text-[12px] text-dim hover:text-fg">esc ✕</button>
+            </div>
+            <pre className="max-h-[70vh] overflow-auto bg-code px-4 py-3.5 font-mono text-[12px] leading-[1.7] text-muted">
+              {raw.isLoading ? 'loading…' : (raw.data?.md || '').split('\n').map((line, i) => (
+                <div key={i} style={line.startsWith('##') ? { color: '#6f685c' } : line === '---' ? { color: '#5d584d' } : undefined}>{line || ' '}</div>
+              ))}
+            </pre>
+          </div>
+        </div>
+      )}
 
       {/* body */}
       <div className="grid gap-[22px] px-[26px] py-[22px] pb-[26px]" style={{ gridTemplateColumns: 'minmax(0,1.55fr) minmax(0,1fr)' }}>
@@ -226,7 +267,7 @@ export function RoutineDetailPage() {
           <div className={CARD}>
             <div className="mb-3 flex items-center justify-between">
               <div className={LABEL}>Prompt body</div>
-              <div className="font-mono text-[11px] font-medium text-brand">Open in editor ›</div>
+              <button onClick={() => navigate(`/routines/${d.slug}/edit`)} className="font-mono text-[11px] font-medium text-brand hover:underline">Open in editor ›</button>
             </div>
             <pre className="overflow-auto rounded-md border border-line-soft bg-code px-4 py-3.5 font-mono text-[12px] leading-[1.7] text-muted">
               {d.prompt.split('\n').map((line, i) => (

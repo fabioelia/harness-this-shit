@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { getDb, all, one, run } from './db.js';
 import { runClaude, buildPrompt } from './runner.js';
-import { enrichEvent, deliverSinks } from './integrations.js';
+import { enrichEvent, deliverSinks, integrationStatus } from './integrations.js';
 
 const app = express();
 app.use(cors());
@@ -30,6 +30,7 @@ const shapeRoutine = (r) => ({
   slug: r.slug, name: r.name, summary: r.summary,
   owner: r.owner, team: r.team, ownerColor: r.av_color, initials: r.initials,
   triggers: j(r.triggers), connectors: j(r.connectors), sinks: j(r.sinks), chain: j(r.chain),
+  model: r.model, repo: r.repo, branch: r.branch,
   state: r.enabled ? r.state : 'disabled', enabled: !!r.enabled,
   lastAgo: r.last_ago, lastStatus: r.last_status, next: r.next,
   success: r.success, spend: r.spend, metaShort: r.meta_short, leaseRef: r.lease_ref, avg: r.avg,
@@ -180,6 +181,88 @@ app.post('/api/routines', (req, res) => {
   res.status(201).json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', slug)));
 });
 
+function buildRoutineMd(r) {
+  const L = ['---', `name: ${r.name}`, `slug: ${r.slug}`, 'summary: >-', `  ${r.summary}`, `owner: ${r.owner}`, `team: ${r.team}`, 'on:'];
+  j(r.triggers).forEach((t) => L.push(`  - ${t}: {}`));
+  if (j(r.connectors).length) { L.push('tools:'); L.push(`  mcp: [${j(r.connectors).join(', ')}]`); }
+  L.push('runtime:', `  model: ${r.model}`, `  repo: ${r.repo || '—'}`, `  branch: ${r.branch}`);
+  const sinks = j(r.sinks);
+  if (sinks.length) { L.push('outputs:'); sinks.forEach((s) => L.push(`  - ${s.type}${s.target ? `: { target: ${s.target} }` : ''}`)); }
+  const chain = j(r.chain);
+  if (chain.length) L.push(`chain: [${chain.join(', ')}]`);
+  L.push('---', '', r.prompt && r.prompt.trim() ? r.prompt : `## Prompt\n${r.summary}`);
+  return L.join('\n');
+}
+
+app.get('/api/routines/:slug/raw', (req, res) => {
+  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  res.json({ file: `${r.slug}.routine.md`, md: buildRoutineMd(r) });
+});
+
+app.put('/api/routines/:slug', (req, res) => {
+  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const b = req.body || {};
+  const owner = (b.owner ?? r.owner).trim() || 'unassigned';
+  const triggers = Array.isArray(b.triggers) ? b.triggers.filter(Boolean) : j(r.triggers);
+  const next = triggers.includes('schedule') ? 'scheduled' : triggers.length ? 'on event' : '—';
+  run(
+    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,sinks=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=? WHERE slug=?`,
+    (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
+    JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
+    JSON.stringify(Array.isArray(b.sinks) ? b.sinks.filter((s) => s && s.type) : j(r.sinks)),
+    JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
+    (b.model ?? r.model).trim() || 'claude-opus-4-8', (b.repo ?? r.repo).trim(), (b.branch ?? r.branch).trim() || 'main',
+    (b.prompt ?? r.prompt).trim(), ownerColor(owner), initialsOf(owner), next, r.slug
+  );
+  res.json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', r.slug)));
+});
+
+app.delete('/api/routines/:slug', (req, res) => {
+  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  run('DELETE FROM routines WHERE slug=?', r.slug);
+  run('DELETE FROM runs WHERE routine_slug=?', r.slug);
+  res.json({ ok: true });
+});
+
+app.post('/api/routines/:slug/validate', async (req, res) => {
+  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const st = await integrationStatus();
+  const sinks = j(r.sinks);
+  const checks = [
+    { label: 'Identity', ok: !!r.name && !!r.slug, detail: `${r.name} · ${r.slug}.routine.md` },
+    { label: 'Triggers', ok: j(r.triggers).length > 0, detail: j(r.triggers).join(', ') || 'no triggers — manual only' },
+    { label: 'Prompt body', ok: !!(r.prompt && r.prompt.trim().length > 12), detail: `${(r.prompt || '').length} chars` },
+    { label: 'Model', ok: !!r.model, detail: r.model },
+  ];
+  const slack = sinks.find((s) => s.type === 'slack');
+  if (slack) checks.push({ label: 'Slack sink', ok: st.slack.connected && !!slack.target, detail: st.slack.connected ? (slack.target ? `→ ${slack.target} (bot must be invited)` : 'no channel set') : 'SLACK_BOT_TOKEN not set' });
+  if (sinks.some((s) => s.type?.startsWith('github'))) checks.push({ label: 'GitHub sink', ok: st.github.connected, detail: st.github.connected ? `gh · @${st.github.account}` : 'gh not authed' });
+  (j(r.chain)).forEach((c) => checks.push({ label: `Chain → ${c}`, ok: !!one('SELECT 1 FROM routines WHERE slug=?', c), detail: one('SELECT 1 FROM routines WHERE slug=?', c) ? 'resolves' : 'no such routine' }));
+  res.json({ ok: checks.every((c) => c.ok), checks });
+});
+
+const DEFAULT_POLICIES = [
+  { key: 'pr_edits', title: 'UI edits commit via pull request', desc: 'Routine edits in the web editor open a PR instead of pushing to the branch.', on: true },
+  { key: 'write_consent', title: 'Write routines require opt-in consent', desc: 'A routine may only push to a PR carrying the auto-cleanup label.', on: true },
+  { key: 'deny_merge', title: 'merge-pr capability denied org-wide', desc: 'No routine may merge a pull request, regardless of grant.', on: true },
+  { key: 'approval_gate', title: 'Approval gate for first-time write routines', desc: 'A maintainer approves the first run of any routine that mutates shared targets.', on: false },
+];
+app.get('/api/settings', async (_q, res) => {
+  const st = await integrationStatus();
+  const saved = jObj(meta('policies', 'null'));
+  const policies = DEFAULT_POLICIES.map((p) => ({ ...p, on: saved && p.key in saved ? !!saved[p.key] : p.on }));
+  res.json({ identities: st, policies });
+});
+app.post('/api/settings', (req, res) => {
+  const policies = req.body?.policies || {};
+  run("INSERT INTO meta (key,value) VALUES ('policies',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", JSON.stringify(policies));
+  res.json({ ok: true });
+});
+
 app.get('/api/runs', (_q, res) =>
   res.json(all('SELECT * FROM runs ORDER BY created_at DESC, ord DESC LIMIT 100').map((x) => {
     const r = one('SELECT name FROM routines WHERE slug=?', x.routine_slug);
@@ -213,11 +296,19 @@ app.get('/api/runs/:id', (req, res) => {
   });
 });
 
-app.get('/api/connectors', (_q, res) =>
-  res.json(all('SELECT * FROM connectors ORDER BY ord').map((c) => ({
-    code: c.code, name: c.name, kind: c.kind, health: c.health, auth: c.auth, scopes: c.scopes, routines: c.routines, avColor: c.av_color,
-  })))
-);
+// Connectors reflect REAL integration status (gh + Slack), live.
+app.get('/api/connectors', async (_q, res) => {
+  const st = await integrationStatus();
+  const rows = all('SELECT triggers, connectors, sinks FROM routines WHERE enabled=1');
+  const uses = (key) => rows.filter((r) => j(r.connectors).includes(key) || j(r.sinks).some((s) => (s.type || '').startsWith(key))).length;
+  const out = [
+    { code: 'GH', name: 'GitHub', kind: 'CLI · gh', health: st.github.connected ? 'ok' : 'off', auth: st.github.connected ? `gh · @${st.github.account}` : 'run `gh auth login`', scopes: 'repo, pull_requests, issues, gist', routines: uses('github'), avColor: '#7f9bd1' },
+    { code: 'SL', name: 'Slack', kind: 'Bot', health: st.slack.connected ? 'ok' : 'off', auth: st.slack.connected ? `${st.slack.team} · @${st.slack.bot}` : 'set SLACK_BOT_TOKEN', scopes: 'chat:write, channels:read', routines: uses('slack'), avColor: '#c9a24a' },
+    { code: 'AT', name: 'Atlassian / Confluence', kind: 'API', health: process.env.ATLASSIAN_API_TOKEN ? 'ok' : 'off', auth: process.env.ATLASSIAN_API_TOKEN ? 'token set' : 'set ATLASSIAN_API_TOKEN + ATLASSIAN_BASE_URL', scopes: 'pages:write', routines: uses('confluence'), avColor: '#6fae9a' },
+    { code: 'SE', name: 'Sentry', kind: 'MCP', health: 'off', auth: 'not connected', scopes: 'issue:read', routines: uses('sentry'), avColor: '#b59ad6' },
+  ];
+  res.json(out);
+});
 
 app.get('/api/activity', (_q, res) =>
   res.json(all('SELECT * FROM activity ORDER BY ord DESC LIMIT 40').map((a) => ({ time: a.time, text: a.text, state: a.state })))

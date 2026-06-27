@@ -1,5 +1,5 @@
-import { Link, useParams } from 'react-router-dom';
-import { useRun } from '@/lib/api';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useRun, useDispatchRoutine } from '@/lib/api';
 import { Pill, Dot, Empty, stateMeta } from '@/components/sb';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
@@ -7,7 +7,9 @@ const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em]
 
 export function RunDetailPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const { data: r, isLoading } = useRun(id);
+  const dispatch = useDispatchRoutine();
   if (isLoading) return <div className="px-6 py-10 text-muted">Loading…</div>;
   if (!r) return <div className="px-[26px] py-10"><Empty title="Run not found" hint={<Link className="text-brand" to="/runs">Back to Runs ›</Link>} /></div>;
   const m = stateMeta(r.status);
@@ -23,6 +25,14 @@ export function RunDetailPage() {
             <span className="font-mono text-[22px] font-bold tracking-tight">{r.id}</span>
             <Pill label={m.label} color={m.color} />
           </div>
+          <button
+            onClick={() => dispatch.mutate(r.routine, { onSuccess: (res) => navigate(`/runs/${res.runId}`) })}
+            disabled={dispatch.isPending}
+            className="flex h-[34px] items-center gap-[7px] rounded-md border border-line bg-surface-2 px-3.5 font-display text-[12.5px] font-semibold text-t2 transition-colors hover:border-hair disabled:opacity-40"
+          >
+            <svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M3 9a6 6 0 1 1 1.8 4.3" /><path d="M3 13v-3h3" /></svg>
+            {dispatch.isPending ? 'Re-running…' : 'Re-run'}
+          </button>
         </div>
         <div className="mt-[11px] flex flex-wrap items-center gap-3.5 font-mono text-[12px] font-medium text-muted-2">
           <span>routine <Link to={`/routines/${r.routine}`} className="text-brand">{r.routine}</Link></span>

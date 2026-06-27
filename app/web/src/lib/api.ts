@@ -24,6 +24,16 @@ async function post<T>(url: string, body?: unknown): Promise<T> {
   }
   return res.json();
 }
+async function put<T>(url: string, body?: unknown): Promise<T> {
+  const res = await fetch(url, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) });
+  if (!res.ok) { let m = `${res.status}`; try { const e = await res.json(); if (e?.error) m = e.error; } catch { /**/ } throw new Error(m); }
+  return res.json();
+}
+async function del<T = unknown>(url: string): Promise<T> {
+  const res = await fetch(url, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
 
 export const useStats = () => useQuery({ queryKey: ['stats'], queryFn: () => get<Stats>('/api/stats'), refetchInterval: 8000 });
 export const useRoutines = () => useQuery({ queryKey: ['routines'], queryFn: () => get<Routine[]>('/api/routines'), refetchInterval: 10000 });
@@ -107,6 +117,44 @@ export function useCreateRoutine() {
       qc.invalidateQueries({ queryKey: ['routines'] });
       qc.invalidateQueries({ queryKey: ['stats'] });
     },
+  });
+}
+
+export function useUpdateRoutine() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ slug, body }: { slug: string; body: CreateRoutineInput }) => put<Routine>(`/api/routines/${slug}`, body),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ['routines'] });
+      qc.invalidateQueries({ queryKey: ['routine', v.slug] });
+      qc.invalidateQueries({ queryKey: ['stats'] });
+    },
+  });
+}
+export function useDeleteRoutine() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (slug: string) => del(`/api/routines/${slug}`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['routines'] }); qc.invalidateQueries({ queryKey: ['stats'] }); },
+  });
+}
+export interface ValidateResult { ok: boolean; checks: { label: string; ok: boolean; detail: string }[] }
+export function useValidateRoutine() {
+  return useMutation({ mutationFn: (slug: string) => post<ValidateResult>(`/api/routines/${slug}/validate`) });
+}
+export const useRoutineRaw = (slug?: string, enabled = false) =>
+  useQuery({ queryKey: ['raw', slug], queryFn: () => get<{ file: string; md: string }>(`/api/routines/${slug}/raw`), enabled: !!slug && enabled });
+
+export interface Settings {
+  identities: { github: { connected: boolean; account: string | null }; slack: { connected: boolean; team: string | null; bot: string | null } };
+  policies: { key: string; title: string; desc: string; on: boolean }[];
+}
+export const useSettings = () => useQuery({ queryKey: ['settings'], queryFn: () => get<Settings>('/api/settings') });
+export function useSaveSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (policies: Record<string, boolean>) => post('/api/settings', { policies }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }),
   });
 }
 
