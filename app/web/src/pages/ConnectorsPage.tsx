@@ -20,7 +20,7 @@ export function ConnectorsPage() {
         <div className="flex items-end justify-between gap-4">
           <div>
             <div className="font-display text-[23px] font-bold tracking-tight">Connectors &amp; MCPs</div>
-            <div className="mt-1 text-[13px] text-muted-2">{connectors?.length ?? 7} connectors · grants flow to routines by registry id · secrets stored as references</div>
+            <div className="mt-1 text-[13px] text-muted-2">{connectors?.length ?? 0} connectors · grants flow to routines by registry id · secrets stored as references</div>
           </div>
           <button className="flex h-9 items-center gap-2 rounded-md bg-brand px-[15px] font-display text-[12.5px] font-semibold text-[#16130f] hover:bg-brand-deep"><span className="-mt-px text-[16px] leading-none">+</span>Add connector</button>
         </div>
