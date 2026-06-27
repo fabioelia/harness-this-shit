@@ -57,7 +57,7 @@ export interface RoutineDetail extends Routine {
 export interface Connector {
   code: string; name: string; kind: string; health: 'ok' | 'degraded' | 'off';
   auth: string; scopes: string; routines: number; avColor: string;
-  testable: boolean; configKey: string;
+  testable: boolean; configKey: string; mcp?: boolean;
 }
 export interface ActivityEntry { time: string; text: string; state: string }
 export interface RunLite {

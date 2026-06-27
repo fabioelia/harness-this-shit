@@ -59,6 +59,11 @@ CREATE TABLE IF NOT EXISTS watches (
   fire_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_watches_status ON watches(status);
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  name TEXT PRIMARY KEY,
+  config TEXT NOT NULL,            -- json server def: {command,args,env} (stdio) | {type,url,headers} (http/sse)
+  created_at INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS activity (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   time TEXT NOT NULL,

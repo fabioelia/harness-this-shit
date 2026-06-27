@@ -70,6 +70,15 @@ export function useConfigConnector() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['connectors'] }); qc.invalidateQueries({ queryKey: ['settings'] }); },
   });
 }
+export const useMcp = () => useQuery({ queryKey: ['mcp'], queryFn: () => get<{ name: string; config: Record<string, unknown> }[]>('/api/mcp') });
+export function useAddMcp() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (b: { name: string; config: string }) => post<{ ok: boolean; name: string }>('/api/mcp', b), onSuccess: () => { qc.invalidateQueries({ queryKey: ['mcp'] }); qc.invalidateQueries({ queryKey: ['connectors'] }); } });
+}
+export function useDeleteMcp() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (name: string) => del(`/api/mcp/${name}`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['mcp'] }); qc.invalidateQueries({ queryKey: ['connectors'] }); } });
+}
 export const useActivity = () => useQuery({ queryKey: ['activity'], queryFn: () => get<ActivityEntry[]>('/api/activity'), refetchInterval: 10000 });
 
 export function useToggleRoutine() {

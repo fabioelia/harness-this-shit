@@ -22,7 +22,7 @@ export function allowedToolsFor(connectors = []) {
   return allow;
 }
 
-export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, model, effort, memoryDir } = {}) {
+export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, model, effort, memoryDir, mcpConfig } = {}) {
   return new Promise((resolve) => {
     const start = Date.now();
     const allow = allowedToolsFor(tools);
@@ -34,6 +34,7 @@ export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, mo
     // (keeps the session clean/fast; tools come only from what we grant).
     // stream-json (NDJSON) so we capture every step; --verbose is required under -p.
     const args = ['-p', '--strict-mcp-config', '--output-format', 'stream-json', '--verbose'];
+    if (mcpConfig) args.push('--mcp-config', mcpConfig); // load only these granted MCP servers
     if (model) args.push('--model', model); // honour the routine's chosen model
     if (effort) args.push('--effort', effort); // and its reasoning-effort level
     if (allow.length) args.push('--allowed-tools', ...allow);

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useCreateRoutine, useUpdateRoutine, useRoutine, useGithubRepos, useGithubOrgs, useGithubChecks, useModels } from '@/lib/api';
+import { useCreateRoutine, useUpdateRoutine, useRoutine, useGithubRepos, useGithubOrgs, useGithubChecks, useModels, useMcp } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 const TRIGGER_GROUPS: { label: string; items: string[] }[] = [
@@ -192,6 +192,8 @@ export function NewRoutinePage() {
   const update = useUpdateRoutine();
   const mut = isEdit ? update : create;
   const { data: modelsData } = useModels();
+  const { data: mcpServers } = useMcp();
+  const TOOLS = [...CONNECTORS, ...(mcpServers?.map((m) => m.name) ?? [])];
   const MODELS = modelsData?.models ?? [{ id: 'claude-opus-4-8', label: 'Opus 4.8' }];
   const EFFORTS = modelsData?.efforts ?? ['low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -388,9 +390,9 @@ export function NewRoutinePage() {
           <div className={CARD}>
             <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Tools the session can use</div>
             <div className="flex flex-wrap gap-1.5">
-              {CONNECTORS.map((c) => <ChipToggle key={c} on={connectors.includes(c)} onClick={() => toggle(setConnectors, c)}>{c}</ChipToggle>)}
+              {TOOLS.map((c) => <ChipToggle key={c} on={connectors.includes(c)} onClick={() => toggle(setConnectors, c)}>{c}</ChipToggle>)}
             </div>
-            <div className="mt-2.5 text-[11.5px] text-dim-2">Deny-by-default. The session is autonomous and uses these to do the work — <span className="font-mono">github</span> → gh CLI, <span className="font-mono">slack</span> → post via the bot, <span className="font-mono">web</span> → fetch. Just say what to do in the prompt.</div>
+            <div className="mt-2.5 text-[11.5px] text-dim-2">Deny-by-default. The session uses these to do the work — <span className="font-mono">github</span> → gh CLI, <span className="font-mono">slack</span> → bot, <span className="font-mono">web</span> → fetch. Custom <span className="font-mono">MCP</span> servers (added on the Connectors page) appear here too. Just say what to do in the prompt.</div>
           </div>
 
           <div className={CARD}>

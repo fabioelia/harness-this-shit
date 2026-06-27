@@ -3,7 +3,8 @@ import cors from 'cors';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { getDb, all, one, run } from './db.js';
 import { runClaude, buildPrompt } from './runner.js';
 import { integrationStatus, listRepos, listOrgs, listChecks, claudeAccount, testConnector, bustStatus, gh } from './integrations.js';
@@ -37,6 +38,48 @@ for (const [k, envKey] of Object.entries(TOKEN_ENV)) {
   const v = meta(`token_${k}`, ''); if (v && !process.env[envKey]) process.env[envKey] = v;
 }
 const now = () => Date.now();
+
+// ── Custom MCP servers: user drops in a config + auth; routines grant them ──────
+const mcpNameSet = () => new Set(all('SELECT name FROM mcp_servers').map((s) => s.name));
+const maskConfig = (cfg) => {
+  const c = JSON.parse(JSON.stringify(cfg || {}));
+  if (c.env) for (const k of Object.keys(c.env)) c.env[k] = '••••';
+  if (c.headers) for (const k of Object.keys(c.headers)) c.headers[k] = '••••';
+  return c;
+};
+// Normalize whatever the user pasted into a single server def.
+function normalizeMcpDef(name, cfg) {
+  if (typeof cfg === 'string') cfg = JSON.parse(cfg);
+  if (cfg && cfg.mcpServers && typeof cfg.mcpServers === 'object') { const k = Object.keys(cfg.mcpServers)[0]; cfg = cfg.mcpServers[k]; }
+  else if (cfg && cfg[name] && (cfg[name].command || cfg[name].url)) cfg = cfg[name];
+  return cfg;
+}
+// Write an --mcp-config file for the granted MCP server names; null if none configured.
+function writeMcpConfig(grantedNames) {
+  const set = mcpNameSet();
+  const names = [...new Set((grantedNames || []).filter((n) => set.has(n)))];
+  if (!names.length) return null;
+  const mcpServers = {};
+  for (const n of names) { const row = one('SELECT config FROM mcp_servers WHERE name=?', n); if (row) mcpServers[n] = jObj(row.config) || {}; }
+  const path = join(tmpdir(), `sb-mcp-${Math.random().toString(36).slice(2)}.json`);
+  writeFileSync(path, JSON.stringify({ mcpServers }));
+  return path;
+}
+// Test a server by booting a tiny session with just its config and reading the init event.
+async function testMcp(name) {
+  const path = writeMcpConfig([name]);
+  if (!path) return { ok: false, detail: 'not configured' };
+  let init = null;
+  const res = await runClaude('Reply with the single word OK.', { mcpConfig: path, timeoutMs: 60_000, onEvent: (o) => { if (o.type === 'system' && o.subtype === 'init') init = o; } });
+  try { unlinkSync(path); } catch { /* ignore */ }
+  if (init) {
+    const srv = (init.mcp_servers || []).find((s) => s.name === name) || (init.mcp_servers || [])[0];
+    const tools = (init.tools || []).filter((t) => typeof t === 'string' && t.startsWith(`mcp__${name}__`));
+    if (srv) return { ok: srv.status !== 'failed', detail: `${name}: ${srv.status || 'loaded'} · ${tools.length} tool${tools.length === 1 ? '' : 's'}` };
+    return { ok: false, detail: 'server did not load into the session' };
+  }
+  return { ok: false, detail: (res.stderr || `claude exited ${res.code}`).slice(0, 100) };
+}
 
 // Per-routine persistent memory: a memory.md index + any supporting files.
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -153,6 +196,8 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     // only routes, captures the trace, and enforces guardrails.
     const tools = j(r.connectors);
     const memoryDir = r.memory ? ensureMemory(r.slug) : null;
+    const mcpGranted = tools.filter((c) => !['github', 'slack', 'web', 'webfetch'].includes(c));
+    const mcpConfig = mcpGranted.length ? writeMcpConfig(mcpGranted) : null;
     const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints(), { memoryDir });
     run('UPDATE runs SET prompt=? WHERE id=?', prompt, id);
 
@@ -191,7 +236,8 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       } catch { /* one malformed event must not kill the run */ }
     };
 
-    const res = await runClaude(prompt, { tools, onEvent, model: normModel(r.model), effort: normEffort(r.effort), memoryDir });
+    const res = await runClaude(prompt, { tools, onEvent, model: normModel(r.model), effort: normEffort(r.effort), memoryDir, mcpConfig });
+    if (mcpConfig) try { unlinkSync(mcpConfig); } catch { /* ignore */ }
     const ok = !res.isError && !!res.finalText;
     const rawOut = ok ? res.finalText
       : (res.finalText || (res.code === 124 ? `timed out after ${Math.round(res.ms / 1000)}s` : res.stderr || `claude exited ${res.code}`));
@@ -684,11 +730,30 @@ app.get('/api/connectors', async (_q, res) => {
     { code: 'WB', name: 'Web fetch', kind: 'Built-in', health: 'ok', auth: 'no auth needed', scopes: 'fetch & read public URLs', routines: uses('web'), avColor: '#8aa0b8', testable: true, configKey: '' },
     { code: 'AT', name: 'Atlassian / Confluence', kind: 'API · planned', health: process.env.ATLASSIAN_API_TOKEN ? 'ok' : 'off', auth: process.env.ATLASSIAN_API_TOKEN ? 'token set' : 'set an API token', scopes: 'publish to Confluence (not yet a granted tool)', routines: uses('confluence'), avColor: '#6fae9a', testable: true, configKey: 'atlassian' },
   ];
+  for (const s of all('SELECT name, config FROM mcp_servers ORDER BY name')) {
+    const cfg = jObj(s.config) || {};
+    out.push({ code: s.name, name: s.name, kind: 'MCP', health: 'ok', auth: cfg.command ? `stdio · ${cfg.command}` : cfg.url ? `http · ${cfg.url}` : 'custom MCP', scopes: `mcp__${s.name}__*`, routines: uses(s.name), avColor: '#b49ae6', testable: true, configKey: '', mcp: true });
+  }
   res.json(out);
 });
 
-// Live connectivity test for a connector (gh user / slack auth.test+post / web / atlassian).
-app.post('/api/connectors/:code/test', async (req, res) => res.json(await testConnector(req.params.code, req.body || {})));
+// Live connectivity test for a connector (gh user / slack / web / atlassian / MCP server).
+app.post('/api/connectors/:code/test', async (req, res) => {
+  if (mcpNameSet().has(req.params.code)) return res.json(await testMcp(req.params.code));
+  res.json(await testConnector(req.params.code, req.body || {}));
+});
+// Custom MCP servers — drop in a config + auth (env/headers); routines grant them by name.
+app.get('/api/mcp', (_q, res) => res.json(all('SELECT * FROM mcp_servers ORDER BY name').map((s) => ({ name: s.name, config: maskConfig(jObj(s.config) || {}) }))));
+app.post('/api/mcp', (req, res) => {
+  const name = String(req.body?.name || '').trim().replace(/[^a-z0-9_-]/gi, '');
+  if (!name) return res.status(400).json({ error: 'a server name (letters, digits, - or _) is required' });
+  let cfg;
+  try { cfg = normalizeMcpDef(name, req.body?.config); } catch { return res.status(400).json({ error: 'config must be valid JSON' }); }
+  if (!cfg || typeof cfg !== 'object' || (!cfg.command && !cfg.url)) return res.status(400).json({ error: 'config needs a "command" (stdio) or a "url" (http/sse)' });
+  run("INSERT INTO mcp_servers (name,config,created_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET config=excluded.config", name, JSON.stringify(cfg), now());
+  res.json({ ok: true, name });
+});
+app.delete('/api/mcp/:name', (req, res) => { run('DELETE FROM mcp_servers WHERE name=?', req.params.name); res.json({ ok: true }); });
 // Configure a connector's token (slack/atlassian) — stored in meta, loaded into env now.
 app.post('/api/connectors/:code/config', (req, res) => {
   const code = String(req.params.code || '').toLowerCase();

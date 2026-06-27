@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useConnectors, useTestConnector, useConfigConnector } from '@/lib/api';
+import { useConnectors, useTestConnector, useConfigConnector, useMcp, useAddMcp, useDeleteMcp } from '@/lib/api';
 import { Pill, Dot, Empty, SIGNAL } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { Connector } from '@/types';
@@ -11,6 +11,7 @@ const btn = 'h-7 rounded-md border border-line bg-surface-2 px-2.5 font-display 
 function ConnectorRow({ c, GRID }: { c: Connector; GRID: React.CSSProperties }) {
   const test = useTestConnector();
   const config = useConfigConnector();
+  const delMcp = useDeleteMcp();
   const [showCfg, setShowCfg] = useState(false);
   const [token, setToken] = useState('');
   const [channel, setChannel] = useState('#dev-ai-slop');
@@ -21,7 +22,7 @@ function ConnectorRow({ c, GRID }: { c: Connector; GRID: React.CSSProperties }) 
   return (
     <div className="border-b border-line-soft last:border-0">
       <div className="px-[18px] py-[15px] hover:bg-white/[0.015]" style={GRID}>
-        <div className="grid place-items-center font-mono text-[11px] font-bold text-[#16130f]" style={{ width: 30, height: 30, borderRadius: 8, background: c.avColor }}>{c.code}</div>
+        <div className="grid place-items-center font-mono text-[11px] font-bold text-[#16130f]" style={{ width: 30, height: 30, borderRadius: 8, background: c.avColor }}>{c.code.slice(0, 2).toUpperCase()}</div>
         <div className="flex min-w-0 items-center gap-2">
           <span className="font-display text-[14px] font-semibold text-fg-2">{c.name}</span>
           <span className="rounded-[4px] border border-white/[0.08] bg-white/[0.045] px-1.5 py-px font-mono text-[9.5px] font-semibold uppercase tracking-[0.05em] text-muted-2">{c.kind}</span>
@@ -33,6 +34,7 @@ function ConnectorRow({ c, GRID }: { c: Connector; GRID: React.CSSProperties }) 
           <span className="font-mono text-[12px] font-semibold text-t2">{c.routines}</span>
           {c.testable && <button onClick={() => test.mutate({ code: c.code, body: c.configKey === 'slack' ? { channel } : {} })} disabled={test.isPending} className={btn}>{test.isPending ? 'Testing…' : 'Test'}</button>}
           {c.configKey && <button onClick={() => setShowCfg((v) => !v)} className={btn}>Configure</button>}
+          {c.mcp && <button onClick={() => { if (confirm(`Remove MCP server "${c.name}"?`)) delMcp.mutate(c.name); }} className={cn(btn, 'border-bad/40 text-bad')}>Remove</button>}
         </div>
       </div>
       {(result || showCfg) && (
@@ -57,6 +59,30 @@ const HEALTH: Record<Connector['health'], { label: string; color: string }> = {
   degraded: { label: 'Degraded', color: SIGNAL.needs_human },
   off: { label: 'Not connected', color: SIGNAL.disabled },
 };
+
+function AddMcpServer() {
+  const add = useAddMcp();
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [config, setConfig] = useState('{\n  "command": "npx",\n  "args": ["-y", "@your/mcp-server"],\n  "env": { "API_KEY": "your-key" }\n}');
+  const submit = () => add.mutate({ name, config }, { onSuccess: () => { setOpen(false); setName(''); } });
+  if (!open) return <button onClick={() => setOpen(true)} className="mt-4 flex h-9 items-center gap-2 rounded-md border border-line bg-surface-2 px-3.5 font-display text-[12.5px] font-semibold text-t2 hover:border-hair"><span className="text-[15px] leading-none">+</span>Add MCP server</button>;
+  return (
+    <div className="mt-4 rounded-xl border border-line bg-surface p-[18px]">
+      <div className="mb-3 font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim-2">Add MCP server</div>
+      <div className="flex flex-col gap-2.5">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="server name — e.g. linear (letters, digits, -, _)" className="h-9 rounded-md border border-line bg-surface-2 px-3 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+        <textarea value={config} onChange={(e) => setConfig(e.target.value)} rows={7} spellCheck={false} className="resize-y rounded-md border border-line bg-code px-3 py-2.5 font-mono text-[12px] leading-[1.5] text-fg focus:border-brand/60 focus:outline-none" />
+        <div className="text-[11px] text-dim-2">Drop in a server def — <span className="font-mono text-[#ada695]">command/args/env</span> (stdio) or <span className="font-mono text-[#ada695]">type/url/headers</span> (http/sse). Secrets in <span className="font-mono">env</span>/<span className="font-mono">headers</span> authenticate it. Grant it to a routine by adding its name as a tool; <span className="font-semibold text-t2">Test</span> boots it and lists its tools.</div>
+        {add.isError && <div className="text-[12px] text-bad">{(add.error as Error).message}</div>}
+        <div className="flex gap-2">
+          <button onClick={submit} disabled={add.isPending} className="h-9 rounded-md bg-brand px-3.5 font-display text-[12.5px] font-semibold text-[#16130f] hover:bg-brand-deep disabled:opacity-40">{add.isPending ? 'Saving…' : 'Save server'}</button>
+          <button onClick={() => setOpen(false)} className="h-9 rounded-md border border-line bg-surface-2 px-3.5 font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function ConnectorsPage() {
   const { data: connectors } = useConnectors();
@@ -86,6 +112,7 @@ export function ConnectorsPage() {
           {connectors && connectors.length === 0 && <Empty title="No connectors" hint="Grant github, slack, or web to a routine in its editor." />}
           {connectors?.map((c) => <ConnectorRow key={c.code} c={c} GRID={GRID as React.CSSProperties} />)}
         </div>
+        <AddMcpServer />
         <div className="mt-3.5 flex items-center gap-[9px] font-sans text-[11.5px] font-medium text-dim-2">
           <svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="#6f685c" strokeWidth="1.6"><circle cx="9" cy="9" r="6.5" /><line x1="9" y1="8" x2="9" y2="12.5" strokeLinecap="round" /><circle cx="9" cy="5.6" r="0.6" fill="#6f685c" /></svg>
           <span><span className="font-semibold text-t2">Test</span> checks a connector live; <span className="font-semibold text-t2">Configure</span> stores a token (Slack/Atlassian) — it's kept in the harness store and loaded into the session env, never the routine file. GitHub uses your <span className="font-mono">gh</span> login.</span>
