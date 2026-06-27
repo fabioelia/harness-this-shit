@@ -37,6 +37,8 @@ async function del<T = unknown>(url: string): Promise<T> {
 
 export const useStats = () => useQuery({ queryKey: ['stats'], queryFn: () => get<Stats>('/api/stats'), refetchInterval: 8000 });
 export const useGithubOrgs = () => useQuery({ queryKey: ['gh-orgs'], queryFn: () => get<{ orgs: string[] }>('/api/github/orgs'), staleTime: 300_000 });
+export const useGithubChecks = (repo: string) =>
+  useQuery({ queryKey: ['gh-checks', repo], enabled: !!repo, queryFn: () => get<{ checks: string[] }>(`/api/github/checks?repo=${encodeURIComponent(repo)}`), staleTime: 120_000 });
 export const useGithubRepos = (owner = '', q = '') =>
   useQuery({
     queryKey: ['gh-repos', owner, q],
@@ -117,7 +119,7 @@ export interface CreateRoutineInput {
   chain?: string[];
   schedule?: string;
   filters?: { actions?: string[]; branches?: string[] };
-  reactions?: { source: string; kind: string; when: string; run: string }[];
+  reactions?: { source: string; kind: string; when: string; run: string; check?: string }[];
 }
 export function useCreateRoutine() {
   const qc = useQueryClient();

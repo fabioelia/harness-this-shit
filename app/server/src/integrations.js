@@ -21,6 +21,26 @@ export function sh(cmd, args, { input } = {}) {
 }
 export const gh = (args, opts) => sh('gh', args, opts);
 
+// Discover the check names that actually run on a repo, so a reaction can target a
+// SPECIFIC check. Unions real recent check-run names + commit-status contexts + GHA
+// workflow names (some workflows may not have run on the default branch yet). Cached.
+const _checkCache = new Map();
+export async function listChecks(repo) {
+  if (!repo) return [];
+  const c = _checkCache.get(repo);
+  if (c && Date.now() - c.at < 120_000) return c.names;
+  const br = await gh(['repo', 'view', repo, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name']);
+  const branch = br.code === 0 && br.out.trim() ? br.out.trim() : 'main';
+  const names = new Set();
+  const add = (r) => { if (r.code === 0) r.out.split('\n').map((s) => s.trim()).filter(Boolean).forEach((n) => names.add(n)); };
+  add(await gh(['api', `repos/${repo}/commits/${branch}/check-runs?per_page=100`, '--jq', '.check_runs[].name']));
+  add(await gh(['api', `repos/${repo}/commits/${branch}/status`, '--jq', '.statuses[].context']));
+  add(await gh(['workflow', 'list', '--repo', repo, '--json', 'name', '--jq', '.[].name']));
+  const out = [...names].filter(Boolean).sort();
+  _checkCache.set(repo, { at: Date.now(), names: out });
+  return out;
+}
+
 // The orgs the user belongs to — so the picker can scope to any of them.
 let _orgCache = { at: 0, orgs: [] };
 export async function listOrgs() {

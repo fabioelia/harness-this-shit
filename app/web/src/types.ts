@@ -35,10 +35,10 @@ export interface FrontMatter {
 }
 export interface FlowNode { title: string; sub: string; tone?: string }
 export interface RunRow { id: string; status: string; ago: string; dur: string; trigger: string }
-export interface Reaction { source: string; kind: string; when: string; run: string }
+export interface Reaction { source: string; kind: string; when: string; run: string; check?: string }
 export interface Watch {
   id: string; origin: string; target: string; source: string; kind: string; when: string;
-  entity: { repo?: string; pr?: number; duration_ms?: number };
+  entity: { repo?: string; pr?: number; duration_ms?: number; check?: string };
   status: 'open' | 'fired' | 'dropped' | 'expired'; detail: string; attempts: number; ago: string;
 }
 

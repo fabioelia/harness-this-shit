@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useCreateRoutine, useUpdateRoutine, useRoutine, useGithubRepos, useGithubOrgs } from '@/lib/api';
+import { useCreateRoutine, useUpdateRoutine, useRoutine, useGithubRepos, useGithubOrgs, useGithubChecks } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 const TRIGGER_GROUPS: { label: string; items: string[] }[] = [
@@ -21,8 +21,11 @@ const REACTION_PRESETS = [
   { label: 'PR merged', source: 'github', kind: 'merge', when: 'merged' },
   { label: 'After a delay (timeout)', source: 'timeout', kind: 'after', when: '' },
 ];
-const reactionLabel = (r: { source: string; kind: string; when: string }) =>
-  r.source === 'timeout' ? `after ${r.when || '?'}` : REACTION_PRESETS.find((p) => p.source === r.source && p.kind === r.kind && p.when === r.when)?.label || `${r.source}:${r.kind}:${r.when}`;
+const reactionLabel = (r: { source: string; kind: string; when: string; check?: string }) => {
+  if (r.source === 'timeout') return `after ${r.when || '?'}`;
+  const base = REACTION_PRESETS.find((p) => p.source === r.source && p.kind === r.kind && p.when === r.when)?.label || `${r.source}:${r.kind}:${r.when}`;
+  return r.check ? `${base} · ${r.check}` : base;
+};
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'mb-1.5 font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -104,18 +107,24 @@ function RepoPicker({ value, onChange }: { value: string; onChange: (v: string) 
   );
 }
 
-function ReactionsEditor({ reactions, setReactions }: { reactions: { source: string; kind: string; when: string; run: string }[]; setReactions: (r: { source: string; kind: string; when: string; run: string }[]) => void }) {
+type Rx = { source: string; kind: string; when: string; run: string; check?: string };
+function ReactionsEditor({ reactions, setReactions, repo }: { reactions: Rx[]; setReactions: (r: Rx[]) => void; repo: string }) {
   const [preset, setPreset] = useState(0);
   const [run, setRun] = useState('');
   const [dur, setDur] = useState('4h');
+  const [check, setCheck] = useState('');
+  const firstRepo = repo.split(',').map((s) => s.trim()).filter(Boolean)[0] || '';
   const p = REACTION_PRESETS[preset];
+  const isChecks = p.kind === 'checks';
+  const { data: checksData, isFetching } = useGithubChecks(isChecks ? firstRepo : '');
   const add = () => {
     if (!run.trim()) return;
     const when = p.source === 'timeout' ? dur.trim() : p.when;
-    setReactions([...reactions, { source: p.source, kind: p.kind, when, run: slugify(run) }]);
+    setReactions([...reactions, { source: p.source, kind: p.kind, when, run: slugify(run), check: isChecks ? check : '' }]);
     setRun('');
   };
   const remove = (i: number) => setReactions(reactions.filter((_, x) => x !== i));
+  const selCls = 'h-9 shrink-0 rounded-md border border-line bg-surface-2 px-2 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none';
   return (
     <div>
       {reactions.length > 0 && (
@@ -131,14 +140,22 @@ function ReactionsEditor({ reactions, setReactions }: { reactions: { source: str
       )}
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-mono text-[11px] text-dim-2">When</span>
-        <select value={preset} onChange={(e) => setPreset(+e.target.value)} className="h-9 shrink-0 rounded-md border border-line bg-surface-2 px-2 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none">
+        <select value={preset} onChange={(e) => { setPreset(+e.target.value); setCheck(''); }} className={selCls}>
           {REACTION_PRESETS.map((x, i) => <option key={i} value={i}>{x.label}</option>)}
         </select>
         {p.source === 'timeout' && <input value={dur} onChange={(e) => setDur(e.target.value)} placeholder="4h" className={cn(inputCls, 'w-20 font-mono text-[12px]')} />}
+        {isChecks && firstRepo && (
+          <select value={check} onChange={(e) => setCheck(e.target.value)} className={selCls} title="Which check to watch">
+            <option value="">any check</option>
+            {(checksData?.checks ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        )}
         <span className="font-mono text-[11px] text-dim-2">→ run</span>
         <input value={run} onChange={(e) => setRun(e.target.value)} placeholder="routine-slug" onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} className={cn(inputCls, 'min-w-[140px] flex-1 font-mono text-[12px]')} />
         <button type="button" onClick={add} className="h-9 shrink-0 rounded-md border border-line bg-surface-2 px-3 font-display text-[12px] font-semibold text-t2 hover:border-hair">Add</button>
       </div>
+      {isChecks && firstRepo && <div className="mt-1.5 font-mono text-[10.5px] text-dim">{isFetching ? `discovering checks in ${firstRepo}…` : `${(checksData?.checks ?? []).length} checks found in ${firstRepo}`}</div>}
+      {isChecks && !firstRepo && <div className="mt-1.5 font-mono text-[10.5px] text-dim">add a repository above to pick a specific check</div>}
     </div>
   );
 }
@@ -191,7 +208,7 @@ export function NewRoutinePage() {
   const [schedule, setSchedule] = useState('0 9 * * *');
   const [filterActions, setFilterActions] = useState('');
   const [filterBranches, setFilterBranches] = useState('');
-  const [reactions, setReactions] = useState<{ source: string; kind: string; when: string; run: string }[]>([]);
+  const [reactions, setReactions] = useState<{ source: string; kind: string; when: string; run: string; check?: string }[]>([]);
 
   const slug = slugTouched ? slugInput : slugify(name);
   // CI / GitHub events that carry an `action` and can be filtered.
@@ -245,7 +262,7 @@ export function NewRoutinePage() {
     if (chainArr.length) L.push(`chain: [${chainArr.join(', ')}]`);
     if (reactions.length) {
       L.push('react:');
-      reactions.forEach((rx) => L.push(`  - on: ${rx.source}:${rx.kind}${rx.when ? ':' + rx.when : ''}  →  run: ${rx.run}`));
+      reactions.forEach((rx) => L.push(`  - on: ${rx.source}:${rx.kind}${rx.when ? ':' + rx.when : ''}${rx.check ? ` [${rx.check}]` : ''}  →  run: ${rx.run}`));
     }
     L.push('---');
     L.push('');
@@ -377,7 +394,7 @@ export function NewRoutinePage() {
 
           <div className={CARD}>
             <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>React · <span className="font-mono lowercase tracking-normal text-dim-2">follow the work this routine creates</span></div>
-            <ReactionsEditor reactions={reactions} setReactions={setReactions} />
+            <ReactionsEditor reactions={reactions} setReactions={setReactions} repo={repo} />
             <div className="mt-2.5 text-[11.5px] text-dim-2">After a run resolves a PR, Switchboard <span className="text-t2">watches</span> it and fires the chosen routine <span className="text-t2">later</span> when the condition is met — e.g. when CI checks finish. Polls with <span className="font-mono">gh</span>, so no webhook needed. A <span className="font-mono">timeout</span> fires after a delay if nothing resolved first.</div>
           </div>
 

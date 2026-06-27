@@ -49,7 +49,7 @@ Lifecycle: `open → fired | dropped | expired`.
 
 | Source | kind | `when` examples | How the adapter checks |
 |---|---|---|---|
-| **github** | `checks` | success / failure / any | `gh pr view N --json statusCheckRollup` |
+| **github** | `checks` | success / failure / any — for **all** checks or a **specific** one | `gh pr view N --json statusCheckRollup` |
 | github | `review` | approved / changes_requested / any | `gh pr view N --json reviews` |
 | github | `merge` | merged / closed | `gh pr view N --json state,mergedAt` |
 | github | `comment` | any / matches-pattern | `gh pr view N --json comments` |
@@ -83,6 +83,15 @@ reaction whose condition is the absence of another. It pairs with the others: ar
 - **Observability**: watches are listed at `/api/watches` and surfaced on the routine
   detail + Activity (created / fired / dropped / expired), so you can see exactly what the
   system is waiting on and why it acted.
+
+### Check-aware (discovered from the repo's GHA)
+A `checks` reaction can target **all** checks (aggregate pass/fail) or **one specific check**.
+When the routine targets a repo, Switchboard discovers that repo's real check names —
+unioning recent **check-run names**, **commit-status contexts**, and **GitHub Actions
+workflow names** (`/api/github/checks?repo=`) — so the editor offers a dropdown of the
+checks that actually run there (e.g. `build`, `e2e`, `lint`) instead of a free-text guess.
+The watcher then waits for *that* check to complete and evaluates only its conclusion, so
+`when e2e fails → run flake-triage` ignores an unrelated `lint` failure.
 
 ### Why poll-first matters here
 The whole product thesis is *runs on your machine with your real tools*. Polling means a

@@ -3,7 +3,7 @@ import cors from 'cors';
 import crypto from 'node:crypto';
 import { getDb, all, one, run } from './db.js';
 import { runClaude, buildPrompt } from './runner.js';
-import { integrationStatus, listRepos, listOrgs, gh } from './integrations.js';
+import { integrationStatus, listRepos, listOrgs, listChecks, gh } from './integrations.js';
 
 const app = express();
 // Same-machine tool: only allow the local web origin to call the API from a browser.
@@ -284,7 +284,7 @@ if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(tickScheduler, 30_
 // ── Reactions: watch a routine's downstream entity, fire a follow-up routine ────
 const wid = () => 'w_' + Math.random().toString(36).slice(2, 9);
 const cleanReactions = (arr) => (Array.isArray(arr) ? arr : [])
-  .map((x) => ({ source: String(x.source || '').trim(), kind: String(x.kind || '').trim(), when: String(x.when || '').trim(), run: String(x.run || '').trim() }))
+  .map((x) => ({ source: String(x.source || '').trim(), kind: String(x.kind || '').trim(), when: String(x.when || '').trim(), check: String(x.check || '').trim(), run: String(x.run || '').trim() }))
   .filter((x) => x.source && x.kind && x.run);
 function durationToMs(s) {
   const m = String(s).trim().match(/^(\d+)\s*(s|sec|m|min|h|hr|d)?$/i);
@@ -319,7 +319,7 @@ async function armReactions(routine, event, runId) {
     } else if (rx.source === 'github') {
       if (!prRef) prRef = await resolvePrRef(event, routine);
       if (!prRef) { logActivity(`reaction skipped · no PR resolved for ${routine.slug} → ${rx.run}`, 'idle'); continue; }
-      entity = prRef;
+      entity = { ...prRef, check: rx.check || '' }; // optional specific check to watch
     } else { logActivity(`reaction skipped · source "${rx.source}" not yet supported`, 'idle'); continue; }
     run('INSERT INTO watches (id,origin_run,origin_routine,target_slug,source,kind,when_cond,entity,status,detail,attempts,created_at,fire_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
       wid(), runId, routine.slug, rx.run, rx.source, rx.kind, rx.when, JSON.stringify(entity), 'open', '', 0, now(), fireAt);
@@ -337,16 +337,22 @@ async function pollWatch(w) {
     if (w.kind === 'checks') {
       const { pr, err } = await view('statusCheckRollup,state,title,url');
       if (err) return { action: /no pull requests|not found/i.test(err) ? 'drop' : 'keep', detail: err.slice(0, 60) };
-      const rollup = pr.statusCheckRollup || [];
+      const checkName = entity.check || '';
+      let rollup = pr.statusCheckRollup || [];
+      const label = checkName ? `"${checkName}"` : 'checks';
+      if (checkName) {
+        rollup = rollup.filter((c) => (c.name || c.context) === checkName);
+        if (!rollup.length) return { action: 'keep', detail: `waiting for ${label}` };
+      }
       if (!rollup.length) return { action: 'keep', detail: 'no checks yet' };
       const pending = rollup.some((c) => (c.status && c.status !== 'COMPLETED') || ['PENDING', 'IN_PROGRESS', 'QUEUED', 'EXPECTED'].includes(c.state));
-      if (pending) return { action: 'keep', detail: `${rollup.length} checks running` };
+      if (pending) return { action: 'keep', detail: `${label} running` };
       const failed = rollup.some((c) => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED'].includes(c.conclusion) || ['FAILURE', 'ERROR'].includes(c.state));
       const conclusion = failed ? 'failure' : 'success';
       if (w.when_cond === 'any' || w.when_cond === conclusion) {
-        return { action: 'fire', detail: `checks ${conclusion}`, context: { event: 'reaction', source: 'github', kind: 'checks', when: conclusion, pull_request: { number: entity.pr, title: pr.title, url: pr.url }, checks: rollup.map((c) => ({ name: c.name || c.context, conclusion: c.conclusion || c.state })) } };
+        return { action: 'fire', detail: `${label} ${conclusion}`, context: { event: 'reaction', source: 'github', kind: 'checks', when: conclusion, check: checkName || null, pull_request: { number: entity.pr, title: pr.title, url: pr.url }, checks: rollup.map((c) => ({ name: c.name || c.context, conclusion: c.conclusion || c.state })) } };
       }
-      return { action: 'drop', detail: `checks ${conclusion} ≠ ${w.when_cond}` };
+      return { action: 'drop', detail: `${label} ${conclusion} ≠ ${w.when_cond}` };
     }
     if (w.kind === 'merge') {
       const { pr, err } = await view('state,title,url');
@@ -400,6 +406,8 @@ app.get('/api/health', (_q, res) => res.json({ ok: true }));
 // ?owner=<org|*> & ?q=<search> for cross-org browse / GitHub-wide search.
 app.get('/api/github/repos', async (req, res) => res.json({ repos: await listRepos({ owner: String(req.query.owner || ''), q: String(req.query.q || '') }) }));
 app.get('/api/github/orgs', async (_q, res) => res.json({ orgs: await listOrgs() }));
+// Possible check names for a repo — so a reaction can target a specific check.
+app.get('/api/github/checks', async (req, res) => res.json({ checks: await listChecks(String(req.query.repo || '')) }));
 
 app.get('/api/stats', (_q, res) => {
   const rows = all('SELECT * FROM routines');
@@ -481,7 +489,7 @@ function buildRoutineMd(r) {
   const reactions = cleanReactions(j(r.reactions));
   if (reactions.length) {
     L.push('react:');
-    reactions.forEach((rx) => L.push(`  - on: ${rx.source}:${rx.kind}${rx.when ? ':' + rx.when : ''}  →  run: ${rx.run}`));
+    reactions.forEach((rx) => L.push(`  - on: ${rx.source}:${rx.kind}${rx.when ? ':' + rx.when : ''}${rx.check ? ` [${rx.check}]` : ''}  →  run: ${rx.run}`));
   }
   L.push('---', '', r.prompt && r.prompt.trim() ? r.prompt : `## Prompt\n${r.summary}`);
   return L.join('\n');

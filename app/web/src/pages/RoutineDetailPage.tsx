@@ -263,7 +263,7 @@ export function RoutineDetailPage() {
                   {d.reactions.map((rx, i) => (
                     <div key={i} className="flex items-center gap-2 font-mono text-[11.5px]">
                       <span className="text-lease">when</span>
-                      <span className="text-t2">{rx.source === 'timeout' ? `after ${rx.when}` : `${rx.source}:${rx.kind}${rx.when ? `:${rx.when}` : ''}`}</span>
+                      <span className="text-t2">{rx.source === 'timeout' ? `after ${rx.when}` : `${rx.source}:${rx.kind}${rx.when ? `:${rx.when}` : ''}`}{rx.check ? ` · ${rx.check}` : ''}</span>
                       <span className="text-faint">→</span>
                       <Link to={`/routines/${rx.run}`} className="text-brand">{rx.run}</Link>
                     </div>
@@ -278,7 +278,7 @@ export function RoutineDetailPage() {
                       <div key={w.id} className="flex items-start gap-2.5">
                         <Dot color={w.status === 'open' ? '#5b9ee6' : w.status === 'fired' ? '#5fbf86' : '#7f8a80'} size={7} pulse={w.status === 'open'} />
                         <div className="min-w-0 flex-1">
-                          <div className="font-mono text-[11.5px] text-t2">{w.source}:{w.kind}{w.when ? `:${w.when}` : ''} {w.entity.repo ? `· ${w.entity.repo}#${w.entity.pr}` : ''} → <Link to={`/routines/${w.target}`} className="text-brand">{w.target}</Link></div>
+                          <div className="font-mono text-[11.5px] text-t2">{w.source}:{w.kind}{w.when ? `:${w.when}` : ''}{w.entity.check ? ` [${w.entity.check}]` : ''} {w.entity.repo ? `· ${w.entity.repo}#${w.entity.pr}` : ''} → <Link to={`/routines/${w.target}`} className="text-brand">{w.target}</Link></div>
                           <div className="font-mono text-[10.5px] text-dim">{w.status}{w.detail ? ` · ${w.detail}` : ''} · {w.ago}</div>
                         </div>
                       </div>
