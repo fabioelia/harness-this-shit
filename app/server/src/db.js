@@ -64,6 +64,16 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
   config TEXT NOT NULL,            -- json server def: {command,args,env} (stdio) | {type,url,headers} (http/sse)
   created_at INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS agents (
+  name TEXT PRIMARY KEY,
+  role TEXT NOT NULL DEFAULT '',       -- the agent's persona / standing instructions
+  summary TEXT NOT NULL DEFAULT '',    -- one-line what it's for
+  connectors TEXT NOT NULL DEFAULT '[]',
+  model TEXT NOT NULL DEFAULT 'claude-opus-4-8',
+  memory INTEGER NOT NULL DEFAULT 0,
+  av_color TEXT NOT NULL DEFAULT '#b49ae6',
+  created_at INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS activity (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   time TEXT NOT NULL,

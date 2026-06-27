@@ -72,6 +72,12 @@ export interface RunDetail {
   awaiting: string | null;
   summary: { result: string; surface: string };
 }
+export interface Agent {
+  name: string; role: string; summary: string; connectors: string[]; model: string; memory: boolean; avColor: string;
+  status: 'idle' | 'working'; currentTask: string | null; lastActive: string; taskCount: number;
+}
+export interface AgentTask { id: string; task: string; status: string; ago: string; dur: string; result: string }
+export interface AgentDetail extends Agent { tasks: AgentTask[] }
 export interface Stats {
   wordmark: string; killSwitch: boolean; total: number; enabled: number; teams: number;
   running: number; failing: number; runsToday: number;

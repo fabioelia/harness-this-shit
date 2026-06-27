@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ActivityEntry, Connector, Routine, RoutineDetail, RunDetail, RunLite, Stats } from '@/types';
+import type { ActivityEntry, Agent, AgentDetail, Connector, Routine, RoutineDetail, RunDetail, RunLite, Stats } from '@/types';
 
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -60,6 +60,21 @@ export const useRun = (id?: string) =>
     refetchInterval: (q) => (q.state.data?.status === 'running' ? 1500 : false),
   });
 export const useConnectors = () => useQuery({ queryKey: ['connectors'], queryFn: () => get<Connector[]>('/api/connectors'), refetchInterval: 15000 });
+export const useAgents = () => useQuery({ queryKey: ['agents'], queryFn: () => get<Agent[]>('/api/agents'), refetchInterval: 5000 });
+export const useAgent = (name?: string) =>
+  useQuery({ queryKey: ['agent', name], enabled: !!name, queryFn: () => get<AgentDetail>(`/api/agents/${name}`), refetchInterval: (q) => (q.state.data?.status === 'working' ? 2000 : 8000) });
+export function useCreateAgent() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (b: { name: string; role?: string; summary?: string; connectors?: string[]; model?: string; memory?: boolean }) => post<Agent>('/api/agents', b), onSuccess: () => qc.invalidateQueries({ queryKey: ['agents'] }) });
+}
+export function useMessageAgent() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ name, text }: { name: string; text: string }) => post<{ runId: string }>(`/api/agents/${name}/message`, { text }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['agent', v.name] }); qc.invalidateQueries({ queryKey: ['agents'] }); } });
+}
+export function useDeleteAgent() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (name: string) => del(`/api/agents/${name}`), onSuccess: () => qc.invalidateQueries({ queryKey: ['agents'] }) });
+}
 export function useTestConnector() {
   return useMutation({ mutationFn: ({ code, body }: { code: string; body?: unknown }) => post<{ ok: boolean; detail: string }>(`/api/connectors/${code}/test`, body ?? {}) });
 }

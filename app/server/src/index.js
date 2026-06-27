@@ -47,12 +47,22 @@ const maskConfig = (cfg) => {
   if (c.headers) for (const k of Object.keys(c.headers)) c.headers[k] = '••••';
   return c;
 };
-// Normalize whatever the user pasted into a single server def.
-function normalizeMcpDef(name, cfg) {
+// Normalize whatever the user pasted into { name, def }. Accepts a bare def,
+// a single-key wrapper { betterstack: {...} }, or a full { mcpServers: { name: def } }.
+const isDef = (o) => o && typeof o === 'object' && (o.command || o.url);
+function normalizeMcp(name, cfg) {
   if (typeof cfg === 'string') cfg = JSON.parse(cfg);
-  if (cfg && cfg.mcpServers && typeof cfg.mcpServers === 'object') { const k = Object.keys(cfg.mcpServers)[0]; cfg = cfg.mcpServers[k]; }
-  else if (cfg && cfg[name] && (cfg[name].command || cfg[name].url)) cfg = cfg[name];
-  return cfg;
+  if (cfg && cfg.mcpServers && typeof cfg.mcpServers === 'object') {
+    const k = Object.keys(cfg.mcpServers)[0];
+    return { name: name || k, def: cfg.mcpServers[k] };
+  }
+  if (isDef(cfg)) return { name, def: cfg };
+  if (cfg && typeof cfg === 'object') {
+    const keys = Object.keys(cfg);
+    if (keys.length === 1 && isDef(cfg[keys[0]])) return { name: name || keys[0], def: cfg[keys[0]] };
+    if (name && isDef(cfg[name])) return { name, def: cfg[name] };
+  }
+  return { name, def: cfg };
 }
 // Write an --mcp-config file for the granted MCP server names; null if none configured.
 function writeMcpConfig(grantedNames) {
@@ -196,9 +206,10 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     // only routes, captures the trace, and enforces guardrails.
     const tools = j(r.connectors);
     const memoryDir = r.memory ? ensureMemory(r.slug) : null;
-    const mcpGranted = tools.filter((c) => !['github', 'slack', 'web', 'webfetch'].includes(c));
+    const mcpGranted = tools.filter((c) => !['github', 'slack', 'web', 'webfetch', 'team'].includes(c));
     const mcpConfig = mcpGranted.length ? writeMcpConfig(mcpGranted) : null;
-    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints(), { memoryDir });
+    const agents = tools.includes('team') ? all('SELECT name, role, summary FROM agents ORDER BY name') : [];
+    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints(), { memoryDir, agents });
     run('UPDATE runs SET prompt=? WHERE id=?', prompt, id);
 
     // Step-level trace: normalize each stream-json event into a run_events row,
@@ -692,6 +703,65 @@ app.get('/api/runs', (_q, res) =>
   }))
 );
 
+// ── Agent teams: named agents that routines (and you) can hand tasks to ─────────
+const agentSlug = (name) => `@${name}`;
+function shapeAgent(a) {
+  const last = one("SELECT status, trigger, created_at FROM runs WHERE routine_slug=? ORDER BY created_at DESC, ord DESC LIMIT 1", agentSlug(a.name));
+  const working = last?.status === 'running';
+  return {
+    name: a.name, role: a.role, summary: a.summary, connectors: j(a.connectors), model: a.model, memory: !!a.memory, avColor: a.av_color,
+    status: working ? 'working' : 'idle', currentTask: working ? last.trigger : null,
+    lastActive: last ? relTime(last.created_at) : 'never',
+    taskCount: one('SELECT COUNT(*) AS n FROM runs WHERE routine_slug=?', agentSlug(a.name)).n,
+  };
+}
+// Give an agent a task — runs a real session (its role + recent history + the task),
+// captured as a run under @name so the full trace works. Returns the run id.
+function runAgentTask(a, text) {
+  const history = all("SELECT trigger, output FROM runs WHERE routine_slug=? AND status!='running' ORDER BY created_at DESC, ord DESC LIMIT 4", agentSlug(a.name)).reverse();
+  const hist = history.map((h) => `Earlier you were asked: "${h.trigger}"\n→ you reported: ${(h.output || '').slice(0, 400)}`).join('\n\n');
+  const instruction = `You are ${a.name}, an agent on this team.\n${a.role || a.summary || ''}\n\n${hist ? `## Your recent work (for continuity)\n${hist}\n\n` : ''}## Request\n${text}`;
+  const synthetic = {
+    slug: agentSlug(a.name), name: a.name, summary: a.summary || a.role, owner: a.name, team: 'agents',
+    prompt: instruction, connectors: a.connectors, model: a.model, memory: a.memory,
+    repo: '', branch: 'main', chain: '[]', reactions: '[]', effort: '', filters: '{}',
+    av_color: a.av_color, initials: (a.name[0] || 'A').toUpperCase(),
+  };
+  return executeRoutine(synthetic, { event: 'agent-message', from: 'user', task: text }, text.replace(/\s+/g, ' ').slice(0, 70) || 'task');
+}
+app.get('/api/agents', (_q, res) => res.json(all('SELECT * FROM agents ORDER BY created_at').map(shapeAgent)));
+app.post('/api/agents', (req, res) => {
+  const b = req.body || {};
+  const name = String(b.name || '').trim().replace(/[^a-z0-9_-]/gi, '');
+  if (!name) return res.status(400).json({ error: 'an agent name (letters, digits, - or _) is required' });
+  if (one('SELECT 1 FROM agents WHERE name=?', name)) return res.status(409).json({ error: `agent "${name}" already exists` });
+  run('INSERT INTO agents (name,role,summary,connectors,model,memory,av_color,created_at) VALUES (?,?,?,?,?,?,?,?)',
+    name, (b.role || '').trim(), (b.summary || '').trim(),
+    JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : []),
+    normModel(b.model), b.memory ? 1 : 0, ownerColor(name), now());
+  res.status(201).json(shapeAgent(one('SELECT * FROM agents WHERE name=?', name)));
+});
+app.get('/api/agents/:name', (req, res) => {
+  const a = one('SELECT * FROM agents WHERE name=?', req.params.name);
+  if (!a) return res.status(404).json({ error: 'not found' });
+  const tasks = all('SELECT * FROM runs WHERE routine_slug=? ORDER BY created_at DESC, ord DESC LIMIT 30', agentSlug(a.name))
+    .map((x) => ({ id: x.id, task: x.trigger, status: x.status, ago: relTime(x.created_at), dur: x.dur, result: (x.output || '').split('\n').pop()?.slice(0, 160) || '' }));
+  res.json({ ...shapeAgent(a), tasks });
+});
+app.post('/api/agents/:name/message', (req, res) => {
+  if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
+  const a = one('SELECT * FROM agents WHERE name=?', req.params.name);
+  if (!a) return res.status(404).json({ error: 'not found' });
+  const text = String(req.body?.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'a message/task is required' });
+  res.json({ ok: true, runId: runAgentTask(a, text) });
+});
+app.delete('/api/agents/:name', (req, res) => {
+  run('DELETE FROM agents WHERE name=?', req.params.name);
+  run('DELETE FROM runs WHERE routine_slug=?', agentSlug(req.params.name));
+  res.json({ ok: true });
+});
+
 app.get('/api/runs/:id', (req, res) => {
   const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
   if (!x) return res.status(404).json({ error: 'not found' });
@@ -745,12 +815,12 @@ app.post('/api/connectors/:code/test', async (req, res) => {
 // Custom MCP servers — drop in a config + auth (env/headers); routines grant them by name.
 app.get('/api/mcp', (_q, res) => res.json(all('SELECT * FROM mcp_servers ORDER BY name').map((s) => ({ name: s.name, config: maskConfig(jObj(s.config) || {}) }))));
 app.post('/api/mcp', (req, res) => {
-  const name = String(req.body?.name || '').trim().replace(/[^a-z0-9_-]/gi, '');
-  if (!name) return res.status(400).json({ error: 'a server name (letters, digits, - or _) is required' });
-  let cfg;
-  try { cfg = normalizeMcpDef(name, req.body?.config); } catch { return res.status(400).json({ error: 'config must be valid JSON' }); }
-  if (!cfg || typeof cfg !== 'object' || (!cfg.command && !cfg.url)) return res.status(400).json({ error: 'config needs a "command" (stdio) or a "url" (http/sse)' });
-  run("INSERT INTO mcp_servers (name,config,created_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET config=excluded.config", name, JSON.stringify(cfg), now());
+  let parsed;
+  try { parsed = normalizeMcp(String(req.body?.name || '').trim(), req.body?.config); } catch { return res.status(400).json({ error: 'config must be valid JSON' }); }
+  const name = String(parsed.name || '').trim().replace(/[^a-z0-9_-]/gi, '');
+  if (!name) return res.status(400).json({ error: 'a server name is required — type one, or paste a { "name": { … } } config' });
+  if (!isDef(parsed.def)) return res.status(400).json({ error: 'config needs a "command" (stdio) or a "url" (http/sse)' });
+  run("INSERT INTO mcp_servers (name,config,created_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET config=excluded.config", name, JSON.stringify(parsed.def), now());
   res.json({ ok: true, name });
 });
 app.delete('/api/mcp/:name', (req, res) => { run('DELETE FROM mcp_servers WHERE name=?', req.params.name); res.json({ ok: true }); });

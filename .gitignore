@@ -34,3 +34,4 @@ app/yarn.lock
 
 # routine memory store (local)
 app/server/memory/
+app/server/switchboard.db*

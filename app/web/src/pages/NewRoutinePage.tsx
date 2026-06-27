@@ -9,7 +9,7 @@ const TRIGGER_GROUPS: { label: string; items: string[] }[] = [
   { label: 'CI / checks', items: ['check_run', 'check_suite', 'workflow_run', 'status', 'deployment_status'] },
 ];
 // Only tools the runner actually grants (runner.js allowedToolsFor). No phantom MCPs.
-const CONNECTORS = ['github', 'slack', 'web'];
+const CONNECTORS = ['github', 'slack', 'web', 'team'];
 
 // Reactions the watcher can actually evaluate (index.js pollWatch). Generalizes beyond these.
 const REACTION_PRESETS = [

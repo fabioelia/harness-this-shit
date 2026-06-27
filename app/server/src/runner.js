@@ -15,9 +15,10 @@ export function allowedToolsFor(connectors = []) {
   if (connectors.includes('github')) allow.push('Bash(gh:*)');
   if (connectors.includes('slack')) allow.push('Bash(slack-post:*)');
   if (connectors.includes('web') || connectors.includes('webfetch')) allow.push('WebFetch', 'WebSearch');
+  if (connectors.includes('team')) allow.push('Bash(agent-message:*)');
   // MCP-backed connectors (anything else) get their namespaced tools enabled too
   connectors
-    .filter((c) => !['github', 'slack', 'web', 'webfetch'].includes(c))
+    .filter((c) => !['github', 'slack', 'web', 'webfetch', 'team'].includes(c))
     .forEach((c) => allow.push(`mcp__${c}__*`));
   return allow;
 }
@@ -88,7 +89,7 @@ export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, mo
 /** Assemble the session input: the routine's natural instruction + the live
  *  trigger context + the tools it may use. No output-format contract — the
  *  session does whatever the instruction needs and takes the actions itself. */
-export function buildPrompt(routine, event, constraints = [], { memoryDir } = {}) {
+export function buildPrompt(routine, event, constraints = [], { memoryDir, agents = [] } = {}) {
   const tools = Array.isArray(routine.connectors)
     ? routine.connectors
     : (() => { try { return JSON.parse(routine.connectors || '[]'); } catch { return []; } })();
@@ -118,8 +119,12 @@ export function buildPrompt(routine, event, constraints = [], { memoryDir } = {}
     if (tools.includes('github')) how.push('- GitHub: use the `gh` CLI, always with `--repo OWNER/REPO`. e.g. `gh pr list --repo acme/x --head my-branch --state open --json number,title,url` or `gh pr view N --repo acme/x --json title`.');
     if (tools.includes('slack')) how.push("- Slack: to post a message, RUN the shell command `slack-post '#channel-or-@user' 'your message'` — it is on your PATH and already authenticated as the bot. This IS your Slack tool; do NOT look for a Slack MCP server.");
     if (tools.includes('web') || tools.includes('webfetch')) how.push('- Web: use WebFetch / WebSearch to read pages.');
-    tools.filter((c) => !['github', 'slack', 'web', 'webfetch'].includes(c)).forEach((c) => how.push(`- ${c}: use its mcp__${c}__* tools.`));
+    if (tools.includes('team')) how.push("- Team: delegate a sub-task to a teammate agent by running `agent-message <name> 'the task'`. It works asynchronously and reports back in its own log.");
+    tools.filter((c) => !['github', 'slack', 'web', 'webfetch', 'team'].includes(c)).forEach((c) => how.push(`- ${c}: use its mcp__${c}__* tools.`));
     lines.push('', '## Tools you have', 'You are an autonomous session — take the actions the instruction calls for, don’t just describe them.', ...how);
+  }
+  if (tools.includes('team') && agents.length) {
+    lines.push('', '## Your team (delegate with agent-message)', ...agents.map((a) => `- ${a.name}: ${a.summary || a.role || 'agent'}`));
   }
   lines.push('', 'Carry out the instruction now using the trigger context and your tools. End with a one-line summary of what you did.');
   return lines.join('\n');

@@ -1,0 +1,12 @@
+#!/usr/bin/env node
+// Granted tool (team): delegate a task to a named agent. Usage: agent-message <agent> 'the task'
+const [, , name, ...rest] = process.argv;
+const text = rest.join(' ');
+if (!name || !text) { console.error("usage: agent-message <agent> 'the task'"); process.exit(64); }
+const port = process.env.PORT || 4317;
+const res = await fetch(`http://localhost:${port}/api/agents/${encodeURIComponent(name)}/message`, {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }),
+});
+const j = await res.json().catch(() => ({}));
+if (res.ok) console.log(`delegated to ${name} — run ${j.runId}`);
+else { console.error(`agent-message failed: ${j.error || res.status}`); process.exit(2); }
