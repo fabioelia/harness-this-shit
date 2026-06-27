@@ -1029,6 +1029,49 @@ app.post('/api/mcp', (req, res) => {
   run("INSERT INTO mcp_servers (name,config,created_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET config=excluded.config", name, JSON.stringify(parsed.def), now());
   res.json({ ok: true, name });
 });
+// MCP Registry (registry.modelcontextprotocol.io) — search & add servers without
+// hand-pasting JSON. Adding uses the registry's canonical URL/package (no typo-spoof
+// surface); remote OAuth issuer is validated downstream by mcp-remote per RFC 9207.
+const RUNTIME_CMD = {
+  npx: (id) => ({ command: 'npx', args: ['-y', id] }),
+  uvx: (id) => ({ command: 'uvx', args: [id] }),
+  pipx: (id) => ({ command: 'pipx', args: ['run', id] }),
+  dnx: (id) => ({ command: 'dnx', args: [id] }),
+  docker: (id) => ({ command: 'docker', args: ['run', '-i', '--rm', id] }),
+};
+app.get('/api/mcp/registry', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  try {
+    const u = new URL('https://registry.modelcontextprotocol.io/v0/servers');
+    if (q) u.searchParams.set('search', q);
+    u.searchParams.set('limit', '40');
+    const r = await fetch(u, { signal: AbortSignal.timeout(12_000) });
+    if (!r.ok) return res.status(502).json({ error: `registry returned ${r.status}` });
+    const data = await r.json();
+    const seen = new Set(); const servers = [];
+    for (const row of data.servers || []) {
+      const s = row.server || {};
+      if (!s.name || seen.has(s.name)) continue; seen.add(s.name); // one entry per server (newest first)
+      const remote = (s.remotes || [])[0];
+      const pkg = (s.packages || []).find((p) => RUNTIME_CMD[p.runtimeHint]) || (s.packages || [])[0];
+      if (!remote && !(pkg && RUNTIME_CMD[pkg.runtimeHint])) continue; // skip un-runnable here
+      servers.push({ id: s.name, name: String(s.name).split('/').pop(), description: s.description || '', version: s.version || '',
+        remoteUrl: remote?.url || '', transport: remote?.type || pkg?.transport?.type || 'stdio', runtime: pkg?.runtimeHint || '', identifier: pkg?.identifier || '' });
+    }
+    res.json({ servers });
+  } catch (e) { res.status(502).json({ error: `registry unreachable: ${e.message}` }); }
+});
+app.post('/api/mcp/registry/add', (req, res) => {
+  const b = req.body || {};
+  const name = String(b.name || '').trim().replace(/[^a-z0-9_-]/gi, '');
+  if (!name) return res.status(400).json({ error: 'a server name is required' });
+  let def;
+  if (b.remoteUrl) { try { def = mcpRemoteDef(new URL(String(b.remoteUrl)).toString()); } catch { return res.status(400).json({ error: 'invalid remote URL' }); } }
+  else if (b.runtime && RUNTIME_CMD[b.runtime] && b.identifier) def = RUNTIME_CMD[b.runtime](String(b.identifier));
+  else return res.status(400).json({ error: 'this server has no remote URL or runnable package' });
+  run("INSERT INTO mcp_servers (name,config,created_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET config=excluded.config", name, JSON.stringify(def), now());
+  res.json({ ok: true, name, remote: !!b.remoteUrl });
+});
 // Kick off the mcp-remote OAuth flow in the browser (one-time). Tokens persist in ~/.mcp-auth.
 app.post('/api/mcp/:name/oauth', (req, res) => {
   const row = one('SELECT config FROM mcp_servers WHERE name=?', req.params.name);

@@ -56,6 +56,10 @@ export interface RoutineDetail extends Routine {
   leases: { key: string; runId: string; sha: string; held: string; ttl: string }[];
 }
 
+export interface RegistryServer {
+  id: string; name: string; description: string; version: string;
+  remoteUrl: string; transport: string; runtime: string; identifier: string;
+}
 export interface Connector {
   code: string; name: string; kind: string; health: 'ok' | 'degraded' | 'off';
   auth: string; scopes: string; routines: number; avColor: string;

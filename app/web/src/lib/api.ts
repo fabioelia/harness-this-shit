@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ActivityEntry, Agent, AgentDetail, Connector, Routine, RoutineDetail, RunDetail, RunLite, Stats } from '@/types';
+import type { ActivityEntry, Agent, AgentDetail, Connector, RegistryServer, Routine, RoutineDetail, RunDetail, RunLite, Stats } from '@/types';
 
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -99,6 +99,13 @@ export function useAddMcp() {
 }
 export function useMcpOauth() {
   return useMutation({ mutationFn: (name: string) => post<{ ok: boolean; detail: string }>(`/api/mcp/${name}/oauth`, {}) });
+}
+export function useMcpRegistry(q: string, enabled: boolean) {
+  return useQuery({ queryKey: ['mcp-registry', q], queryFn: () => get<{ servers: RegistryServer[] }>(`/api/mcp/registry?q=${encodeURIComponent(q)}`), enabled, staleTime: 60_000 });
+}
+export function useAddFromRegistry() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (s: { name: string; remoteUrl: string; runtime: string; identifier: string }) => post<{ ok: boolean; name: string; remote: boolean }>('/api/mcp/registry/add', s), onSuccess: () => { ['mcp', 'connectors'].forEach((k) => qc.invalidateQueries({ queryKey: [k] })); } });
 }
 export function useDeleteMcp() {
   const qc = useQueryClient();

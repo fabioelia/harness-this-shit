@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useConnectors, useTestConnector, useConfigConnector, useMcp, useAddMcp, useDeleteMcp, useAuthMcp, useMcpOauth } from '@/lib/api';
+import { useConnectors, useTestConnector, useConfigConnector, useMcp, useAddMcp, useDeleteMcp, useAuthMcp, useMcpOauth, useMcpRegistry, useAddFromRegistry } from '@/lib/api';
 import { Pill, Dot, Empty, SIGNAL } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { Connector } from '@/types';
@@ -87,7 +87,7 @@ const HEALTH: Record<Connector['health'], { label: string; color: string }> = {
 function AddMcpServer() {
   const add = useAddMcp();
   const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState<'remote' | 'stdio'>('remote');
+  const [mode, setMode] = useState<'registry' | 'remote' | 'stdio'>('registry');
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
   const [config, setConfig] = useState('{\n  "command": "npx",\n  "args": ["-y", "@your/mcp-server"],\n  "env": { "API_KEY": "your-key" }\n}');
@@ -101,9 +101,10 @@ function AddMcpServer() {
       <div className="mb-3 flex items-center gap-3">
         <span className="font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim-2">Add MCP server</span>
         <span className="inline-flex overflow-hidden rounded-md border border-line text-[11px] font-semibold">
-          {(['remote', 'stdio'] as const).map((mw) => <button key={mw} type="button" onClick={() => setMode(mw)} className={cn('px-2.5 py-0.5 font-mono', mode === mw ? 'bg-brand/15 text-brand-soft' : 'text-dim hover:text-t2')}>{mw === 'remote' ? 'remote URL' : 'stdio config'}</button>)}
+          {(['registry', 'remote', 'stdio'] as const).map((mw) => <button key={mw} type="button" onClick={() => setMode(mw)} className={cn('px-2.5 py-0.5 font-mono', mode === mw ? 'bg-brand/15 text-brand-soft' : 'text-dim hover:text-t2')}>{mw === 'registry' ? 'registry' : mw === 'remote' ? 'remote URL' : 'stdio config'}</button>)}
         </span>
       </div>
+      {mode === 'registry' ? <RegistryBrowser onDone={reset} /> : (
       <div className="flex flex-col gap-2.5">
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder={mode === 'remote' ? 'name (optional — derived from the URL host)' : 'server name — e.g. linear'} className="h-9 rounded-md border border-line bg-surface-2 px-3 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
         {mode === 'remote' ? (
@@ -123,6 +124,48 @@ function AddMcpServer() {
           <button onClick={reset} className="h-9 rounded-md border border-line bg-surface-2 px-3.5 font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Cancel</button>
         </div>
       </div>
+      )}
+    </div>
+  );
+}
+
+function RegistryBrowser({ onDone }: { onDone: () => void }) {
+  const [draft, setDraft] = useState('');
+  const [q, setQ] = useState('');
+  useEffect(() => { const t = setTimeout(() => setQ(draft.trim()), 300); return () => clearTimeout(t); }, [draft]);
+  const { data, isFetching, error } = useMcpRegistry(q, true);
+  const addReg = useAddFromRegistry();
+  const [added, setAdded] = useState<string[]>([]);
+  const servers = data?.servers ?? [];
+  return (
+    <div className="flex flex-col gap-2.5">
+      <input autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="search the MCP registry — linear, sentry, postgres…" className="h-9 rounded-md border border-line bg-surface-2 px-3 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+      <div className="text-[11px] text-dim-2">Official <span className="font-mono text-[var(--code-accent)]">registry.modelcontextprotocol.io</span> — adds the server's canonical URL/package, so there's no hand-typed endpoint to spoof. Remote servers wrap with mcp-remote; hit <span className="font-semibold text-t2">OAuth</span> after to authenticate.</div>
+      {error && <div className="text-[12px] text-bad">{(error as Error).message}</div>}
+      {isFetching && <div className="font-mono text-[11px] text-dim">searching…</div>}
+      <div className="flex max-h-[320px] flex-col gap-1.5 overflow-auto">
+        {servers.map((s) => {
+          const isAdded = added.includes(s.id);
+          return (
+            <div key={s.id} className="flex items-center gap-3 rounded-md border border-line-soft bg-surface-2 px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-[12px] font-semibold text-t2">{s.name}</span>
+                  <span className={cn('rounded px-1.5 py-px font-mono text-[9.5px] font-semibold', s.remoteUrl ? 'bg-lease/15 text-lease' : 'bg-white/[0.05] text-dim')}>{s.remoteUrl ? 'remote' : s.runtime || 'stdio'}</span>
+                </div>
+                <div className="truncate text-[11px] text-dim-2">{s.description || s.id}</div>
+              </div>
+              <button
+                onClick={() => addReg.mutate({ name: s.name, remoteUrl: s.remoteUrl, runtime: s.runtime, identifier: s.identifier }, { onSuccess: () => setAdded((a) => [...a, s.id]) })}
+                disabled={addReg.isPending || isAdded}
+                className={cn('h-7 shrink-0 rounded-md border px-2.5 font-display text-[11.5px] font-semibold', isAdded ? 'border-ok/40 text-ok' : 'border-brand/50 bg-brand/10 text-brand-soft hover:bg-brand/20')}
+              >{isAdded ? '✓ added' : 'Add'}</button>
+            </div>
+          );
+        })}
+        {!isFetching && q && servers.length === 0 && <div className="font-mono text-[11px] text-dim">no servers for “{q}”.</div>}
+      </div>
+      <div><button onClick={onDone} className="h-9 rounded-md border border-line bg-surface-2 px-3.5 font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Done</button></div>
     </div>
   );
 }
