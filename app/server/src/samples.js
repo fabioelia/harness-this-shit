@@ -68,7 +68,7 @@ export const SAMPLE_ROUTINES = [
     concurrency: { scope: 'pr', onConflict: 'wait' },
     repo: '__REPO__',
     prompt:
-      'A pull request was opened or updated (see event.pull_request). 1) Read it: `gh pr diff <number> --repo <repo>`. 2) Delegate a deep review to the team: `agent-message reviewer "Review PR #<number> in <repo> — prioritized risks with file:line and fixes"`. 3) Post a concise summary to Slack ' + SLACK + ' — the PR title + link, a one-line risk read, and the reviewer’s top 2–3 P0/P1 items. Keep it skimmable. (A per-PR lease means two pushes to the same PR never review it at once.)',
+      'A pull request was opened or updated (see event.pull_request). 1) Read it: `gh pr diff <number> --repo <repo>`. 2) Get a deep review from the team and WAIT for it: `agent-message reviewer "Review PR #<number> in <repo> — prioritized risks with file:line and fixes" --wait`. 3) RUN `slack-post \'' + SLACK + "' '<message>'` to post a concise summary — the PR title + link, a one-line risk read, and the reviewer’s top 2–3 P0/P1 items from step 2. Keep it skimmable. (A per-PR lease means two pushes to the same PR never review it at once.)",
     reactions: [
       { source: 'github', kind: 'checks', when: 'failure', check: '', run: 'ci-triage' },
       { source: 'github', kind: 'review', when: 'approved', run: 'merge-ready' },
@@ -87,7 +87,7 @@ export const SAMPLE_ROUTINES = [
     concurrency: { scope: 'pr', onConflict: 'drop' },
     repo: '__REPO__',
     prompt:
-      "A CI check failed on the PR in the trigger event (event.pull_request, event.checks). Find the failing run (`gh run list --repo <repo>`, `gh run view <id> --log-failed`), identify the root cause, and — if it's non-obvious — `agent-message oncall \"diagnose <failing job> on PR #<n> in <repo>\"`. Post a tight triage to Slack " + SLACK + ': which check failed, the probable cause (with the offending file/commit), and the smallest next step.',
+      "A CI check failed on the PR in the trigger event (event.pull_request, event.checks). Find the failing run (`gh run list --repo <repo>`, `gh run view <id> --log-failed`), identify the root cause, and — if it's non-obvious — `agent-message oncall \"diagnose <failing job> on PR #<n> in <repo>\" --wait` and use its diagnosis. RUN `slack-post` to post a tight triage to " + SLACK + ': which check failed, the probable cause (with the offending file/commit), and the smallest next step.',
     reactions: [], chain: [],
   },
   {

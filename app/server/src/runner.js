@@ -119,7 +119,7 @@ export function buildPrompt(routine, event, constraints = [], { memoryDir, agent
     if (tools.includes('github')) how.push('- GitHub: use the `gh` CLI, always with `--repo OWNER/REPO`. e.g. `gh pr list --repo acme/x --head my-branch --state open --json number,title,url` or `gh pr view N --repo acme/x --json title`.');
     if (tools.includes('slack')) how.push("- Slack: to post a message, RUN the shell command `slack-post '#channel-or-@user' 'your message'` — it is on your PATH and already authenticated as the bot. This IS your Slack tool; do NOT look for a Slack MCP server.");
     if (tools.includes('web') || tools.includes('webfetch')) how.push('- Web: use WebFetch / WebSearch to read pages.');
-    if (tools.includes('team')) how.push("- Team: delegate a sub-task to a teammate agent by running `agent-message <name> 'the task'`. It works asynchronously and reports back in its own log.");
+    if (tools.includes('team')) how.push("- Team: delegate a sub-task to a teammate agent by running `agent-message <name> 'the task'` (fire-and-forget). Add `--wait` to block until the teammate finishes and capture its result so you can act on it — e.g. `agent-message reviewer 'review PR #12 in owner/repo' --wait`, then post the returned findings.");
     tools.filter((c) => !['github', 'slack', 'web', 'webfetch', 'team'].includes(c)).forEach((c) => how.push(`- ${c}: use its mcp__${c}__* tools.`));
     lines.push('', '## Tools you have', 'You are an autonomous session — take the actions the instruction calls for, don’t just describe them.', ...how);
   }
