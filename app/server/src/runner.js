@@ -22,10 +22,12 @@ export function allowedToolsFor(connectors = []) {
   return allow;
 }
 
-export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, model, effort } = {}) {
+export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, model, effort, memoryDir } = {}) {
   return new Promise((resolve) => {
     const start = Date.now();
     const allow = allowedToolsFor(tools);
+    // Memory routines run in their memory dir and may read/update files there.
+    if (memoryDir) allow.push('Read', 'Write', 'Edit', 'Glob', 'Grep');
     // --allowed-tools is variadic, so it must come last (each tool a separate arg)
     // and the prompt is fed via stdin so it isn't swallowed by the variadic.
     // --strict-mcp-config with no --mcp-config = no global MCP servers loaded
@@ -40,7 +42,7 @@ export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, mo
     const fail = (msg) => resolve({ finalText: '', output: '', stderr: msg, code: -1, ms: Date.now() - start, isError: true, costUsd: null, numTurns: null, sessionId: '', events: 0 });
     let child;
     try {
-      child = spawn(CLAUDE_BIN, args, { cwd: tmpdir(), env, stdio: ['pipe', 'pipe', 'pipe'] });
+      child = spawn(CLAUDE_BIN, args, { cwd: memoryDir || tmpdir(), env, stdio: ['pipe', 'pipe', 'pipe'] });
       child.stdin.write(prompt);
       child.stdin.end();
     } catch (e) {
@@ -85,7 +87,7 @@ export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, mo
 /** Assemble the session input: the routine's natural instruction + the live
  *  trigger context + the tools it may use. No output-format contract — the
  *  session does whatever the instruction needs and takes the actions itself. */
-export function buildPrompt(routine, event, constraints = []) {
+export function buildPrompt(routine, event, constraints = [], { memoryDir } = {}) {
   const tools = Array.isArray(routine.connectors)
     ? routine.connectors
     : (() => { try { return JSON.parse(routine.connectors || '[]'); } catch { return []; } })();
@@ -104,6 +106,12 @@ export function buildPrompt(routine, event, constraints = []) {
     lines.push('', '## Target', `${targetRepos.length ? `Repositories: ${targetRepos.join(', ')}.` : ''}${routine.branch ? ` Default branch: ${routine.branch}.` : ''} Use these with \`gh --repo\` unless the trigger payload points elsewhere.`.trim());
   }
   if (constraints.length) lines.push('', '## Hard constraints (must obey)', ...constraints.map((c) => `- ${c}`));
+  if (memoryDir) {
+    lines.push('',
+      '## Memory',
+      'You have a persistent memory in your current working directory that survives across runs. `memory.md` is the index — **read it first**. It links any supporting files (e.g. `patterns.md`, `decisions.md`); read the ones it references that are relevant.',
+      'As you learn things worth remembering for next time — recurring facts, decisions, what worked or failed — **update `memory.md`** (and add or refresh supporting files, always linking them from `memory.md`). Keep it concise, current, and de-duplicated. Do not record secrets.');
+  }
   if (tools.length) {
     const how = [];
     if (tools.includes('github')) how.push('- GitHub: use the `gh` CLI, always with `--repo OWNER/REPO`. e.g. `gh pr list --repo acme/x --head my-branch --state open --json number,title,url` or `gh pr view N --repo acme/x --json title`.');

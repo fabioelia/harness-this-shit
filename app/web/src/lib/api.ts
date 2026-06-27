@@ -132,7 +132,10 @@ export interface CreateRoutineInput {
   schedule?: string;
   filters?: { actions?: string[]; branches?: string[] };
   reactions?: { source: string; kind: string; when: string; run: string; check?: string }[];
+  memory?: boolean;
 }
+export const useRoutineMemory = (slug: string | undefined, enabled: boolean) =>
+  useQuery({ queryKey: ['memory', slug], enabled: !!slug && enabled, queryFn: () => get<{ enabled: boolean; exists: boolean; md: string; files: string[] }>(`/api/routines/${slug}/memory`) });
 export function useCreateRoutine() {
   const qc = useQueryClient();
   return useMutation({

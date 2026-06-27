@@ -31,3 +31,6 @@ yarn.lock
 app/.pnp.*
 app/.yarn/
 app/yarn.lock
+
+# routine memory store (local)
+app/server/memory/

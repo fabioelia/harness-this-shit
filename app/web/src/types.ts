@@ -14,6 +14,7 @@ export interface Routine {
   reactions: Reaction[];
   model: string;
   effort: string;
+  memory: boolean;
   repo: string;
   branch: string;
   state: string;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats } from '@/lib/api';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import type { FrontMatter, RoutineDetail } from '@/types';
 
@@ -84,6 +84,25 @@ function ReactiveFlowCard({ d }: { d: RoutineDetail }) {
           </span>
         ))}
       </div>
+    </div>
+  );
+}
+
+function MemoryCard({ slug }: { slug: string }) {
+  const { data } = useRoutineMemory(slug, true);
+  return (
+    <div className={CARD}>
+      <div className={`${LABEL} mb-3`}>Memory · persists across runs</div>
+      {!data ? (
+        <div className="font-mono text-[12px] text-dim">loading…</div>
+      ) : !data.exists ? (
+        <div className="font-mono text-[12px] text-dim">No memory yet — <span className="font-mono text-[#ada695]">memory.md</span> is created on the first run.</div>
+      ) : (
+        <>
+          <pre className="max-h-[300px] overflow-auto whitespace-pre-wrap break-words rounded-md border border-line-soft bg-code px-3.5 py-3 font-mono text-[11.5px] leading-[1.6] text-muted">{data.md}</pre>
+          {data.files.length > 0 && <div className="mt-2 font-mono text-[11px] text-dim">+ {data.files.length} supporting file{data.files.length === 1 ? '' : 's'}: {data.files.join(', ')}</div>}
+        </>
+      )}
     </div>
   );
 }
@@ -240,6 +259,7 @@ export function RoutineDetailPage() {
             </div>
             <div className="mt-3 border-t border-line-soft pt-2.5 font-mono text-[11px] text-dim">{d.runCount} run{d.runCount === 1 ? '' : 's'} recorded</div>
           </div>
+          {d.memory && <MemoryCard slug={d.slug} />}
           {d.chain?.length > 0 && (
             <div className={CARD}>
               <div className={`${LABEL} mb-3`}>Chain · on success</div>

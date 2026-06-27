@@ -1,6 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { getDb, all, one, run } from './db.js';
 import { runClaude, buildPrompt } from './runner.js';
 import { integrationStatus, listRepos, listOrgs, listChecks, claudeAccount, testConnector, bustStatus, gh } from './integrations.js';
@@ -34,6 +37,18 @@ for (const [k, envKey] of Object.entries(TOKEN_ENV)) {
   const v = meta(`token_${k}`, ''); if (v && !process.env[envKey]) process.env[envKey] = v;
 }
 const now = () => Date.now();
+
+// Per-routine persistent memory: a memory.md index + any supporting files.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const MEM_ROOT = process.env.SWITCHBOARD_MEMORY || join(__dirname, '..', 'memory');
+const memDirFor = (slug) => join(MEM_ROOT, String(slug).replace(/[^a-z0-9_-]/gi, '_'));
+function ensureMemory(slug) {
+  const dir = memDirFor(slug);
+  mkdirSync(dir, { recursive: true });
+  const md = join(dir, 'memory.md');
+  if (!existsSync(md)) writeFileSync(md, `# Memory — ${slug}\n\nThe index of what this routine has learned across runs. Add durable facts below; link supporting files like [decisions](decisions.md).\n\n## Facts\n\n`);
+  return dir;
+}
 const cleanFilters = (f) => {
   const o = f && typeof f === 'object' ? f : {};
   const arr = (x) => (Array.isArray(x) ? x.map((s) => String(s).trim()).filter(Boolean) : []);
@@ -81,7 +96,7 @@ const shapeRoutine = (r) => {
     owner: r.owner, team: r.team, ownerColor: r.av_color, initials: r.initials,
     triggers: j(r.triggers), connectors: j(r.connectors), chain: j(r.chain),
     schedule: r.schedule || '', filters: jObj(r.filters) || {}, reactions: j(r.reactions),
-    model: r.model, effort: r.effort || '', repo: r.repo, branch: r.branch,
+    model: r.model, effort: r.effort || '', memory: !!r.memory, repo: r.repo, branch: r.branch,
     state: r.enabled ? r.state : 'disabled', enabled: !!r.enabled,
     lastAgo: r.last_ago, lastStatus: r.last_status, next: r.next,
     recent, successRate, spend: r.spend, avg: r.avg, runCount: recent.length,
@@ -137,7 +152,8 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     // its granted tools, and does the work itself (gh, slack-post, web…) — the harness
     // only routes, captures the trace, and enforces guardrails.
     const tools = j(r.connectors);
-    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints());
+    const memoryDir = r.memory ? ensureMemory(r.slug) : null;
+    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints(), { memoryDir });
     run('UPDATE runs SET prompt=? WHERE id=?', prompt, id);
 
     // Step-level trace: normalize each stream-json event into a run_events row,
@@ -175,7 +191,7 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       } catch { /* one malformed event must not kill the run */ }
     };
 
-    const res = await runClaude(prompt, { tools, onEvent, model: normModel(r.model), effort: normEffort(r.effort) });
+    const res = await runClaude(prompt, { tools, onEvent, model: normModel(r.model), effort: normEffort(r.effort), memoryDir });
     const ok = !res.isError && !!res.finalText;
     const rawOut = ok ? res.finalText
       : (res.finalText || (res.code === 124 ? `timed out after ${Math.round(res.ms / 1000)}s` : res.stderr || `claude exited ${res.code}`));
@@ -483,14 +499,14 @@ app.post('/api/routines', (req, res) => {
 
   run(
     `INSERT INTO routines
-      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     slug, name, (b.summary || '').trim(), owner, team,
     JSON.stringify(triggers), JSON.stringify(connectors),
     'idle', 'never', 'idle', next, null, '$0.00', enabled, '', '', '—',
     ownerColor(owner), initialsOf(owner), ord,
     (b.prompt || '').trim(), normModel(b.model), (b.repo || '').trim(), (b.branch || 'main').trim(),
-    JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions), normEffort(b.effort)
+    JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions), normEffort(b.effort), b.memory ? 1 : 0
   );
   res.status(201).json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', slug)));
 });
@@ -508,6 +524,7 @@ function buildRoutineMd(r) {
   L.push('runtime:', `  model: ${r.model}`);
   if (r.effort) L.push(`  effort: ${r.effort}`);
   L.push(`  repos: [${(r.repo || '').split(',').map((s) => s.trim()).filter(Boolean).join(', ') || '*'}]`, `  branch: ${r.branch}`);
+  if (r.memory) L.push('  memory: enabled');
   const chain = j(r.chain);
   if (chain.length) L.push(`chain: [${chain.join(', ')}]`);
   const reactions = cleanReactions(j(r.reactions));
@@ -525,6 +542,17 @@ app.get('/api/routines/:slug/raw', (req, res) => {
   res.json({ file: `${r.slug}.routine.md`, md: buildRoutineMd(r) });
 });
 
+// The routine's persistent memory (memory.md + supporting files).
+app.get('/api/routines/:slug/memory', (req, res) => {
+  const r = one('SELECT slug, memory FROM routines WHERE slug=?', req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const dir = memDirFor(r.slug);
+  const mdPath = join(dir, 'memory.md');
+  const exists = existsSync(mdPath);
+  const files = existsSync(dir) ? readdirSync(dir).filter((f) => f !== 'memory.md' && !f.startsWith('.')) : [];
+  res.json({ enabled: !!r.memory, exists, md: exists ? readFileSync(mdPath, 'utf8') : '', files });
+});
+
 app.put('/api/routines/:slug', (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
   if (!r) return res.status(404).json({ error: 'not found' });
@@ -536,13 +564,14 @@ app.put('/api/routines/:slug', (req, res) => {
   const reactions = b.reactions != null ? cleanReactions(b.reactions) : j(r.reactions);
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
   run(
-    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=? WHERE slug=?`,
+    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
     JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
     JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
     normModel(b.model ?? r.model), (b.repo ?? r.repo).trim(), (b.branch ?? r.branch).trim() || 'main',
     (b.prompt ?? r.prompt).trim(), ownerColor(owner), initialsOf(owner), next, schedule, JSON.stringify(filters), JSON.stringify(reactions),
-    b.effort != null ? normEffort(b.effort) : (r.effort || ''), r.slug
+    b.effort != null ? normEffort(b.effort) : (r.effort || ''),
+    b.memory != null ? (b.memory ? 1 : 0) : r.memory, r.slug
   );
   res.json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', r.slug)));
 });

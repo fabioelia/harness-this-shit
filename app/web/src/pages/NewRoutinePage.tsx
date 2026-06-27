@@ -205,6 +205,7 @@ export function NewRoutinePage() {
   const [connectors, setConnectors] = useState<string[]>([]);
   const [model, setModel] = useState('claude-opus-4-8');
   const [effort, setEffort] = useState('');
+  const [memory, setMemory] = useState(false);
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('main');
   const [prompt, setPrompt] = useState('');
@@ -232,7 +233,7 @@ export function NewRoutinePage() {
     setName(d.name); setSlugTouched(true); setSlugInput(d.slug);
     setSummary(d.summary); setOwner(d.owner); setTeam(d.team);
     setTriggers(d.triggers); setConnectors(d.connectors);
-    setModel(d.model || 'claude-opus-4-8'); setEffort(d.effort || ''); setRepo(d.repo || ''); setBranch(d.branch || 'main');
+    setModel(d.model || 'claude-opus-4-8'); setEffort(d.effort || ''); setMemory(!!d.memory); setRepo(d.repo || ''); setBranch(d.branch || 'main');
     setPrompt(d.prompt || '');
     setChain(d.chain.join(', '));
     if (d.schedule) setSchedule(d.schedule);
@@ -264,6 +265,7 @@ export function NewRoutinePage() {
     if (effort) L.push(`  effort: ${effort}`);
     L.push(`  repos: [${repo.split(',').map((s) => s.trim()).filter(Boolean).join(', ') || '*'}]`);
     L.push(`  branch: ${branch || 'main'}`);
+    if (memory) L.push('  memory: enabled');
     if (chainArr.length) L.push(`chain: [${chainArr.join(', ')}]`);
     if (reactions.length) {
       L.push('react:');
@@ -273,12 +275,12 @@ export function NewRoutinePage() {
     L.push('');
     L.push(prompt.trim() || '## Prompt\nDescribe what this routine should do, step by step.');
     return L.join('\n');
-  }, [name, slug, summary, owner, team, triggers, connectors, model, effort, repo, branch, prompt, chain, schedule, filterActions, filterBranches, reactions]);
+  }, [name, slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain, schedule, filterActions, filterBranches, reactions]);
 
   const valid = name.trim().length > 0 && slug.length > 0;
   function submit() {
     if (!valid) return;
-    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions };
+    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions };
     if (isEdit) update.mutate({ slug: editSlug!, body }, { onSuccess: () => navigate(`/routines/${editSlug}`) });
     else create.mutate(body, { onSuccess: (r) => navigate(`/routines/${r.slug}`) });
   }
@@ -422,6 +424,13 @@ export function NewRoutinePage() {
               <div><div className={LABEL}>Branch</div><input value={branch} onChange={(e) => setBranch(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')} /></div>
             </div>
             <div className="mt-2.5 text-[11.5px] text-dim-2">The session runs on this model (passed to <span className="font-mono">claude --model</span>); effort tunes its reasoning depth (<span className="font-mono">--effort</span>).</div>
+            <label className="mt-3.5 flex cursor-pointer items-start gap-2.5 border-t border-line-soft pt-3">
+              <input type="checkbox" checked={memory} onChange={(e) => setMemory(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[#5b9ee6]" />
+              <div>
+                <div className="font-display text-[12.5px] font-semibold text-t2">Persistent memory</div>
+                <div className="text-[11px] text-dim-2">Grant a <span className="font-mono text-[#ada695]">memory.md</span> the session reads at the start and updates as it learns — durable facts carry across runs.</div>
+              </div>
+            </label>
           </div>
 
           <div className={CARD}>
