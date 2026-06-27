@@ -1,13 +1,25 @@
 import express from 'express';
 import cors from 'cors';
+import crypto from 'node:crypto';
 import { getDb, all, one, run } from './db.js';
 import { runClaude, buildPrompt } from './runner.js';
 import { integrationStatus, listRepos, listOrgs } from './integrations.js';
 
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: '2mb' }));
+// Same-machine tool: only allow the local web origin to call the API from a browser.
+app.use(cors({ origin: [/^http:\/\/localhost(:\d+)?$/, /^http:\/\/127\.0\.0\.1(:\d+)?$/] }));
+app.use(express.json({ limit: '2mb', verify: (req, _res, buf) => { req.rawBody = buf; } }));
 getDb();
+
+// Verify a GitHub webhook HMAC (X-Hub-Signature-256) when a secret is configured.
+function githubSignatureValid(req) {
+  const secret = process.env.GITHUB_WEBHOOK_SECRET;
+  if (!secret) return true; // not configured → accept (local/dev)
+  const sig = req.get('x-hub-signature-256') || '';
+  const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(req.rawBody || Buffer.from('')).digest('hex');
+  try { return sig.length === expected.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)); }
+  catch { return false; }
+}
 
 const PORT = process.env.PORT || 4317;
 const j = (s) => { try { const v = JSON.parse(s); return Array.isArray(v) ? v : []; } catch { return []; } };
@@ -39,16 +51,21 @@ const redact = (s) => String(s)
   .replace(/gh[pousr]_[A-Za-z0-9]{20,}/g, 'gh***')
   .replace(/-----BEGIN[\s\S]*?PRIVATE KEY-----/g, '***private-key***');
 
-const shapeRoutine = (r) => ({
-  slug: r.slug, name: r.name, summary: r.summary,
-  owner: r.owner, team: r.team, ownerColor: r.av_color, initials: r.initials,
-  triggers: j(r.triggers), connectors: j(r.connectors), chain: j(r.chain),
-  schedule: r.schedule || '', filters: jObj(r.filters) || {},
-  model: r.model, repo: r.repo, branch: r.branch,
-  state: r.enabled ? r.state : 'disabled', enabled: !!r.enabled,
-  lastAgo: r.last_ago, lastStatus: r.last_status, next: r.next,
-  success: r.success, spend: r.spend, metaShort: r.meta_short, leaseRef: r.lease_ref, avg: r.avg,
-});
+const shapeRoutine = (r) => {
+  const recent = all('SELECT status FROM runs WHERE routine_slug=? ORDER BY created_at DESC LIMIT 12', r.slug).map((x) => x.status).reverse();
+  const finished = recent.filter((s) => s === 'succeeded' || s === 'failed');
+  const successRate = finished.length ? Math.round((100 * finished.filter((s) => s === 'succeeded').length) / finished.length) : null;
+  return {
+    slug: r.slug, name: r.name, summary: r.summary,
+    owner: r.owner, team: r.team, ownerColor: r.av_color, initials: r.initials,
+    triggers: j(r.triggers), connectors: j(r.connectors), chain: j(r.chain),
+    schedule: r.schedule || '', filters: jObj(r.filters) || {},
+    model: r.model, repo: r.repo, branch: r.branch,
+    state: r.enabled ? r.state : 'disabled', enabled: !!r.enabled,
+    lastAgo: r.last_ago, lastStatus: r.last_status, next: r.next,
+    recent, successRate, spend: r.spend, avg: r.avg, runCount: recent.length,
+  };
+};
 
 function detailOf(r) {
   const repos = (r.repo || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -84,7 +101,7 @@ function logActivity(text, state) {
     new Date().toISOString().slice(11, 19), text, state, (one('SELECT MAX(ord) AS m FROM activity').m ?? -1) + 1);
 }
 
-// ── Execution: enrich (gh) → run Claude → deliver sinks → chain ───────────────
+// ── Execution: build prompt → run an auto-mode session → capture trace → chain ─
 function executeRoutine(r, rawEvent, triggerLabel) {
   const id = runId();
   const created = now();
@@ -96,8 +113,8 @@ function executeRoutine(r, rawEvent, triggerLabel) {
 
   (async () => {
     // The session is autonomous: it gets the natural instruction + the raw event +
-    // its granted tools, and does the work itself (gh, slack-post, web…). No harness
-    // enrichment, no harness sinks.
+    // its granted tools, and does the work itself (gh, slack-post, web…) — the harness
+    // only routes, captures the trace, and enforces guardrails.
     const tools = j(r.connectors);
     const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints());
     run('UPDATE runs SET prompt=? WHERE id=?', prompt, id);
@@ -139,7 +156,9 @@ function executeRoutine(r, rawEvent, triggerLabel) {
 
     const res = await runClaude(prompt, { tools, onEvent });
     const ok = !res.isError && !!res.finalText;
-    const output = ok ? res.finalText : (res.finalText || res.stderr || `claude exited ${res.code}`);
+    const rawOut = ok ? res.finalText
+      : (res.finalText || (res.code === 124 ? `timed out after ${Math.round(res.ms / 1000)}s` : res.stderr || `claude exited ${res.code}`));
+    const output = redact(rawOut); // never persist/log unredacted session output
 
     run('UPDATE runs SET status=?, dur=?, dur_ms=?, output=?, cost_usd=?, num_turns=?, session_id=? WHERE id=?',
       ok ? 'succeeded' : 'failed', fmtDur(res.ms), res.ms, output, res.costUsd, res.numTurns, res.sessionId, id);
@@ -150,11 +169,18 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       `$${Number(agg.spend || 0).toFixed(2)}`, agg.avgms ? fmtDur(agg.avgms) : '—', r.slug);
     logActivity(`${r.slug} ${ok ? 'ran · ' + output.split('\n').pop().slice(0, 60) : 'failed'} · ${triggerLabel}`, ok ? 'success' : 'failing');
 
-    // chain: kick off downstream routines with this session's result as context
+    // chain: kick off downstream routines, guarding against cycles + runaway depth.
     if (ok) {
-      for (const slug of j(r.chain)) {
-        const dr = one('SELECT * FROM routines WHERE slug=? AND enabled=1', slug);
-        if (dr) executeRoutine(dr, { ...(rawEvent ?? {}), upstream: { routine: r.slug, output } }, `after · ${r.slug}`);
+      const path = Array.isArray(rawEvent?._chainPath) ? rawEvent._chainPath : [];
+      const nextPath = [...path, r.slug];
+      if (nextPath.length > 8) {
+        logActivity(`chain stopped · max depth (8) reached at ${r.slug}`, 'idle');
+      } else {
+        for (const slug of j(r.chain)) {
+          if (nextPath.includes(slug)) { logActivity(`chain stopped · cycle back to ${slug}`, 'idle'); continue; }
+          const dr = one('SELECT * FROM routines WHERE slug=? AND enabled=1', slug);
+          if (dr) executeRoutine(dr, { ...(rawEvent ?? {}), _chainPath: nextPath, upstream: { routine: r.slug, output } }, `after · ${r.slug}`);
+        }
       }
     }
   })().catch((e) => {
@@ -291,7 +317,6 @@ app.post('/api/routines', (req, res) => {
   const team = (b.team || '').trim() || 'general';
   const triggers = Array.isArray(b.triggers) ? b.triggers.filter(Boolean) : [];
   const connectors = Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : [];
-  const sinks = Array.isArray(b.sinks) ? b.sinks.filter((s) => s && s.type) : [];
   const chain = Array.isArray(b.chain) ? b.chain.filter(Boolean) : [];
   const schedule = (b.schedule || '').trim();
   const filters = cleanFilters(b.filters);
@@ -301,14 +326,14 @@ app.post('/api/routines', (req, res) => {
 
   run(
     `INSERT INTO routines
-      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,sinks,chain,schedule,filters)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     slug, name, (b.summary || '').trim(), owner, team,
     JSON.stringify(triggers), JSON.stringify(connectors),
     'idle', 'never', 'idle', next, null, '$0.00', enabled, '', '', '—',
     ownerColor(owner), initialsOf(owner), ord,
     (b.prompt || '').trim(), (b.model || 'claude-opus-4-8').trim(), (b.repo || '').trim(), (b.branch || 'main').trim(),
-    JSON.stringify(sinks), JSON.stringify(chain), schedule, JSON.stringify(filters)
+    JSON.stringify(chain), schedule, JSON.stringify(filters)
   );
   res.status(201).json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', slug)));
 });
@@ -346,10 +371,9 @@ app.put('/api/routines/:slug', (req, res) => {
   const filters = b.filters != null ? cleanFilters(b.filters) : (jObj(r.filters) || {});
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
   run(
-    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,sinks=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=? WHERE slug=?`,
+    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
     JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
-    JSON.stringify(Array.isArray(b.sinks) ? b.sinks.filter((s) => s && s.type) : j(r.sinks)),
     JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
     (b.model ?? r.model).trim() || 'claude-opus-4-8', (b.repo ?? r.repo).trim(), (b.branch ?? r.branch).trim() || 'main',
     (b.prompt ?? r.prompt).trim(), ownerColor(owner), initialsOf(owner), next, schedule, JSON.stringify(filters), r.slug
@@ -385,7 +409,7 @@ app.post('/api/routines/:slug/validate', async (req, res) => {
   // Schedule cron must be present and parseable, else the routine silently never fires.
   if (j(r.triggers).includes('schedule')) {
     const parts = String(r.schedule || '').trim().split(/\s+/);
-    const okCron = parts.length === 5 && parts.every((f) => /^[\d*,/-]+$/.test(f));
+    const okCron = parts.length === 5 && parts.every((f) => /^[\d*,/?-]+$/.test(f));
     checks.push({ label: 'Schedule cron', ok: okCron, detail: r.schedule ? (okCron ? r.schedule : `"${r.schedule}" is not a valid 5-field cron`) : 'no cron set — will never fire' });
   }
   (j(r.chain)).forEach((c) => checks.push({ label: `Chain → ${c}`, ok: !!one('SELECT 1 FROM routines WHERE slug=?', c), detail: one('SELECT 1 FROM routines WHERE slug=?', c) ? 'resolves' : 'no such routine' }));
@@ -498,6 +522,7 @@ app.post('/api/events/:type', (req, res) => {
 
 // Real GitHub webhook receiver — dispatches by the X-GitHub-Event header.
 app.post('/api/webhooks/github', (req, res) => {
+  if (!githubSignatureValid(req)) return res.status(401).json({ error: 'invalid webhook signature' });
   const type = req.get('x-github-event') || 'push';
   const out = dispatchEvent(type, req.body || {});
   if (out.error) return res.status(409).json(out);

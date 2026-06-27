@@ -114,8 +114,9 @@ export interface CreateRoutineInput {
   repo?: string;
   branch?: string;
   prompt?: string;
-  sinks?: { type: string; target?: string }[];
   chain?: string[];
+  schedule?: string;
+  filters?: { actions?: string[]; branches?: string[] };
 }
 export function useCreateRoutine() {
   const qc = useQueryClient();

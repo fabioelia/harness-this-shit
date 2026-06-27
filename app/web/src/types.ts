@@ -19,10 +19,10 @@ export interface Routine {
   lastAgo: string;
   lastStatus: string;
   next: string;
-  success: number | null;
+  recent: string[];
+  successRate: number | null;
+  runCount: number;
   spend: string;
-  metaShort: string;
-  leaseRef: string;
   avg: string;
 }
 

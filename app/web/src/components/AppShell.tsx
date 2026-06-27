@@ -74,7 +74,7 @@ export function AppShell() {
           ))}
           <Tip label={halted ? 'Fleet halted — release the kill switch' : 'Emergency stop — halt every routine'} side="right">
             <button
-              onClick={() => kill.mutate(!halted)}
+              onClick={() => { if (halted || confirm('Engage the kill switch? This halts ALL routines until released.')) kill.mutate(!halted); }}
               className={cn(
                 'mt-auto flex w-12 flex-col items-center gap-[5px] rounded-[11px] py-[9px] transition-colors',
                 halted ? 'bg-bad/15 text-bad animate-sbpulse' : 'text-bad/90 hover:text-bad'

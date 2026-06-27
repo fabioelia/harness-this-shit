@@ -28,7 +28,6 @@ export function ConnectorsPage() {
         </div>
         <div className="mt-3.5 flex items-center gap-[18px] font-sans text-[12px] font-medium text-muted-2">
           <span className="inline-flex items-center gap-1.5"><Dot color={SIGNAL.success} size={7} /><span className="font-semibold text-t2">{counts('ok')}</span> connected</span>
-          <span className="inline-flex items-center gap-1.5"><Dot color={SIGNAL.needs_human} size={7} /><span className="font-semibold text-t2">{counts('degraded')}</span> degraded</span>
           <span className="inline-flex items-center gap-1.5"><Dot color={SIGNAL.disabled} size={7} /><span className="font-semibold text-t2">{counts('off')}</span> not connected</span>
         </div>
       </div>

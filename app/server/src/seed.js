@@ -13,7 +13,6 @@ const PRINT_PR_TITLE = {
   model: 'claude-opus-4-8',
   repo: 'fabioelia/harness-this-shit',
   branch: 'main',
-  sinks: [],
   chain: [],
 };
 
@@ -21,14 +20,14 @@ export function seed(db) {
   const r = PRINT_PR_TITLE;
   db.prepare(
     `INSERT INTO routines
-      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,sinks,chain)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(
     r.slug, r.name, r.summary, r.owner, r.team,
     JSON.stringify(r.triggers), JSON.stringify(r.connectors),
     'idle', 'never', 'idle', 'on event', null, '$0.00', 1, '', '', '—',
     '#5b9ee6', 'FA', 0,
-    r.prompt, r.model, r.repo, r.branch, JSON.stringify(r.sinks), JSON.stringify(r.chain)
+    r.prompt, r.model, r.repo, r.branch, JSON.stringify(r.chain)
   );
   db.prepare('INSERT INTO meta (key,value) VALUES (?,?)').run('kill_switch', 'false');
   db.prepare('INSERT INTO meta (key,value) VALUES (?,?)').run('wordmark', 'Switchboard');

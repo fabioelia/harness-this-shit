@@ -35,21 +35,10 @@ CREATE TABLE IF NOT EXISTS routines (
   model TEXT NOT NULL DEFAULT 'claude-opus-4-8',
   repo TEXT NOT NULL DEFAULT '',
   branch TEXT NOT NULL DEFAULT 'main',
-  sinks TEXT NOT NULL DEFAULT '[]',   -- json: output sinks [{type,target}]
+  sinks TEXT NOT NULL DEFAULT '[]',   -- deprecated, unused (the session does its own delivery)
   chain TEXT NOT NULL DEFAULT '[]',   -- json: downstream routine slugs
   schedule TEXT NOT NULL DEFAULT '',  -- 5-field cron for the schedule trigger
   filters TEXT NOT NULL DEFAULT '{}'  -- json: actions/branches event sub-filters
-);
-CREATE TABLE IF NOT EXISTS connectors (
-  code TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  health TEXT NOT NULL,        -- ok | degraded | off
-  auth TEXT NOT NULL,
-  scopes TEXT NOT NULL,
-  routines INTEGER NOT NULL,
-  av_color TEXT NOT NULL,
-  ord INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS activity (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,10 +58,10 @@ CREATE TABLE IF NOT EXISTS runs (
   output TEXT NOT NULL DEFAULT '',
   event TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL DEFAULT 0,
-  sinks_result TEXT NOT NULL DEFAULT '[]',
-  exec_mode TEXT NOT NULL DEFAULT 'cloud',   -- cloud (remote session) | local
-  prompt TEXT NOT NULL DEFAULT '',           -- resolved prompt for the cloud worker
-  cloud_url TEXT NOT NULL DEFAULT '',
+  sinks_result TEXT NOT NULL DEFAULT '[]',   -- deprecated, unused
+  exec_mode TEXT NOT NULL DEFAULT 'local',   -- runs are local sessions
+  prompt TEXT NOT NULL DEFAULT '',           -- resolved session prompt (for the trace)
+  cloud_url TEXT NOT NULL DEFAULT '',        -- deprecated, unused
   cost_usd REAL,                             -- total_cost_usd from the session
   num_turns INTEGER,                         -- model turns
   session_id TEXT NOT NULL DEFAULT ''        -- claude session id (resume handle)

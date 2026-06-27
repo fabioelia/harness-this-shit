@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw } from '@/lib/api';
-import { Avatar, Chip, Dot, Empty, Pill, StatePill, Toggle, SIGNAL } from '@/components/sb';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats } from '@/lib/api';
+import { Avatar, Chip, Dot, Empty, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import type { FrontMatter, RoutineDetail } from '@/types';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
@@ -92,20 +92,30 @@ export function RoutineDetailPage() {
   const { slug } = useParams();
   const navigate = useNavigate();
   const { data: d, isLoading } = useRoutine(slug);
+  const { data: stats } = useStats();
   const toggle = useToggleRoutine();
   const dispatch = useDispatchRoutine();
   const push = useSimulatePush();
   const validate = useValidateRoutine();
   const del = useDeleteRoutine();
   const [showRaw, setShowRaw] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; tone: 'bad' | 'warn' } | null>(null);
   const raw = useRoutineRaw(slug, showRaw);
+  useEffect(() => {
+    if (!showRaw) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowRaw(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showRaw]);
   if (isLoading) return <div className="px-6 py-10 text-muted">Loading…</div>;
   if (!d) return <div className="px-[26px] py-10"><Empty title="Routine not found" hint={<Link className="text-brand" to="/">Back to Fleet ›</Link>} /></div>;
 
-  const runNow = () => dispatch.mutate(d.slug, { onSuccess: (res) => navigate(`/runs/${res.runId}`) });
+  const killed = !!stats?.killSwitch;
+  const runNow = () => { setMsg(null); dispatch.mutate(d.slug, { onSuccess: (res) => navigate(`/runs/${res.runId}`), onError: (e) => setMsg({ text: (e as Error).message, tone: 'bad' }) }); };
   const onKill = () => { if (confirm(`Disable “${d.name}”? It will stop firing on its triggers.`)) toggle.mutate({ slug: d.slug, enabled: false }); };
   const onDelete = () => { if (confirm(`Delete “${d.name}” and its run history? This cannot be undone.`)) del.mutate(d.slug, { onSuccess: () => navigate('/') }); };
   const simulatePush = () => {
+    setMsg(null);
     const repo = (d.repo || '').split(',').map((s) => s.trim()).filter(Boolean)[0];
     const payload = repo
       ? { event: 'push', repository: repo, ref: `refs/heads/${d.branch || 'main'}`, pusher: d.owner, head_commit: { message: 'simulated push from Switchboard' }, pull_request: { number: 1 } }
@@ -114,8 +124,9 @@ export function RoutineDetailPage() {
       onSuccess: (res) => {
         const mine = res.runs.find((x) => x.slug === d.slug);
         if (mine) navigate(`/runs/${mine.runId}`);
-        else alert(`No run produced — this routine's repo/filters didn't match the simulated push${repo ? ` to ${repo}` : ''}.`);
+        else setMsg({ text: `No run produced — this routine's repo/filters didn't match the simulated push${repo ? ` to ${repo}` : ''}.`, tone: 'warn' });
       },
+      onError: (e) => setMsg({ text: (e as Error).message, tone: 'bad' }),
     });
   };
   const hasPush = d.triggers.includes('push');
@@ -126,7 +137,7 @@ export function RoutineDetailPage() {
       {/* header band */}
       <div className="border-b border-line-soft bg-head px-[26px] py-[22px]">
         <div className="mb-3 font-mono text-[12px] font-medium text-dim">
-          <Link to="/" className="text-brand">{d.breadcrumb?.[0] ?? 'Fleet'}</Link> › {d.slug}
+          <span className="text-brand">Switchboard</span> › <Link to="/" className="text-brand">Fleet</Link> › {d.slug}
         </div>
         <div className="flex items-center justify-between gap-4">
           <div className="flex min-w-0 items-center gap-3.5">
@@ -136,19 +147,22 @@ export function RoutineDetailPage() {
           </div>
           <div className="flex items-center gap-[9px]">
             {hasPush && (
-              <button onClick={simulatePush} disabled={busy} className="flex h-[34px] items-center gap-[7px] rounded-md border border-brand/50 bg-brand/10 px-3.5 font-display text-[12.5px] font-semibold text-brand-soft transition-colors hover:bg-brand/20 disabled:opacity-40">
+              <button onClick={simulatePush} disabled={busy || killed} title={killed ? 'Kill switch is engaged' : undefined} className="flex h-[34px] items-center gap-[7px] rounded-md border border-brand/50 bg-brand/10 px-3.5 font-display text-[12.5px] font-semibold text-brand-soft transition-colors hover:bg-brand/20 disabled:opacity-40">
                 <svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M9 14 V4" /><path d="M5 8 L9 4 L13 8" /></svg>
                 {push.isPending ? 'Pushing…' : 'Simulate push'}
               </button>
             )}
-            <button onClick={runNow} disabled={busy} className="flex h-[34px] items-center gap-[7px] rounded-md bg-brand px-3.5 font-display text-[12.5px] font-semibold text-[#16130f] transition-colors hover:bg-brand-deep disabled:opacity-40">
+            <button onClick={runNow} disabled={busy || killed} title={killed ? 'Kill switch is engaged' : undefined} className="flex h-[34px] items-center gap-[7px] rounded-md bg-brand px-3.5 font-display text-[12.5px] font-semibold text-[#16130f] transition-colors hover:bg-brand-deep disabled:opacity-40">
               <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M3 2 L10 6 L3 10 Z" /></svg>{dispatch.isPending ? 'Running…' : 'Run now'}
             </button>
             <button onClick={() => navigate(`/routines/${d.slug}/edit`)} className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Edit</button>
             <button onClick={() => validate.mutate(d.slug)} disabled={validate.isPending} className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair disabled:opacity-40">{validate.isPending ? 'Validating…' : 'Validate'}</button>
-            <button onClick={d.enabled ? onKill : onDelete} disabled={del.isPending} className="flex h-[34px] items-center rounded-md border border-bad/40 px-[13px] font-display text-[12.5px] font-semibold text-bad hover:bg-bad/10 disabled:opacity-40">{d.enabled ? 'Kill' : 'Delete'}</button>
+            <button onClick={d.enabled ? onKill : onDelete} disabled={del.isPending} className="flex h-[34px] items-center rounded-md border border-bad/40 px-[13px] font-display text-[12.5px] font-semibold text-bad hover:bg-bad/10 disabled:opacity-40">{d.enabled ? 'Disable' : 'Delete'}</button>
           </div>
         </div>
+        {msg && (
+          <div className={`mt-3 inline-block rounded-md border px-3 py-1.5 text-[12px] ${msg.tone === 'bad' ? 'border-bad/30 bg-bad/10 text-bad' : 'border-warn/30 bg-warn/10 text-warn'}`}>{msg.text}</div>
+        )}
 
         {validate.data && (
           <div className={`mt-3 rounded-md border px-3.5 py-2.5 ${validate.data.ok ? 'border-ok/30 bg-ok/[0.06]' : 'border-warn/30 bg-warn/[0.06]'}`}>
@@ -201,7 +215,7 @@ export function RoutineDetailPage() {
               <div className={LABEL}>Prompt body</div>
               <button onClick={() => navigate(`/routines/${d.slug}/edit`)} className="font-mono text-[11px] font-medium text-brand hover:underline">Open in editor ›</button>
             </div>
-            <pre className="overflow-auto rounded-md border border-line-soft bg-code px-4 py-3.5 font-mono text-[12px] leading-[1.7] text-muted">
+            <pre className="overflow-auto whitespace-pre-wrap break-words rounded-md border border-line-soft bg-code px-4 py-3.5 font-mono text-[12px] leading-[1.7] text-muted">
               {d.prompt.split('\n').map((line, i) => (
                 <div key={i} style={line.startsWith('##') ? { color: '#6f685c' } : undefined}>{line || ' '}</div>
               ))}
@@ -209,6 +223,23 @@ export function RoutineDetailPage() {
           </div>
         </div>
         <div className="flex min-w-0 flex-col gap-[18px]">
+          <div className={CARD}>
+            <div className={`${LABEL} mb-3.5`}>Metrics</div>
+            <div className="grid grid-cols-2 gap-x-[18px] gap-y-[13px]">
+              {[
+                ['Last run', <span className="inline-flex items-center gap-1.5"><Dot state={d.lastStatus} size={7} />{d.lastAgo}</span>],
+                ['Success rate', d.successRate == null ? '—' : `${d.successRate}%`],
+                ['Spend', d.spend || '$0.00'],
+                ['Avg run', d.avg || '—'],
+              ].map(([k, v], i) => (
+                <div key={i} className="min-w-0">
+                  <div className="mb-[3px] font-display text-[10px] font-medium uppercase tracking-[0.06em] text-dim-2">{k}</div>
+                  <div className="truncate font-mono text-[12.5px] font-semibold text-t2">{v}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 border-t border-line-soft pt-2.5 font-mono text-[11px] text-dim">{d.runCount} run{d.runCount === 1 ? '' : 's'} recorded</div>
+          </div>
           {d.chain?.length > 0 && (
             <div className={CARD}>
               <div className={`${LABEL} mb-3`}>Chain · on success</div>
@@ -229,7 +260,9 @@ export function RoutineDetailPage() {
               <Link to="/runs" className="font-mono text-[11px] font-medium text-brand">All runs ›</Link>
             </div>
             <div className="flex flex-col">
-              {d.runHistory.map((h) => (
+              {d.runHistory.length === 0 ? (
+                <div className="py-2 font-mono text-[12px] text-dim">No runs yet — use <span className="text-brand">Run now</span> to fire one.</div>
+              ) : d.runHistory.map((h) => (
                 <Link key={h.id} to={`/runs/${h.id}`} className="flex items-center gap-[11px] border-b border-line-soft py-[9px] last:border-0 hover:opacity-80">
                   <Dot state={h.status} size={8} />
                   <span className="w-[74px] shrink-0 font-mono text-[11.5px] font-semibold text-t2">{h.id}</span>

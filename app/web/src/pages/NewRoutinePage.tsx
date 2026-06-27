@@ -94,7 +94,7 @@ function RepoPicker({ value, onChange }: { value: string; onChange: (v: string) 
 
 const onLine = (t: string, slug: string) =>
   ({
-    schedule: '- schedule: { cron: "0 9 * * *", tz: UTC }',
+    schedule: '- schedule: { cron: "0 9 * * *" }',
     push: '- github: { event: push, branches: [main] }',
     label: '- github: { event: label, name: needs-review, on: added }',
     comment: '- github: { event: issue_comment, on: edited }',
@@ -177,7 +177,8 @@ export function NewRoutinePage() {
     L.push(`owner: ${owner || 'unassigned'}`);
     L.push(`team: ${team || 'general'}`);
     L.push('on:');
-    (triggers.length ? triggers : ['manual']).forEach((t) => {
+    if (!triggers.length) L.push('  # no triggers selected — run-now / API only');
+    triggers.forEach((t) => {
       if (t === 'schedule') L.push(`  - schedule: { cron: "${schedule}" }`);
       else if (t === 'push' && filtersObj.branches.length) L.push(`  - push: { branches: [${filtersObj.branches.join(', ')}] }`);
       else if (actionable && filtersObj.actions.length && t !== 'push') L.push(`  - ${t}: { actions: [${filtersObj.actions.join(', ')}] }`);
@@ -215,7 +216,7 @@ export function NewRoutinePage() {
         <div className="flex items-center justify-between gap-4">
           <div>
             <div className="font-display text-[23px] font-bold tracking-tight">{isEdit ? 'Edit routine' : 'New routine'}</div>
-            <div className="mt-1 text-[13px] text-muted-2">A routine is one file. Fill these in — the <span className="font-mono text-[#ada695]">.routine.md</span> on the right updates live, and is committed on {isEdit ? 'save' : 'create'}.</div>
+            <div className="mt-1 text-[13px] text-muted-2">A routine is one definition. Fill these in — the <span className="font-mono text-[#ada695]">.routine.md</span> preview on the right updates live, and is saved on {isEdit ? 'save' : 'create'}.</div>
           </div>
           <div className="flex items-center gap-[9px]">
             <Link to={isEdit ? `/routines/${editSlug}` : '/'} className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Cancel</Link>
@@ -348,7 +349,7 @@ export function NewRoutinePage() {
                 ))}
               </pre>
             </div>
-            <div className="mt-2.5 text-[11.5px] text-dim-2">This is the whole routine — one reviewable file. Editing it later is a commit; the UI writes the same file.</div>
+            <div className="mt-2.5 text-[11.5px] text-dim-2">This preview is the whole routine — one reviewable definition. Editing it later updates the same record.</div>
           </div>
         </div>
       </div>

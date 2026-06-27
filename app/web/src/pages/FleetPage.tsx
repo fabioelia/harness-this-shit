@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useRoutines, useStats, useToggleRoutine, useKillSwitch, useConnectors } from '@/lib/api';
-import { Avatar, Chip, Dot, Empty, Sbar, Spark, StatePill, Toggle, makeHist } from '@/components/sb';
+import { Avatar, Chip, Dot, Empty, StatePill, Toggle } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { Routine, Stats } from '@/types';
 
-const GRID = 'grid-template-columns:36px minmax(0,2.2fr) minmax(0,1.5fr) 156px 144px 116px 92px 132px 78px';
 
 function StopIcon({ s = 13 }: { s?: number }) {
   return (
@@ -62,7 +61,6 @@ function StatStrip({ s }: { s?: Stats }) {
 
 function FleetRow({ r, i }: { r: Routine; i: number }) {
   const toggle = useToggleRoutine();
-  const hist = useMemo(() => makeHist(r.success, r.state, i + 1), [r.success, r.state, i]);
   return (
     <div
       className="border-b border-line-soft transition-colors last:border-0 hover:bg-white/[0.015]"
@@ -86,13 +84,21 @@ function FleetRow({ r, i }: { r: Routine; i: number }) {
       </div>
       <div className="flex flex-col items-start gap-1">
         <StatePill state={r.state} />
-        {r.leaseRef && <span className="font-mono text-[10.5px] font-medium text-lease">{r.leaseRef}</span>}
       </div>
       <div className="flex items-center gap-[7px] font-mono text-[12px] font-medium text-[#ada695]">
         <Dot state={r.lastStatus} size={8} /> {r.lastAgo}
       </div>
       <div className="font-mono text-[12px] font-medium text-muted-2">{r.next}</div>
-      <div className="flex flex-col gap-[5px]"><Spark hist={hist} /><Sbar pct={r.success} /></div>
+      <div className="flex flex-col gap-[5px]">
+        <div className="flex h-[16px] items-end gap-[2px]">
+          {r.recent.length === 0
+            ? <span className="font-mono text-[11px] text-faint">no runs</span>
+            : r.recent.map((s, i) => (
+                <span key={i} title={s} className="w-[5px] rounded-[1px]" style={{ height: s === 'running' ? 8 : 14, background: s === 'succeeded' ? '#5fbf86' : s === 'failed' ? '#e5736b' : '#5d584d' }} />
+              ))}
+        </div>
+        <span className="font-mono text-[11px] font-medium text-[#ada695]">{r.successRate == null ? '—' : `${r.successRate}%`}</span>
+      </div>
       <div className="text-right font-mono text-[12px] font-medium text-[#ada695]">{r.avg}</div>
     </div>
   );
@@ -111,6 +117,16 @@ export function FleetPage() {
   const [conn, setConn] = useState('');
   const [needsReview, setNeedsReview] = useState(false);
   const [params] = useSearchParams();
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = document.activeElement;
+      const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT');
+      if (e.key === '/' && !typing) { e.preventDefault(); searchRef.current?.focus(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   useEffect(() => {
     const c = params.get('connector'); if (c) setConn(c);
     const t = params.get('team'); if (t) setTeam(t);
@@ -129,7 +145,7 @@ export function FleetPage() {
     if (team && r.team !== team) return false;
     if (trig && !r.triggers.includes(trig)) return false;
     if (conn && !r.connectors.includes(conn)) return false;
-    if (needsReview && !(r.state === 'failing' || r.state === 'needs_human' || (r.success != null && r.success < 75))) return false;
+    if (needsReview && !(r.state === 'failing' || r.lastStatus === 'failing' || (r.successRate != null && r.successRate < 75))) return false;
     return true;
   });
 
@@ -146,7 +162,7 @@ export function FleetPage() {
         </div>
         <div className="flex items-center gap-2.5">
           <button
-            onClick={() => kill.mutate(!stats?.killSwitch)}
+            onClick={() => { const engaging = !stats?.killSwitch; if (!engaging || confirm('Engage the kill switch? This halts ALL routines until released.')) kill.mutate(engaging); }}
             className="flex h-9 items-center gap-[7px] rounded-md border border-bad/40 px-3.5 font-display text-[12.5px] font-semibold text-bad transition-colors hover:bg-bad/10"
           >
             <StopIcon />{stats?.killSwitch ? 'Halted' : 'Stop all'}
@@ -177,7 +193,7 @@ export function FleetPage() {
       <div className="mb-3.5 flex flex-wrap items-center gap-[9px]">
         <div className="flex h-[34px] w-[280px] items-center gap-[9px] rounded-md border border-line bg-surface px-3">
           <svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="#767063" strokeWidth="1.6"><circle cx="8" cy="8" r="5" /><line x1="11.8" y1="11.8" x2="15.5" y2="15.5" strokeLinecap="round" /></svg>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search routines, owners, tags…" className="flex-1 bg-transparent text-[12.5px] text-fg placeholder:text-dim-2 focus:outline-none" />
+          <input ref={searchRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search routines, owners, tags…" className="flex-1 bg-transparent text-[12.5px] text-fg placeholder:text-dim-2 focus:outline-none" />
           <span className="rounded border border-line px-[5px] font-mono text-[11px] font-semibold text-faint">/</span>
         </div>
         <FilterSelect value={team} onChange={setTeam} label="Team" options={opts.teams} />
@@ -202,19 +218,21 @@ export function FleetPage() {
       {/* table */}
       <div className="overflow-hidden rounded-xl border border-line bg-surface">
         <div className="border-b border-line bg-surface-2 px-4 py-[11px] font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2" style={{ display: 'grid', gridTemplateColumns: '36px minmax(0,2.2fr) minmax(0,1.5fr) 156px 144px 116px 92px 132px 78px', alignItems: 'center' }}>
-          <div /><div>Routine</div><div>Triggers</div><div>Owner · team</div><div>State</div><div>Last run</div><div>Next</div><div>7d health</div><div className="text-right">Avg run</div>
+          <div /><div>Routine</div><div>Triggers</div><div>Owner · team</div><div>State</div><div>Last run</div><div>Next</div><div>Recent runs</div><div className="text-right">Avg run</div>
         </div>
-        {list.length === 0 ? (
+        {!routines ? (
+          <div className="px-6 py-10 text-center font-mono text-[12px] text-dim">Loading…</div>
+        ) : list.length === 0 ? (
           <Empty
-            title={routines && routines.length === 0 ? 'No routines yet' : 'No routines match'}
+            title={routines.length === 0 ? 'No routines yet' : 'No routines match'}
             hint={
-              routines && routines.length === 0 ? (
+              routines.length === 0 ? (
                 <>
-                  Routines are version-controlled <span className="font-mono text-[#ada695]">*.routine.md</span> files.{' '}
+                  A routine is a saved prompt + granted tools + triggers.{' '}
                   <Link to="/routines/new" className="text-brand hover:underline">Create your first one ›</Link>
                 </>
               ) : (
-                'Try clearing the search.'
+                'Try clearing the search or filters.'
               )
             }
           />
