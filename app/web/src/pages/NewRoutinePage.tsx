@@ -471,7 +471,7 @@ export function NewRoutinePage() {
                       <option value="drop">drop (stand down)</option>
                     </select>
                   </div>
-                  <div className="mt-1.5 text-[11px] text-dim-2">A run acquires a lease on its scope (e.g. <span className="font-mono text-[#ada695]">pr:acme/x#42</span>). If held, <span className="font-mono">wait</span> serializes; <span className="font-mono">drop</span> stands down. Leases expire after 15m so a crash never wedges.</div>
+                  <div className="mt-1.5 text-[11px] text-dim-2">A run acquires a lease on its scope (e.g. <span className="font-mono text-[#ada695]">pr:acme/x#42</span>). If held, <span className="font-mono">wait</span> serializes; <span className="font-mono">drop</span> stands down. Leases expire after 15m so a crash never wedges. Per-PR scope also runs a <span className="text-t2">SHA barrier</span> — a run whose PR head moved while it waited stands down as stale.</div>
                 </div>
                 <div className="border-t border-line-soft pt-3.5">
                   <div className={LABEL}>Chain · <span className="font-mono lowercase tracking-normal text-dim-2">run routines immediately after</span></div>

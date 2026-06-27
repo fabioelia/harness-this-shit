@@ -169,6 +169,12 @@ function acquireLease(key, runId, slug, sha) {
   return { ok: true };
 }
 const releaseLease = (key, runId) => { if (key) run('DELETE FROM leases WHERE key=? AND run_id=?', key, runId); };
+// SHA barrier: the PR's live head, so a run whose PR moved (e.g. while it waited on the
+// lease) stands down instead of acting on an outdated diff. Best-effort — '' = skip the check.
+async function livePrHeadSha(repo, pr) {
+  try { const r = await gh(['pr', 'view', String(pr), '--repo', repo, '--json', 'headRefOid', '--jq', '.headRefOid']); return r.code === 0 ? r.out.trim() : ''; }
+  catch { return ''; }
+}
 
 // Redact obvious secrets before a trace event is ever written to disk.
 // Runtime options the CLI actually accepts (verified against `claude --model/--effort`).
@@ -271,6 +277,19 @@ function executeRoutine(r, rawEvent, triggerLabel) {
         if (!lease.ok) {
           run("UPDATE runs SET status='failed', dur='—', output=? WHERE id=?", `gave up waiting for ${leaseK}`, id);
           run("UPDATE routines SET state='idle', last_status='failing' WHERE slug=?", r.slug);
+          return;
+        }
+      }
+      // SHA barrier: once we hold the lease, if the PR's head moved past the SHA this
+      // event was for (someone pushed, e.g. while we waited), stand down as stale.
+      const prm = sha && leaseK.startsWith('pr:') && leaseK.slice(3).match(/^(.+)#(\d+)$/);
+      if (prm) {
+        const live = await livePrHeadSha(prm[1], prm[2]);
+        if (live && live !== sha) {
+          releaseLease(leaseK, id);
+          run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", `stood down — ${prm[1]}#${prm[2]} head moved to ${live.slice(0, 7)} (this run was for ${sha.slice(0, 7)})`, id);
+          run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
+          logActivity(`${r.slug} stood down · ${leaseK} head ${sha.slice(0, 7)}→${live.slice(0, 7)} (stale)`, 'idle');
           return;
         }
       }
