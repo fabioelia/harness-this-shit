@@ -70,8 +70,22 @@ CREATE TABLE IF NOT EXISTS runs (
   sinks_result TEXT NOT NULL DEFAULT '[]',
   exec_mode TEXT NOT NULL DEFAULT 'cloud',   -- cloud (remote session) | local
   prompt TEXT NOT NULL DEFAULT '',           -- resolved prompt for the cloud worker
-  cloud_url TEXT NOT NULL DEFAULT ''
+  cloud_url TEXT NOT NULL DEFAULT '',
+  cost_usd REAL,                             -- total_cost_usd from the session
+  num_turns INTEGER,                         -- model turns
+  session_id TEXT NOT NULL DEFAULT ''        -- claude session id (resume handle)
 );
+CREATE TABLE IF NOT EXISTS run_events (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id   TEXT NOT NULL,
+  seq      INTEGER NOT NULL,                 -- monotonic order within the run
+  t_offset INTEGER NOT NULL,                 -- ms since run start
+  type     TEXT NOT NULL,                    -- system | text | tool_use | tool_result | result
+  tool     TEXT,                             -- tool name (tool_use / tool_result)
+  ok       INTEGER,                          -- nullable; 0/1 for tool_result.is_error
+  payload  TEXT NOT NULL                     -- redacted + truncated JSON
+);
+CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, seq);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `;
 
@@ -82,6 +96,12 @@ export function getDb() {
   _db = new DatabaseSync(DB_PATH);
   _db.exec('PRAGMA journal_mode = WAL;');
   _db.exec(SCHEMA);
+  // Guarded migration: CREATE TABLE IF NOT EXISTS won't add columns to an existing db.
+  const cols = (t) => new Set(_db.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name));
+  const ensure = (t, name, ddl) => { if (!cols(t).has(name)) _db.exec(`ALTER TABLE ${t} ADD COLUMN ${ddl}`); };
+  ensure('runs', 'cost_usd', 'cost_usd REAL');
+  ensure('runs', 'num_turns', 'num_turns INTEGER');
+  ensure('runs', 'session_id', "session_id TEXT NOT NULL DEFAULT ''");
   const n = _db.prepare('SELECT COUNT(*) AS n FROM routines').get();
   if (fresh || n.n === 0) seed(_db);
   return _db;

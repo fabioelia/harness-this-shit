@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { getDb, all, one, run } from './db.js';
 import { runClaude, buildPrompt } from './runner.js';
-import { integrationStatus } from './integrations.js';
+import { integrationStatus, listRepos } from './integrations.js';
 
 const app = express();
 app.use(cors());
@@ -25,6 +25,14 @@ function relTime(ts) {
   return `${Math.round(d / 86_400_000)}d ago`;
 }
 const fmtDur = (ms) => (ms == null ? '…' : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`);
+const fmtOffset = (ms) => `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, '0')}`;
+
+// Redact obvious secrets before a trace event is ever written to disk.
+const MAX_PAYLOAD = 16_000;
+const redact = (s) => String(s)
+  .replace(/xox[baprs]-[A-Za-z0-9-]+/g, 'xoxb-***')
+  .replace(/gh[pousr]_[A-Za-z0-9]{20,}/g, 'gh***')
+  .replace(/-----BEGIN[\s\S]*?PRIVATE KEY-----/g, '***private-key***');
 
 const shapeRoutine = (r) => ({
   slug: r.slug, name: r.name, summary: r.summary,
@@ -85,11 +93,47 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {});
     run('UPDATE runs SET prompt=? WHERE id=?', prompt, id);
 
-    const res = await runClaude(prompt, { tools });
-    const ok = res.code === 0 && !!res.output;
-    const output = ok ? res.output : (res.output || res.stderr || `claude exited ${res.code}`);
+    // Step-level trace: normalize each stream-json event into a run_events row,
+    // persisted as the session runs so the UI fills in near-live via polling.
+    let seq = 0;
+    const t0 = now();
+    const toolById = new Map();
+    const putEvt = (type, tool, ok, payload) => {
+      let p = redact(typeof payload === 'string' ? payload : JSON.stringify(payload));
+      const truncated = p.length > MAX_PAYLOAD;
+      if (truncated) p = p.slice(0, MAX_PAYLOAD);
+      run('INSERT INTO run_events (run_id,seq,t_offset,type,tool,ok,payload) VALUES (?,?,?,?,?,?,?)',
+        id, seq++, now() - t0, type, tool ?? null, ok == null ? null : (ok ? 1 : 0), JSON.stringify({ d: p, truncated }));
+    };
+    const onEvent = (o) => {
+      try {
+        if (o.type === 'system' && o.subtype === 'init') {
+          putEvt('system', null, null, { model: o.model, tools: o.tools, cwd: o.cwd, permissionMode: o.permissionMode });
+        } else if (o.type === 'assistant') {
+          for (const b of o.message?.content ?? []) {
+            if (b.type === 'text' && b.text?.trim()) putEvt('text', null, null, b.text);
+            else if (b.type === 'tool_use') { toolById.set(b.id, b.name); putEvt('tool_use', b.name, null, b.input ?? {}); }
+          }
+        } else if (o.type === 'user') {
+          for (const b of o.message?.content ?? []) {
+            if (b.type === 'tool_result') {
+              const tool = toolById.get(b.tool_use_id) ?? null;
+              const content = Array.isArray(b.content) ? b.content.map((c) => c.text ?? '').join('') : b.content;
+              putEvt('tool_result', tool, !b.is_error, content ?? '');
+            }
+          }
+        } else if (o.type === 'result') {
+          putEvt('result', null, !o.is_error, { subtype: o.subtype, is_error: o.is_error, num_turns: o.num_turns, total_cost_usd: o.total_cost_usd, duration_ms: o.duration_ms });
+        }
+      } catch { /* one malformed event must not kill the run */ }
+    };
 
-    run('UPDATE runs SET status=?, dur=?, output=? WHERE id=?', ok ? 'succeeded' : 'failed', fmtDur(res.ms), output, id);
+    const res = await runClaude(prompt, { tools, onEvent });
+    const ok = !res.isError && !!res.finalText;
+    const output = ok ? res.finalText : (res.finalText || res.stderr || `claude exited ${res.code}`);
+
+    run('UPDATE runs SET status=?, dur=?, output=?, cost_usd=?, num_turns=?, session_id=? WHERE id=?',
+      ok ? 'succeeded' : 'failed', fmtDur(res.ms), output, res.costUsd, res.numTurns, res.sessionId, id);
     run('UPDATE routines SET state=?, last_ago=?, last_status=?, success=? WHERE slug=?',
       'idle', 'just now', ok ? 'success' : 'failing', ok ? 100 : 0, r.slug);
     logActivity(`${r.slug} ${ok ? 'ran · ' + output.split('\n').pop().slice(0, 60) : 'failed'} · ${triggerLabel}`, ok ? 'success' : 'failing');
@@ -108,16 +152,32 @@ function executeRoutine(r, rawEvent, triggerLabel) {
   return id;
 }
 
+const eventRepo = (e) => (typeof e?.repository === 'object' ? e.repository?.full_name : e?.repository) || null;
+// A routine targets repos via its `repo` field (comma-separated owner/repo).
+// Empty = any repo. If the event carries a repo, it must be in the target set.
+const repoTargets = (r) => String(r.repo || '').split(',').map((s) => s.trim()).filter(Boolean);
+function repoMatches(r, event) {
+  const targets = repoTargets(r);
+  if (!targets.length) return true;
+  const er = eventRepo(event);
+  return !er || targets.includes(er);
+}
+
 function dispatchEvent(type, payload) {
   if (meta('kill_switch', 'false') === 'true') return { error: 'kill switch engaged' };
   const event = payload && Object.keys(payload).length ? payload : { event: type };
-  const matched = all('SELECT * FROM routines WHERE enabled=1').filter((r) => j(r.triggers).includes(type));
-  const runs = matched.map((r) => ({ slug: r.slug, runId: executeRoutine(r, event, `${type} · ${event.ref || event.repository?.full_name || event.repository || 'event'}`) }));
+  const matched = all('SELECT * FROM routines WHERE enabled=1')
+    .filter((r) => j(r.triggers).includes(type))
+    .filter((r) => repoMatches(r, event));
+  const runs = matched.map((r) => ({ slug: r.slug, runId: executeRoutine(r, event, `${type} · ${event.ref || eventRepo(event) || 'event'}`) }));
   return { matched: matched.map((r) => r.slug), runs, event };
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.get('/api/health', (_q, res) => res.json({ ok: true }));
+
+// The user's real GitHub repos — so the UI can see & target repositories.
+app.get('/api/github/repos', async (_q, res) => res.json({ repos: await listRepos() }));
 
 app.get('/api/stats', (_q, res) => {
   const rows = all('SELECT * FROM routines');
@@ -274,17 +334,41 @@ app.get('/api/runs/:id', (req, res) => {
   const running = x.status === 'running';
   const ok = x.status === 'succeeded';
   const tools = j(r?.connectors);
+
+  // Real step-level trace, straight from the captured stream-json events.
+  const evts = all('SELECT * FROM run_events WHERE run_id=? ORDER BY seq', x.id);
+  const trace = evts.map((e) => {
+    let pl; try { pl = JSON.parse(e.payload); } catch { pl = { d: e.payload, truncated: false }; }
+    return { seq: e.seq, t: fmtOffset(e.t_offset), type: e.type, tool: e.tool, ok: e.ok, text: pl.d, truncated: !!pl.truncated };
+  });
+  const dotFor = (e) => e.type === 'tool_use' ? '#e6b052' : e.type === 'system' ? '#7f8a80' : e.type === 'text' ? '#5b9ee6' : (e.ok === 0 ? '#e5736b' : '#5fbf86');
+  const sumText = (e) => {
+    const d = e.text ?? '';
+    if (e.type === 'system') { try { const o = JSON.parse(d); return `session · ${o.model} · ${(o.tools || []).length} tools`; } catch { return 'session start'; } }
+    if (e.type === 'text') return String(d).replace(/\s+/g, ' ').slice(0, 110);
+    if (e.type === 'tool_use') { let inp = d; try { const o = JSON.parse(d); inp = o.command || o.url || o.pattern || JSON.stringify(o); } catch { /* raw */ } return `${e.tool} ← ${String(inp).replace(/\s+/g, ' ').slice(0, 90)}`; }
+    if (e.type === 'tool_result') return `${e.tool || 'tool'} → ${e.ok ? 'ok' : 'error'} · ${String(d).replace(/\s+/g, ' ').slice(0, 90)}`;
+    if (e.type === 'result') { try { const o = JSON.parse(d); return `done · ${o.num_turns} turns · $${Number(o.total_cost_usd || 0).toFixed(4)}`; } catch { return 'done'; } }
+    return e.type;
+  };
   const timeline = [
-    { t: '00:00', tag: 'dispatch', text: `Dispatcher admitted run · trigger ${x.trigger}`, dot: '#5fbf86' },
-    { t: '00:00', tag: 'session', text: `Launched an auto-mode Claude session${tools.length ? ` with tools: ${tools.join(', ')}` : ''}`, dot: '#5b9ee6' },
+    { t: '0:00', tag: 'dispatch', text: `Dispatcher admitted run · trigger ${x.trigger}`, dot: '#5fbf86' },
+    ...trace.map((e) => ({ t: e.t, tag: e.type, tool: e.tool, ok: e.ok, text: sumText(e), dot: dotFor(e) })),
   ];
-  if (!running) timeline.push({ t: x.dur, tag: ok ? 'done' : 'error', text: ok ? (x.output.split('\n').pop() || 'Completed') : 'Run failed — see output', dot: ok ? '#5fbf86' : '#e5736b' });
+  if (!running && !evts.length) timeline.push({ t: x.dur, tag: ok ? 'done' : 'error', text: ok ? 'Completed' : 'Run failed — see output', dot: ok ? '#5fbf86' : '#e5736b' });
+
   res.json({
     id: x.id, routine: x.routine_slug, status: x.status, trigger: x.trigger,
     started: new Date(x.created_at).toLocaleTimeString(), elapsed: x.dur, model: r?.model || 'claude',
-    stdout: x.output, event: jObj(x.event), sinksResult: [],
+    cost: x.cost_usd, turns: x.num_turns, sessionId: x.session_id,
+    stdout: x.output, event: jObj(x.event), sinksResult: [], trace,
     timeline, awaiting: running ? 'auto-mode session running…' : null,
-    summary: { result: running ? 'Running…' : ok ? (x.output.split('\n').pop()?.slice(0, 80) || 'Completed') : 'Failed', iteration: '1 of 1', commit: '—', surface: (tools.join(', ') || 'session') },
+    summary: {
+      result: running ? 'Running…' : ok ? (x.output.split('\n').pop()?.slice(0, 80) || 'Completed') : 'Failed',
+      iteration: x.num_turns ? `${x.num_turns} turns` : '1 of 1',
+      commit: x.cost_usd != null ? `$${Number(x.cost_usd).toFixed(4)}` : '—',
+      surface: (tools.join(', ') || 'session'),
+    },
     diff: null, dispatcher: [], outputs: [], leaseBarrier: [['trigger', x.trigger]],
   });
 });

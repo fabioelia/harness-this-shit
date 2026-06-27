@@ -21,6 +21,17 @@ export function sh(cmd, args, { input } = {}) {
 }
 export const gh = (args, opts) => sh('gh', args, opts);
 
+// List the user's GitHub repos (owner/repo), cached 60s — so the UI can show &
+// target real repositories instead of free-typing a slug.
+let _repoCache = { at: 0, repos: [] };
+export async function listRepos() {
+  if (Date.now() - _repoCache.at < 60_000 && _repoCache.repos.length) return _repoCache.repos;
+  const res = await gh(['repo', 'list', '--limit', '200', '--json', 'nameWithOwner', '--jq', '.[].nameWithOwner']);
+  const repos = res.code === 0 ? res.out.split('\n').map((s) => s.trim()).filter(Boolean).sort() : [];
+  if (repos.length) _repoCache = { at: Date.now(), repos };
+  return repos;
+}
+
 // Resolve a repo + PR number from a normalized event (best effort).
 function prRef(event) {
   if (!event || typeof event !== 'object') return null;

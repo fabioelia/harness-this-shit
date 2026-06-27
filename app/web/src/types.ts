@@ -64,10 +64,13 @@ export interface ActivityEntry { time: string; text: string; state: string }
 export interface RunLite {
   id: string; routineSlug: string; routineName: string; status: string; ago: string; dur: string; trigger: string;
 }
+export interface TraceEvent { seq: number; t: string; type: string; tool: string | null; ok: number | null; text: string; truncated: boolean }
 export interface RunDetail {
   id: string; routine: string; status: string; trigger: string; started: string; elapsed: string; model: string;
+  cost: number | null; turns: number | null; sessionId: string;
   stdout: string; event: Record<string, unknown> | null; sinksResult: SinkResult[];
-  timeline: { t: string; tag: string; text: string; dot: string }[];
+  trace: TraceEvent[];
+  timeline: { t: string; tag: string; tool?: string | null; ok?: number | null; text: string; dot: string }[];
   awaiting: string | null;
   summary: { result: string; iteration: string; commit: string; surface: string };
   diff: { file: string; add: string; del: string; note: string } | null;

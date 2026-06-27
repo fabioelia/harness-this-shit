@@ -1,19 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useCreateRoutine, useUpdateRoutine, useRoutine } from '@/lib/api';
+import { useCreateRoutine, useUpdateRoutine, useRoutine, useGithubRepos } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
-const TRIGGERS = [
-  // control
-  'schedule', 'manual', 'api', 'webhook', 'after',
-  // github
-  'push', 'pull_request', 'pull_request_review', 'issues', 'issue_comment', 'label', 'release',
-  // CI / checks
-  'check_run', 'check_suite', 'workflow_run', 'status', 'deployment_status',
-  // other sources
-  'sentry', 'slack',
+const TRIGGER_GROUPS: { label: string; items: string[] }[] = [
+  { label: 'Control', items: ['schedule', 'manual', 'api', 'webhook', 'after'] },
+  { label: 'GitHub', items: ['push', 'pull_request', 'pull_request_review', 'issues', 'issue_comment', 'label', 'release'] },
+  { label: 'CI / checks', items: ['check_run', 'check_suite', 'workflow_run', 'status', 'deployment_status'] },
+  { label: 'Other sources', items: ['sentry', 'slack'] },
 ];
-const CONNECTORS = ['github', 'slack', 'jira', 'sentry', 'notion', 'figma', 'pagerduty', 'linear'];
+const CONNECTORS = ['github', 'slack', 'web', 'jira', 'sentry', 'notion', 'figma', 'pagerduty', 'linear'];
 const SINKS = ['stdout', 'slack', 'github-comment', 'github-gist', 'confluence'];
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
@@ -37,6 +33,38 @@ function ChipToggle({ on, onClick, children }: { on: boolean; onClick: () => voi
     >
       {children}
     </button>
+  );
+}
+
+function RepoPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const { data } = useGithubRepos();
+  const repos = value.split(',').map((s) => s.trim()).filter(Boolean);
+  const available = (data?.repos ?? []).filter((r) => !repos.includes(r));
+  const [draft, setDraft] = useState('');
+  const add = (v: string) => { const t = v.trim(); if (t && !repos.includes(t)) onChange([...repos, t].join(', ')); setDraft(''); };
+  const remove = (r: string) => onChange(repos.filter((x) => x !== r).join(', '));
+  return (
+    <div>
+      {repos.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {repos.map((r) => (
+            <span key={r} className="inline-flex items-center gap-1.5 rounded-md border border-brand/40 bg-brand/10 py-1 pl-2.5 pr-1.5 font-mono text-[11.5px] font-medium text-brand-soft">
+              {r}
+              <button type="button" onClick={() => remove(r)} className="text-brand/60 hover:text-brand" aria-label={`remove ${r}`}>×</button>
+            </span>
+          ))}
+        </div>
+      )}
+      <input
+        list="gh-repos"
+        value={draft}
+        onChange={(e) => { const v = e.target.value; if ((data?.repos ?? []).includes(v)) add(v); else setDraft(v); }}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(draft); } }}
+        placeholder={data ? 'org/repo — pick from list or type, Enter to add' : 'loading your GitHub repos…'}
+        className={cn(inputCls, 'font-mono text-[12px]')}
+      />
+      <datalist id="gh-repos">{available.map((r) => <option key={r} value={r} />)}</datalist>
+    </div>
   );
 }
 
@@ -198,10 +226,23 @@ export function NewRoutinePage() {
 
           <div className={CARD}>
             <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Triggers · <span className="font-mono lowercase tracking-normal text-dim-2">on:</span></div>
-            <div className="flex flex-wrap gap-1.5">
-              {TRIGGERS.map((t) => <ChipToggle key={t} on={triggers.includes(t)} onClick={() => toggle(setTriggers, t)}>{t}</ChipToggle>)}
+            <div className="flex flex-col gap-3">
+              {TRIGGER_GROUPS.map((g) => (
+                <div key={g.label}>
+                  <div className="mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2">{g.label}</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {g.items.map((t) => <ChipToggle key={t} on={triggers.includes(t)} onClick={() => toggle(setTriggers, t)}>{t}</ChipToggle>)}
+                  </div>
+                </div>
+              ))}
             </div>
-            <div className="mt-2.5 text-[11.5px] text-dim-2">{triggers.length ? `${triggers.length} selected — any one firing starts a run.` : 'Pick one or more. None selected defaults to manual.'}</div>
+            <div className="mt-3 text-[11.5px] text-dim-2">{triggers.length ? `${triggers.length} selected — any one firing starts a run.` : 'Pick one or more. None selected defaults to manual.'}</div>
+          </div>
+
+          <div className={CARD}>
+            <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Repositories · <span className="font-mono lowercase tracking-normal text-dim-2">which repos to watch</span></div>
+            <RepoPicker value={repo} onChange={setRepo} />
+            <div className="mt-2.5 text-[11.5px] text-dim-2">Only events from these repos trigger this routine. Leave empty to react to <span className="font-mono">any</span> repo. Pick from your GitHub repos or type <span className="font-mono">org/repo</span>.</div>
           </div>
 
           <div className={CARD}>
@@ -220,9 +261,8 @@ export function NewRoutinePage() {
 
           <div className={CARD}>
             <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Runtime</div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <div><div className={LABEL}>Model</div><input value={model} onChange={(e) => setModel(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')} /></div>
-              <div><div className={LABEL}>Repo</div><input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="org/repo" className={cn(inputCls, 'font-mono text-[12px]')} /></div>
               <div><div className={LABEL}>Branch</div><input value={branch} onChange={(e) => setBranch(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')} /></div>
             </div>
           </div>

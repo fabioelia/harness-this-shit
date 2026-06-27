@@ -5,6 +5,19 @@ import { Pill, Dot, Empty, stateMeta } from '@/components/sb';
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
 
+type TE = { seq: number; t: string; type: string; tool: string | null; ok: number | null; text: string; truncated: boolean };
+const dotForTrace = (e: TE) => e.type === 'tool_use' ? '#e6b052' : e.type === 'system' ? '#7f8a80' : e.type === 'text' ? '#5b9ee6' : (e.ok === 0 ? '#e5736b' : '#5fbf86');
+const sline = (e: TE): string => {
+  const d = e.text ?? '';
+  if (e.type === 'system') { try { const o = JSON.parse(d); return `session · ${o.model} · ${(o.tools || []).length} tools`; } catch { return 'session start'; } }
+  if (e.type === 'text') return d.replace(/\s+/g, ' ').slice(0, 150);
+  if (e.type === 'tool_use') { let inp = d; try { const o = JSON.parse(d); inp = o.command || o.url || o.pattern || JSON.stringify(o); } catch { /* raw */ } return String(inp).replace(/\s+/g, ' ').slice(0, 130); }
+  if (e.type === 'tool_result') return `${e.ok ? 'ok' : 'error'} · ${String(d).replace(/\s+/g, ' ').slice(0, 130)}`;
+  if (e.type === 'result') { try { const o = JSON.parse(d); return `done · ${o.num_turns} turns · $${Number(o.total_cost_usd || 0).toFixed(4)}`; } catch { return 'done'; } }
+  return e.type;
+};
+const pretty = (e: TE): string => { try { return JSON.stringify(JSON.parse(e.text), null, 2); } catch { return e.text; } };
+
 export function RunDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -65,18 +78,36 @@ export function RunDetailPage() {
 
           <div className={CARD}>
             <div className="mb-3.5 flex items-center justify-between">
-              <span className={LABEL}>Execution timeline</span>
+              <span className={LABEL}>Trace · {r.trace.length} steps{r.cost != null ? ` · $${Number(r.cost).toFixed(4)}` : ''}</span>
               <span className="font-mono text-[10.5px] font-medium text-dim">secrets redacted</span>
             </div>
             <div className="flex flex-col">
-              {r.timeline.map((ev, i) => (
-                <div key={i} className="flex items-start gap-[11px] border-b border-line-soft py-[9px] last:border-0">
-                  <span className="mt-0.5 w-9 shrink-0 font-mono text-[11px] font-medium text-dim-3">{ev.t}</span>
-                  <span className="mt-[5px] shrink-0"><Dot color={ev.dot} size={8} /></span>
-                  <span className="mt-px w-[64px] shrink-0 rounded-[4px] border border-white/[0.08] bg-white/[0.045] py-0.5 text-center font-mono text-[9.5px] font-semibold uppercase tracking-[0.05em] text-muted-2">{ev.tag}</span>
-                  <span className="flex-1 font-sans text-[12.5px] font-medium leading-[1.45] text-t2">{ev.text}</span>
-                </div>
-              ))}
+              <div className="flex items-start gap-[11px] border-b border-line-soft py-[9px]">
+                <span className="mt-0.5 w-9 shrink-0 font-mono text-[11px] font-medium text-dim-3">0:00</span>
+                <span className="mt-[5px] shrink-0"><Dot color="#5fbf86" size={8} /></span>
+                <span className="mt-px w-[80px] shrink-0 rounded-[4px] border border-white/[0.08] bg-white/[0.045] py-0.5 text-center font-mono text-[9.5px] font-semibold uppercase tracking-[0.04em] text-muted-2">dispatch</span>
+                <span className="flex-1 font-sans text-[12.5px] font-medium leading-[1.45] text-t2">Dispatcher admitted run · trigger {r.trigger}</span>
+              </div>
+              {r.trace.length === 0 && !running && <div className="py-2.5 font-mono text-[12px] text-dim">no steps captured</div>}
+              {r.trace.map((e) => {
+                const hasBody = !!e.text && ['tool_use', 'tool_result', 'text', 'system', 'result'].includes(e.type);
+                return (
+                  <div key={e.seq} className="flex items-start gap-[11px] border-b border-line-soft py-[9px] last:border-0">
+                    <span className="mt-0.5 w-9 shrink-0 font-mono text-[11px] font-medium text-dim-3">{e.t}</span>
+                    <span className="mt-[5px] shrink-0"><Dot color={dotForTrace(e)} size={8} /></span>
+                    <span className="mt-px w-[80px] shrink-0 truncate rounded-[4px] border border-white/[0.08] bg-white/[0.045] py-0.5 text-center font-mono text-[9.5px] font-semibold uppercase tracking-[0.04em] text-muted-2">{e.tool || e.type}</span>
+                    <div className="min-w-0 flex-1">
+                      <span className="block break-words font-sans text-[12.5px] font-medium leading-[1.45] text-t2">{sline(e)}</span>
+                      {hasBody && (
+                        <details className="mt-1 group">
+                          <summary className="cursor-pointer list-none font-mono text-[10.5px] text-dim hover:text-brand">▸ view{e.truncated ? ' (truncated)' : ''}</summary>
+                          <pre className="mt-1 max-h-[260px] overflow-auto rounded border border-line-soft bg-code px-2.5 py-2 font-mono text-[11px] leading-[1.5] text-muted">{pretty(e)}</pre>
+                        </details>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
               {r.awaiting && (
                 <div className="flex items-center gap-[11px] pt-[11px]">
                   <span className="w-9 shrink-0 font-mono text-[11px] font-medium text-dim-3">{r.elapsed}</span>
@@ -93,7 +124,7 @@ export function RunDetailPage() {
           <div className={CARD}>
             <div className={`${LABEL} mb-3.5`}>Run</div>
             <div className="grid grid-cols-2 gap-x-[18px] gap-y-[13px]">
-              {[['Result', r.summary.result, 'sans'], ['Trigger', r.trigger, 'mono'], ['Elapsed', r.elapsed, 'mono'], ['Surface', r.summary.surface, 'mono']].map(([k, v, f]) => (
+              {[['Result', r.summary.result, 'sans'], ['Trigger', r.trigger, 'mono'], ['Elapsed', r.elapsed, 'mono'], ['Cost', r.cost != null ? `$${Number(r.cost).toFixed(4)}` : '—', 'mono'], ['Turns', r.turns != null ? String(r.turns) : '—', 'mono'], ['Tools', r.summary.surface, 'mono']].map(([k, v, f]) => (
                 <div key={k as string} className="min-w-0">
                   <div className="mb-[3px] font-display text-[10px] font-medium uppercase tracking-[0.06em] text-dim-2">{k}</div>
                   <div className={`truncate text-[12.5px] font-semibold text-t2 ${f === 'mono' ? 'font-mono' : 'font-sans'}`}>{v}</div>

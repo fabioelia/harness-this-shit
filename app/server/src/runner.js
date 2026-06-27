@@ -22,7 +22,7 @@ export function allowedToolsFor(connectors = []) {
   return allow;
 }
 
-export function runClaude(prompt, { timeoutMs = 240_000, tools = [] } = {}) {
+export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent } = {}) {
   return new Promise((resolve) => {
     const start = Date.now();
     const allow = allowedToolsFor(tools);
@@ -30,38 +30,51 @@ export function runClaude(prompt, { timeoutMs = 240_000, tools = [] } = {}) {
     // and the prompt is fed via stdin so it isn't swallowed by the variadic.
     // --strict-mcp-config with no --mcp-config = no global MCP servers loaded
     // (keeps the session clean/fast; tools come only from what we grant).
-    const args = ['-p', '--strict-mcp-config'];
+    // stream-json (NDJSON) so we capture every step; --verbose is required under -p.
+    const args = ['-p', '--strict-mcp-config', '--output-format', 'stream-json', '--verbose'];
     if (allow.length) args.push('--allowed-tools', ...allow);
     // tools dir on PATH so `slack-post` (and future tool scripts) resolve by name
     const env = { ...process.env, PATH: `${TOOLS_DIR}:${process.env.PATH}` };
+    const fail = (msg) => resolve({ finalText: '', output: '', stderr: msg, code: -1, ms: Date.now() - start, isError: true, costUsd: null, numTurns: null, sessionId: '', events: 0 });
     let child;
     try {
       child = spawn(CLAUDE_BIN, args, { cwd: tmpdir(), env, stdio: ['pipe', 'pipe', 'pipe'] });
       child.stdin.write(prompt);
       child.stdin.end();
     } catch (e) {
-      return resolve({ output: '', stderr: `spawn failed: ${e.message}`, code: -1, ms: Date.now() - start });
+      return fail(`spawn failed: ${e.message}`);
     }
-    let out = '';
-    let err = '';
-    let killed = false;
-    const timer = setTimeout(() => {
-      killed = true;
-      child.kill('SIGKILL');
-    }, timeoutMs);
-    child.stdout.on('data', (d) => (out += d));
-    child.stderr.on('data', (d) => (err += d));
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      resolve({ output: '', stderr: `claude not runnable: ${e.message}`, code: -1, ms: Date.now() - start });
+    let buf = '', raw = '', err = '', killed = false, nEvents = 0, resultEvt = null;
+    const MAX_LINE = 1_000_000; // guard a runaway line (~1MB) without a newline
+    const handleLine = (line) => {
+      if (!line.trim()) return;
+      let o;
+      try { o = JSON.parse(line); } catch { raw += line + '\n'; return; }
+      if (o.type === 'result') resultEvt = o;
+      nEvents++;
+      try { onEvent?.(o); } catch { /* never let a consumer error kill the run */ }
+    };
+    const timer = setTimeout(() => { killed = true; child.kill('SIGKILL'); }, timeoutMs);
+    child.stdout.on('data', (d) => {
+      buf += d;
+      if (buf.length > MAX_LINE && !buf.includes('\n')) { raw += buf; buf = ''; return; }
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, nl); buf = buf.slice(nl + 1); handleLine(line); }
     });
+    child.stderr.on('data', (d) => (err += d));
+    child.on('error', (e) => { clearTimeout(timer); fail(`claude not runnable: ${e.message}`); });
     child.on('close', (code) => {
       clearTimeout(timer);
+      if (buf.trim()) handleLine(buf); // flush trailing partial line
+      const finalText = (resultEvt?.result ?? raw).trim();
       resolve({
-        output: out.trim(),
-        stderr: err.trim(),
-        code: killed ? 124 : code,
-        ms: Date.now() - start,
+        finalText, output: finalText,
+        isError: resultEvt ? !!resultEvt.is_error : (killed || code !== 0),
+        costUsd: resultEvt?.total_cost_usd ?? null,
+        numTurns: resultEvt?.num_turns ?? null,
+        sessionId: resultEvt?.session_id ?? '',
+        stderr: err.trim(), code: killed ? 124 : code, ms: Date.now() - start,
+        events: nEvents,
       });
     });
   });
