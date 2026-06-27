@@ -64,11 +64,17 @@ export interface RunLite {
   id: string; routineSlug: string; routineName: string; status: string; ago: string; dur: string; trigger: string;
 }
 export interface TraceEvent { seq: number; t: string; type: string; tool: string | null; ok: number | null; text: string; truncated: boolean }
+export interface RunLineage {
+  triggeredBy: { runId: string; routine: string; kind: string } | null;
+  downstream: { runId: string; routine: string; status: string; dur: string; kind: string }[];
+  watches: { target: string; source: string; kind: string; when: string; status: string; detail: string }[];
+}
 export interface RunDetail {
-  id: string; routine: string; status: string; trigger: string; started: string; elapsed: string; model: string;
+  id: string; routine: string; status: string; trigger: string; triggerKind: string; started: string; elapsed: string; model: string;
   cost: number | null; turns: number | null; sessionId: string;
   stdout: string; event: Record<string, unknown> | null;
   trace: TraceEvent[];
+  lineage: RunLineage;
   awaiting: string | null;
   summary: { result: string; surface: string };
 }

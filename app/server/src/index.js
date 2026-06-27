@@ -276,7 +276,7 @@ function executeRoutine(r, rawEvent, triggerLabel) {
         for (const slug of j(r.chain)) {
           if (nextPath.includes(slug)) { logActivity(`chain stopped · cycle back to ${slug}`, 'idle'); continue; }
           const dr = one('SELECT * FROM routines WHERE slug=? AND enabled=1', slug);
-          if (dr) executeRoutine(dr, { ...(rawEvent ?? {}), _chainPath: nextPath, upstream: { routine: r.slug, output } }, `after · ${r.slug}`);
+          if (dr) executeRoutine(dr, { ...(rawEvent ?? {}), _chainPath: nextPath, upstream: { routine: r.slug, run: id, output } }, `after · ${r.slug}`);
         }
       }
     }
@@ -775,11 +775,23 @@ app.get('/api/runs/:id', (req, res) => {
     let pl; try { pl = JSON.parse(e.payload); } catch { pl = { d: e.payload, truncated: false }; }
     return { seq: e.seq, t: fmtOffset(e.t_offset), type: e.type, tool: e.tool, ok: e.ok, text: pl.d, truncated: !!pl.truncated };
   });
+
+  // Lineage: who kicked this run off, and what it kicked off (chains + reactions).
+  const ev = jObj(x.event) || {};
+  const kindOf = (trig) => (String(trig).startsWith('reaction') ? 'reaction' : String(trig).startsWith('after') ? 'chain' : 'trigger');
+  const triggeredBy = ev.upstream?.run ? { runId: ev.upstream.run, routine: ev.upstream.routine, kind: kindOf(x.trigger) } : null;
+  const downstream = all('SELECT id, routine_slug, trigger, status, dur, event FROM runs WHERE id != ? AND event LIKE ? ORDER BY created_at', x.id, `%${x.id}%`)
+    .filter((d) => (jObj(d.event)?.upstream?.run) === x.id)
+    .map((d) => ({ runId: d.id, routine: d.routine_slug, status: d.status, dur: d.dur, kind: kindOf(d.trigger) }));
+  const watches = all("SELECT * FROM watches WHERE origin_run=? ORDER BY created_at", x.id)
+    .map((w) => ({ target: w.target_slug, source: w.source, kind: w.kind, when: w.when_cond, status: w.status, detail: w.detail }));
+
   res.json({
-    id: x.id, routine: x.routine_slug, status: x.status, trigger: x.trigger,
+    id: x.id, routine: x.routine_slug, status: x.status, trigger: x.trigger, triggerKind: kindOf(x.trigger),
     started: new Date(x.created_at).toLocaleTimeString(), elapsed: x.dur, model: r?.model || 'claude',
     cost: x.cost_usd, turns: x.num_turns, sessionId: x.session_id,
-    stdout: x.output, event: jObj(x.event), trace,
+    stdout: x.output, event: ev, trace,
+    lineage: { triggeredBy, downstream, watches },
     awaiting: running ? 'auto-mode session running…' : null,
     summary: {
       result: running ? 'Running…' : ok ? (x.output.split('\n').pop()?.slice(0, 80) || 'Completed') : 'Failed',

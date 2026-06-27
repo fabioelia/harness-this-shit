@@ -49,7 +49,11 @@ export function RunDetailPage() {
         </div>
         <div className="mt-[11px] flex flex-wrap items-center gap-3.5 font-mono text-[12px] font-medium text-muted-2">
           <span>routine <Link to={`/routines/${r.routine}`} className="text-brand">{r.routine}</Link></span>
-          <span className="text-hair">|</span><span>trigger {r.trigger}</span>
+          <span className="text-hair">|</span>
+          <span className={r.triggerKind === 'reaction' ? 'text-lease' : r.triggerKind === 'chain' ? 'text-brand-soft' : ''}>
+            {r.triggerKind === 'reaction' ? '⚡ reaction · ' : r.triggerKind === 'chain' ? '↳ chained · ' : 'trigger '}{r.trigger.replace(/^(after|reaction) · /, '')}
+          </span>
+          {r.lineage?.triggeredBy && <span className="text-muted-2">from <Link to={`/runs/${r.lineage.triggeredBy.runId}`} className="text-brand">{r.lineage.triggeredBy.routine}</Link></span>}
           <span className="text-hair">|</span><span>started {r.started}</span>
           <span className="text-hair">|</span><span>elapsed {r.elapsed}</span>
           <span className="text-hair">|</span><span>model {r.model}</span>
@@ -132,6 +136,56 @@ export function RunDetailPage() {
               ))}
             </div>
           </div>
+
+          {(r.lineage.triggeredBy || r.lineage.downstream.length > 0 || r.lineage.watches.length > 0) && (
+            <div className={CARD}>
+              <div className={`${LABEL} mb-3`}>Lineage · follow the work</div>
+              <div className="flex flex-col gap-3">
+                {r.lineage.triggeredBy && (
+                  <div>
+                    <div className="mb-1.5 font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2">Triggered by</div>
+                    <Link to={`/runs/${r.lineage.triggeredBy.runId}`} className="flex items-center gap-2 font-mono text-[12px] hover:opacity-80">
+                      <span className="text-faint">↑</span>
+                      <span className={r.lineage.triggeredBy.kind === 'reaction' ? 'text-lease' : 'text-brand-soft'}>{r.lineage.triggeredBy.kind}</span>
+                      <span className="flex-1 truncate text-t2">{r.lineage.triggeredBy.routine}</span>
+                      <span className="shrink-0 text-dim">{r.lineage.triggeredBy.runId}</span>
+                    </Link>
+                  </div>
+                )}
+                {r.lineage.downstream.length > 0 && (
+                  <div className={r.lineage.triggeredBy ? 'border-t border-line-soft pt-3' : ''}>
+                    <div className="mb-1.5 font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2">Kicked off · {r.lineage.downstream.length}</div>
+                    <div className="flex flex-col gap-1.5">
+                      {r.lineage.downstream.map((d) => (
+                        <Link key={d.runId} to={`/runs/${d.runId}`} className="flex items-center gap-2 font-mono text-[12px] hover:opacity-80">
+                          <Dot state={d.status} size={7} />
+                          <span className={d.kind === 'reaction' ? 'text-lease' : 'text-brand-soft'}>{d.kind === 'reaction' ? '⚡' : '↳'}</span>
+                          <span className="flex-1 truncate text-brand">{d.routine}</span>
+                          <span className="shrink-0 text-dim">{d.dur}</span>
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {r.lineage.watches.length > 0 && (
+                  <div className="border-t border-line-soft pt-3">
+                    <div className="mb-1.5 font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2">Watching · fires later</div>
+                    <div className="flex flex-col gap-1.5">
+                      {r.lineage.watches.map((w, i) => (
+                        <div key={i} className="flex items-center gap-2 font-mono text-[11.5px]">
+                          <Dot color={w.status === 'open' ? '#5b9ee6' : w.status === 'fired' ? '#5fbf86' : '#7f8a80'} size={7} pulse={w.status === 'open'} />
+                          <span className="text-t2">{w.source}:{w.kind}{w.when ? `:${w.when}` : ''}</span>
+                          <span className="text-faint">→</span>
+                          <Link to={`/routines/${w.target}`} className="text-brand">{w.target}</Link>
+                          <span className="ml-auto text-dim">{w.status}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className={CARD}>
             <div className={`${LABEL} mb-3`}>Trigger event payload</div>
