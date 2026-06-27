@@ -45,10 +45,17 @@ function ConnectorRow({ c, GRID }: { c: Connector; GRID: React.CSSProperties }) 
           {c.mcp && <button onClick={() => { if (confirm(`Remove MCP server "${c.name}"?`)) delMcp.mutate(c.name); }} className={cn(btn, 'border-bad/40 text-bad')}>Remove</button>}
         </div>
       </div>
-      {(result || showCfg || showAuth || oauth.data) && (
+      {(result || showCfg || showAuth || oauth.data || oauth.isPending) && (
         <div className="px-[18px] pb-3.5" style={{ paddingLeft: 72 }}>
           {result && <div className={cn('font-mono text-[11.5px]', result.ok ? 'text-ok' : 'text-warn')}>{result.ok ? '✓' : '✗'} {result.detail}</div>}
-          {oauth.data && <div className="font-mono text-[11.5px] text-lease">🔓 {oauth.data.detail}</div>}
+          {oauth.data && (
+            oauth.data.authUrl
+              ? <div className="font-mono text-[11.5px] text-lease">🔓 <a href={oauth.data.authUrl} target="_blank" rel="noreferrer" className="text-brand underline">Authorize {c.name} →</a> <span className="text-dim-2">{oauth.data.detail}</span></div>
+              : oauth.data.ok
+                ? <div className="font-mono text-[11.5px] text-ok">✓ {oauth.data.detail}</div>
+                : <div className="font-mono text-[11.5px] text-warn">✗ {oauth.data.error}</div>
+          )}
+          {oauth.isPending && <div className="font-mono text-[11.5px] text-dim">starting mcp-remote…</div>}
           {showAuth && (
             <div className="mt-2">
               <div className="mb-1.5 flex items-center gap-2">

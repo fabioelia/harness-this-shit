@@ -98,7 +98,7 @@ export function useAddMcp() {
   return useMutation({ mutationFn: (b: { name?: string; config?: string; remote?: boolean; url?: string }) => post<{ ok: boolean; name: string }>('/api/mcp', b), onSuccess: () => { qc.invalidateQueries({ queryKey: ['mcp'] }); qc.invalidateQueries({ queryKey: ['connectors'] }); } });
 }
 export function useMcpOauth() {
-  return useMutation({ mutationFn: (name: string) => post<{ ok: boolean; detail: string }>(`/api/mcp/${name}/oauth`, {}) });
+  return useMutation({ mutationFn: (name: string) => post<{ ok: boolean; detail?: string; authUrl?: string; error?: string }>(`/api/mcp/${name}/oauth`, {}) });
 }
 export function useMcpRegistry(q: string, enabled: boolean) {
   return useQuery({ queryKey: ['mcp-registry', q], queryFn: () => get<{ servers: RegistryServer[] }>(`/api/mcp/registry?q=${encodeURIComponent(q)}`), enabled, staleTime: 60_000 });

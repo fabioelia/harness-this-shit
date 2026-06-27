@@ -1072,19 +1072,40 @@ app.post('/api/mcp/registry/add', (req, res) => {
   run("INSERT INTO mcp_servers (name,config,created_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET config=excluded.config", name, JSON.stringify(def), now());
   res.json({ ok: true, name, remote: !!b.remoteUrl });
 });
-// Kick off the mcp-remote OAuth flow in the browser (one-time). Tokens persist in ~/.mcp-auth.
+// Kick off the mcp-remote OAuth flow. We run it with piped output, watch for the
+// "Please authorize…" URL (or a connect/error), and hand the URL back to the UI so the
+// user can click it — far more reliable than auto-opening a browser from a headless
+// server. mcp-remote keeps running to catch the callback and saves the token to ~/.mcp-auth.
+const authProcs = new Map();
 app.post('/api/mcp/:name/oauth', (req, res) => {
-  const row = one('SELECT config FROM mcp_servers WHERE name=?', req.params.name);
+  const name = req.params.name;
+  const row = one('SELECT config FROM mcp_servers WHERE name=?', name);
   if (!row) return res.status(404).json({ error: 'not found' });
   const url = mcpRemoteUrl(jObj(row.config) || {});
-  if (!url) return res.status(400).json({ error: 'this server has no remote URL (add it in Remote mode to use OAuth)' });
-  try {
-    const child = spawn('npx', ['-y', 'mcp-remote', url], { detached: true, stdio: 'ignore', env: process.env });
-    child.unref();
-    res.json({ ok: true, detail: `Opening the OAuth flow for ${url} — approve it in your browser. mcp-remote saves the token to ~/.mcp-auth, so sessions authenticate from then on.` });
-  } catch (e) {
-    res.status(500).json({ error: `couldn't start mcp-remote: ${e.message}` });
-  }
+  if (!url) return res.status(400).json({ error: 'this server has no remote URL — add it in Remote or Registry mode to use OAuth' });
+  const prev = authProcs.get(name); if (prev) { try { prev.kill(); } catch { /* ignore */ } authProcs.delete(name); }
+  let child;
+  try { child = spawn('npx', ['-y', 'mcp-remote', url], { env: process.env }); }
+  catch (e) { return res.status(500).json({ error: `couldn't start mcp-remote: ${e.message}` }); }
+  authProcs.set(name, child);
+  let buf = '', done = false;
+  const kill = () => { try { child.kill(); } catch { /* ignore */ } if (authProcs.get(name) === child) authProcs.delete(name); };
+  const finish = (payload) => { if (done) return; done = true; clearTimeout(timer); res.json(payload); };
+  const scan = (d) => {
+    buf += d.toString();
+    const m = buf.match(/Please authorize this client by visiting:\s*(https?:\/\/\S+)/i);
+    if (m) return finish({ ok: true, authUrl: m[1], detail: 'Open this URL to authorize, then come back — mcp-remote saves the token to ~/.mcp-auth.' });
+    if (/connected to remote server|proxy established|already authenticated|auth.*not required|connection established/i.test(buf)) { finish({ ok: true, detail: 'Connected — already authorized (or no OAuth required).' }); kill(); return; }
+    if (/(fatal error|connection error|status 404|status 401|status 403|econnrefused)/i.test(buf)) {
+      const line = (buf.split('\n').reverse().find((l) => /(fatal|error|40[13]|404|refused)/i.test(l)) || 'mcp-remote failed to connect').replace(/^\[\d+\]\s*/, '').slice(0, 220);
+      finish({ ok: false, error: line.trim() }); kill();
+    }
+  };
+  child.stdout.on('data', scan); child.stderr.on('data', scan);
+  child.on('error', (e) => finish({ ok: false, error: `couldn't start mcp-remote: ${e.message}` }));
+  child.on('exit', () => { if (authProcs.get(name) === child) authProcs.delete(name); if (!done) finish({ ok: false, error: 'mcp-remote exited before producing an auth URL — check the server URL.' }); });
+  const timer = setTimeout(() => finish({ ok: true, detail: 'mcp-remote is running; if no browser tab opened, retry.' }), 25_000);
+  setTimeout(kill, 5 * 60_000); // don't leave the auth proxy running forever
 });
 app.delete('/api/mcp/:name', (req, res) => { run('DELETE FROM mcp_servers WHERE name=?', req.params.name); res.json({ ok: true }); });
 // Configure a connector's token (slack/atlassian) — stored in meta, loaded into env now.
