@@ -133,27 +133,6 @@ export function RunDetailPage() {
             </div>
           </div>
 
-          {r.sinksResult && r.sinksResult.length > 0 && (
-            <div className={CARD}>
-              <div className={`${LABEL} mb-3`}>Output delivery</div>
-              <div className="flex flex-col gap-2.5">
-                {r.sinksResult.map((s, i) => (
-                  <div key={i} className="flex items-start gap-2.5">
-                    <Dot color={s.ok ? '#5fbf86' : '#e6b052'} size={7} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-[12px] font-semibold text-t2">{s.type}</span>
-                        {s.target && <span className="font-mono text-[11px] text-dim">{s.target}</span>}
-                      </div>
-                      <div className="font-mono text-[11px] leading-snug text-muted-2">{s.detail}</div>
-                    </div>
-                    <span className={`shrink-0 font-mono text-[10.5px] font-semibold ${s.ok ? 'text-ok' : 'text-warn'}`}>{s.ok ? 'delivered' : 'skipped'}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
           <div className={CARD}>
             <div className={`${LABEL} mb-3`}>Trigger event payload</div>
             <pre className="max-h-[420px] overflow-auto rounded-md border border-line-soft bg-code px-3.5 py-3 font-mono text-[11.5px] leading-[1.55] text-muted">

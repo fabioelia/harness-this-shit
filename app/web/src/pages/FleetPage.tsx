@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { useRoutines, useStats, useToggleRoutine, useKillSwitch } from '@/lib/api';
+import { useRoutines, useStats, useToggleRoutine, useKillSwitch, useConnectors } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, Sbar, Spark, StatePill, Toggle, makeHist } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { Routine, Stats } from '@/types';
@@ -101,7 +101,10 @@ function FleetRow({ r, i }: { r: Routine; i: number }) {
 export function FleetPage() {
   const { data: routines } = useRoutines();
   const { data: stats } = useStats();
+  const { data: connectors } = useConnectors();
   const kill = useKillSwitch();
+  const ghOff = connectors?.find((c) => c.code === 'GH')?.health === 'off';
+  const slackOff = connectors?.find((c) => c.code === 'SL')?.health === 'off';
   const [q, setQ] = useState('');
   const [team, setTeam] = useState('');
   const [trig, setTrig] = useState('');
@@ -138,7 +141,7 @@ export function FleetPage() {
           <div className="mb-[5px] font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-brand">{stats?.wordmark ?? 'Switchboard'}</div>
           <div className="font-display text-[26px] font-bold tracking-tight">Fleet</div>
           <div className="mt-[3px] text-[13px] text-muted-2">
-            {stats?.total ?? '—'} routines · {stats?.enabled ?? '—'} enabled · {stats?.teams ?? '—'} teams · runner <span className="font-mono text-[#ada695]">claude -p</span>
+            {stats?.total ?? '—'} routines · {stats?.enabled ?? '—'} enabled · {stats?.teams ?? '—'} teams · local auto-mode sessions
           </div>
         </div>
         <div className="flex items-center gap-2.5">
@@ -155,6 +158,20 @@ export function FleetPage() {
       </div>
 
       <StatStrip s={stats} />
+
+      {(ghOff || slackOff) && (
+        <div className="mb-3.5 flex items-center gap-3 rounded-lg border border-warn/30 bg-warn/[0.06] px-4 py-3">
+          <Dot color="#e6b052" size={8} />
+          <div className="flex-1 text-[12.5px] text-t2">
+            <span className="font-semibold">Finish setup —</span>{' '}
+            {ghOff && <>GitHub isn’t authed (<span className="font-mono text-[11.5px]">gh auth login</span>)</>}
+            {ghOff && slackOff && ' and '}
+            {slackOff && <>Slack has no bot token (<span className="font-mono text-[11.5px]">SLACK_BOT_TOKEN</span>)</>}
+            . Routines that use these tools will fail until connected.
+          </div>
+          <Link to="/connectors" className="shrink-0 font-mono text-[11px] font-medium text-brand hover:underline">View connectors ›</Link>
+        </div>
+      )}
 
       {/* filter bar */}
       <div className="mb-3.5 flex flex-wrap items-center gap-[9px]">

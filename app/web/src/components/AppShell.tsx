@@ -40,9 +40,9 @@ const ICONS = {
 const NAV = [
   { to: '/', label: 'Fleet', icon: ICONS.fleet, end: true },
   { to: '/runs', label: 'Runs', icon: ICONS.runs },
-  { to: '/connectors', label: 'MCPs', icon: ICONS.mcps },
-  { to: '/activity', label: 'Audit', icon: ICONS.audit },
-  { to: '/settings', label: 'Config', icon: ICONS.config },
+  { to: '/connectors', label: 'Connectors', icon: ICONS.mcps },
+  { to: '/activity', label: 'Activity', icon: ICONS.audit },
+  { to: '/settings', label: 'Settings', icon: ICONS.config },
 ];
 
 export function AppShell() {

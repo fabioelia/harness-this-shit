@@ -42,7 +42,7 @@ const redact = (s) => String(s)
 const shapeRoutine = (r) => ({
   slug: r.slug, name: r.name, summary: r.summary,
   owner: r.owner, team: r.team, ownerColor: r.av_color, initials: r.initials,
-  triggers: j(r.triggers), connectors: j(r.connectors), sinks: j(r.sinks), chain: j(r.chain),
+  triggers: j(r.triggers), connectors: j(r.connectors), chain: j(r.chain),
   schedule: r.schedule || '', filters: jObj(r.filters) || {},
   model: r.model, repo: r.repo, branch: r.branch,
   state: r.enabled ? r.state : 'disabled', enabled: !!r.enabled,
@@ -51,22 +51,25 @@ const shapeRoutine = (r) => ({
 });
 
 function detailOf(r) {
+  const repos = (r.repo || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const flt = jObj(r.filters) || {};
+  const conns = j(r.connectors);
   return {
     breadcrumb: ['Fleet', r.slug],
     file: `${r.slug}.routine.md`,
     frontMatter: {
-      on: j(r.triggers).map((t) => ({ key: `trigger · ${t}`, detail: '' })),
-      tools: j(r.connectors).map((c) => ({ sign: '+', name: c, tone: 'ok' })),
-      runtime: [r.model || 'claude-opus-4-8', `· repo ${r.repo || '—'}`, `· branch ${r.branch || '—'}`],
-      concurrency: r.lease_ref
-        ? [['lease', r.lease_ref, 'ttl', '20m']]
-        : [['group', `${r.slug}-\${event}`, 'cancel_in_progress', 'true']],
+      on: j(r.triggers).map((t) => ({ key: `trigger · ${t}`, detail: t === 'schedule' && r.schedule ? r.schedule : '' })),
+      tools: conns.map((c) => ({ sign: '+', name: c, tone: 'ok' })),
+      runtime: [r.model || 'claude-opus-4-8', `· repos ${repos.join(', ') || '*'}`, `· branch ${r.branch || 'main'}`],
+      filters: { actions: flt.actions || [], branches: flt.branches || [] },
     },
-    flowNodes: [{ title: j(r.triggers)[0] || 'trigger', sub: 'on' }, { title: 'run', sub: r.slug, tone: 'run' }, { title: j(r.sinks)[0]?.type || 'stdout', sub: 'sink' }],
-    reactions: [],
+    // trigger → session → (tools), reflecting the real shape only.
+    flowNodes: [
+      { title: j(r.triggers)[0] || 'trigger', sub: 'on' },
+      { title: 'session', sub: r.slug, tone: 'run' },
+      ...(conns.length ? [{ title: conns.join(' + '), sub: 'tools' }] : []),
+    ],
     prompt: r.prompt && r.prompt.trim() ? r.prompt : `## Prompt\n${r.summary}`,
-    lease: null,
-    ownedPRs: [],
   };
 }
 
@@ -138,10 +141,13 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     const ok = !res.isError && !!res.finalText;
     const output = ok ? res.finalText : (res.finalText || res.stderr || `claude exited ${res.code}`);
 
-    run('UPDATE runs SET status=?, dur=?, output=?, cost_usd=?, num_turns=?, session_id=? WHERE id=?',
-      ok ? 'succeeded' : 'failed', fmtDur(res.ms), output, res.costUsd, res.numTurns, res.sessionId, id);
-    run('UPDATE routines SET state=?, last_ago=?, last_status=?, success=? WHERE slug=?',
-      'idle', 'just now', ok ? 'success' : 'failing', ok ? 100 : 0, r.slug);
+    run('UPDATE runs SET status=?, dur=?, dur_ms=?, output=?, cost_usd=?, num_turns=?, session_id=? WHERE id=?',
+      ok ? 'succeeded' : 'failed', fmtDur(res.ms), res.ms, output, res.costUsd, res.numTurns, res.sessionId, id);
+    // Roll up real spend + avg duration onto the routine.
+    const agg = one('SELECT COALESCE(SUM(cost_usd),0) AS spend, AVG(dur_ms) AS avgms FROM runs WHERE routine_slug=?', r.slug);
+    run('UPDATE routines SET state=?, last_ago=?, last_status=?, success=?, spend=?, avg=? WHERE slug=?',
+      'idle', 'just now', ok ? 'success' : 'failing', ok ? 100 : 0,
+      `$${Number(agg.spend || 0).toFixed(2)}`, agg.avgms ? fmtDur(agg.avgms) : '—', r.slug);
     logActivity(`${r.slug} ${ok ? 'ran · ' + output.split('\n').pop().slice(0, 60) : 'failed'} · ${triggerLabel}`, ok ? 'success' : 'failing');
 
     // chain: kick off downstream routines with this session's result as context
@@ -181,12 +187,18 @@ function filtersMatch(r, event) {
 }
 
 function dispatchEvent(type, payload) {
-  if (meta('kill_switch', 'false') === 'true') return { error: 'kill switch engaged' };
+  if (meta('kill_switch', 'false') === 'true') {
+    logActivity(`event ${type} dropped · kill switch engaged`, 'failing');
+    return { error: 'kill switch engaged' };
+  }
   const event = payload && Object.keys(payload).length ? payload : { event: type };
-  const matched = all('SELECT * FROM routines WHERE enabled=1')
-    .filter((r) => j(r.triggers).includes(type))
-    .filter((r) => repoMatches(r, event))
-    .filter((r) => filtersMatch(r, event));
+  const candidates = all('SELECT * FROM routines WHERE enabled=1').filter((r) => j(r.triggers).includes(type));
+  const matched = candidates.filter((r) => repoMatches(r, event) && filtersMatch(r, event));
+  // Audit: record why subscribed routines stood down (the "logs of if/how" devs want).
+  candidates.filter((r) => !matched.includes(r)).forEach((r) => {
+    const why = !repoMatches(r, event) ? `repo not in target [${repoTargets(r).join(', ')}]` : 'event filter mismatch';
+    logActivity(`${r.slug} skipped · ${type} — ${why}`, 'idle');
+  });
   const runs = matched.map((r) => ({ slug: r.slug, runId: executeRoutine(r, event, `${type} · ${event.ref || eventRepo(event) || 'event'}`) }));
   return { matched: matched.map((r) => r.slug), runs, event };
 }
@@ -312,8 +324,6 @@ function buildRoutineMd(r) {
   });
   if (j(r.connectors).length) { L.push('tools:'); L.push(`  mcp: [${j(r.connectors).join(', ')}]`); }
   L.push('runtime:', `  model: ${r.model}`, `  repos: [${(r.repo || '').split(',').map((s) => s.trim()).filter(Boolean).join(', ') || '*'}]`, `  branch: ${r.branch}`);
-  const sinks = j(r.sinks);
-  if (sinks.length) { L.push('outputs:'); sinks.forEach((s) => L.push(`  - ${s.type}${s.target ? `: { target: ${s.target} }` : ''}`)); }
   const chain = j(r.chain);
   if (chain.length) L.push(`chain: [${chain.join(', ')}]`);
   L.push('---', '', r.prompt && r.prompt.trim() ? r.prompt : `## Prompt\n${r.summary}`);
@@ -369,6 +379,15 @@ app.post('/api/routines/:slug/validate', async (req, res) => {
   if (tools.includes('github')) checks.push({ label: 'Tool · gh', ok: st.github.connected, detail: st.github.connected ? `authed as @${st.github.account}` : 'gh not authed — run `gh auth login`' });
   if (tools.includes('slack')) checks.push({ label: 'Tool · slack-post', ok: st.slack.connected, detail: st.slack.connected ? `${st.slack.team} · @${st.slack.bot}` : 'SLACK_BOT_TOKEN not set' });
   if (tools.includes('web') || tools.includes('webfetch')) checks.push({ label: 'Tool · web', ok: true, detail: 'WebFetch / WebSearch' });
+  // Flag granted tools the runner can't actually provide.
+  const phantom = tools.filter((c) => !['github', 'slack', 'web', 'webfetch'].includes(c));
+  if (phantom.length) checks.push({ label: 'Tools', ok: false, detail: `not wired: ${phantom.join(', ')} — only github, slack, web are granted` });
+  // Schedule cron must be present and parseable, else the routine silently never fires.
+  if (j(r.triggers).includes('schedule')) {
+    const parts = String(r.schedule || '').trim().split(/\s+/);
+    const okCron = parts.length === 5 && parts.every((f) => /^[\d*,/-]+$/.test(f));
+    checks.push({ label: 'Schedule cron', ok: okCron, detail: r.schedule ? (okCron ? r.schedule : `"${r.schedule}" is not a valid 5-field cron`) : 'no cron set — will never fire' });
+  }
   (j(r.chain)).forEach((c) => checks.push({ label: `Chain → ${c}`, ok: !!one('SELECT 1 FROM routines WHERE slug=?', c), detail: one('SELECT 1 FROM routines WHERE slug=?', c) ? 'resolves' : 'no such routine' }));
   res.json({ ok: checks.every((c) => c.ok), checks });
 });
@@ -421,35 +440,16 @@ app.get('/api/runs/:id', (req, res) => {
     let pl; try { pl = JSON.parse(e.payload); } catch { pl = { d: e.payload, truncated: false }; }
     return { seq: e.seq, t: fmtOffset(e.t_offset), type: e.type, tool: e.tool, ok: e.ok, text: pl.d, truncated: !!pl.truncated };
   });
-  const dotFor = (e) => e.type === 'tool_use' ? '#e6b052' : e.type === 'system' ? '#7f8a80' : e.type === 'text' ? '#5b9ee6' : (e.ok === 0 ? '#e5736b' : '#5fbf86');
-  const sumText = (e) => {
-    const d = e.text ?? '';
-    if (e.type === 'system') { try { const o = JSON.parse(d); return `session · ${o.model} · ${(o.tools || []).length} tools`; } catch { return 'session start'; } }
-    if (e.type === 'text') return String(d).replace(/\s+/g, ' ').slice(0, 110);
-    if (e.type === 'tool_use') { let inp = d; try { const o = JSON.parse(d); inp = o.command || o.url || o.pattern || JSON.stringify(o); } catch { /* raw */ } return `${e.tool} ← ${String(inp).replace(/\s+/g, ' ').slice(0, 90)}`; }
-    if (e.type === 'tool_result') return `${e.tool || 'tool'} → ${e.ok ? 'ok' : 'error'} · ${String(d).replace(/\s+/g, ' ').slice(0, 90)}`;
-    if (e.type === 'result') { try { const o = JSON.parse(d); return `done · ${o.num_turns} turns · $${Number(o.total_cost_usd || 0).toFixed(4)}`; } catch { return 'done'; } }
-    return e.type;
-  };
-  const timeline = [
-    { t: '0:00', tag: 'dispatch', text: `Dispatcher admitted run · trigger ${x.trigger}`, dot: '#5fbf86' },
-    ...trace.map((e) => ({ t: e.t, tag: e.type, tool: e.tool, ok: e.ok, text: sumText(e), dot: dotFor(e) })),
-  ];
-  if (!running && !evts.length) timeline.push({ t: x.dur, tag: ok ? 'done' : 'error', text: ok ? 'Completed' : 'Run failed — see output', dot: ok ? '#5fbf86' : '#e5736b' });
-
   res.json({
     id: x.id, routine: x.routine_slug, status: x.status, trigger: x.trigger,
     started: new Date(x.created_at).toLocaleTimeString(), elapsed: x.dur, model: r?.model || 'claude',
     cost: x.cost_usd, turns: x.num_turns, sessionId: x.session_id,
-    stdout: x.output, event: jObj(x.event), sinksResult: [], trace,
-    timeline, awaiting: running ? 'auto-mode session running…' : null,
+    stdout: x.output, event: jObj(x.event), trace,
+    awaiting: running ? 'auto-mode session running…' : null,
     summary: {
       result: running ? 'Running…' : ok ? (x.output.split('\n').pop()?.slice(0, 80) || 'Completed') : 'Failed',
-      iteration: x.num_turns ? `${x.num_turns} turns` : '1 of 1',
-      commit: x.cost_usd != null ? `$${Number(x.cost_usd).toFixed(4)}` : '—',
-      surface: (tools.join(', ') || 'session'),
+      surface: tools.join(', ') || 'session',
     },
-    diff: null, dispatcher: [], outputs: [], leaseBarrier: [['trigger', x.trigger]],
   });
 });
 

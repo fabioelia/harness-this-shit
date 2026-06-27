@@ -9,7 +9,7 @@ const PRINT_PR_TITLE = {
   triggers: ['push', 'pull_request'],
   connectors: ['github', 'slack'],
   prompt:
-    'When a pull request is opened or a commit is pushed to its branch, post the title of the pull request to the Slack channel #dev-ai-slop.',
+    'When a pull request is opened or a commit is pushed to its branch, find the title of the associated pull request and post it to the Slack channel #dev-ai-slop. If Slack is not available, report the title as your result instead.',
   model: 'claude-opus-4-8',
   repo: 'fabioelia/harness-this-shit',
   branch: 'main',

@@ -11,7 +11,6 @@ const TRIGGER_GROUPS: { label: string; items: string[] }[] = [
 ];
 // Only tools the runner actually grants (runner.js allowedToolsFor). No phantom MCPs.
 const CONNECTORS = ['github', 'slack', 'web'];
-const SINKS = ['stdout', 'slack', 'github-comment', 'github-gist', 'confluence'];
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'mb-1.5 font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -137,8 +136,6 @@ export function NewRoutinePage() {
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('main');
   const [prompt, setPrompt] = useState('');
-  const [sinks, setSinks] = useState<string[]>(['stdout']);
-  const [slackChannel, setSlackChannel] = useState('#dev-ai-slop');
   const [chain, setChain] = useState('');
   const [schedule, setSchedule] = useState('0 9 * * *');
   const [filterActions, setFilterActions] = useState('');
@@ -153,7 +150,6 @@ export function NewRoutinePage() {
   };
   const toggle = (set: React.Dispatch<React.SetStateAction<string[]>>, v: string) =>
     set((arr) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]));
-  const sinksArr = sinks.map((t) => (t === 'slack' ? { type: 'slack', target: slackChannel.trim() } : { type: t }));
   const chainArr = chain.split(',').map((s) => slugify(s)).filter(Boolean);
 
   // Prefill when editing
@@ -165,9 +161,6 @@ export function NewRoutinePage() {
     setTriggers(d.triggers); setConnectors(d.connectors);
     setModel(d.model || 'claude-opus-4-8'); setRepo(d.repo || ''); setBranch(d.branch || 'main');
     setPrompt(d.prompt || '');
-    setSinks(d.sinks.map((s) => s.type));
-    const slk = d.sinks.find((s) => s.type === 'slack');
-    if (slk?.target) setSlackChannel(slk.target);
     setChain(d.chain.join(', '));
     if (d.schedule) setSchedule(d.schedule);
     setFilterActions((d.filters?.actions ?? []).join(', '));
@@ -208,7 +201,7 @@ export function NewRoutinePage() {
   const valid = name.trim().length > 0 && slug.length > 0;
   function submit() {
     if (!valid) return;
-    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, sinks: [], chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj };
+    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj };
     if (isEdit) update.mutate({ slug: editSlug!, body }, { onSuccess: () => navigate(`/routines/${editSlug}`) });
     else create.mutate(body, { onSuccess: (r) => navigate(`/routines/${r.slug}`) });
   }

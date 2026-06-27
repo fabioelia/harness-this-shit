@@ -26,7 +26,7 @@ export function SettingsPage() {
   return (
     <div className="font-sans text-fg animate-fade-up">
       <div className="border-b border-line-soft bg-head px-[26px] py-[22px]">
-        <div className="mb-3 font-mono text-[12px] font-medium text-dim"><span className="text-brand">Switchboard</span> › Config</div>
+        <div className="mb-3 font-mono text-[12px] font-medium text-dim"><span className="text-brand">Switchboard</span> › Settings</div>
         <div className="font-display text-[23px] font-bold tracking-tight">Settings</div>
         <div className="mt-1 text-[13px] text-muted-2">The identities this harness runs as, and the guardrails injected into every routine session.</div>
       </div>

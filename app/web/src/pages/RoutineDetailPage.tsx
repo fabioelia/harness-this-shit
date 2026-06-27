@@ -53,16 +53,14 @@ function FrontMatterCard({ fm }: { fm: FrontMatter }) {
             ))}
           </div>
         </Row>
-        <Row k="concurrency:">
-          <div className="flex flex-col gap-[5px] font-mono text-[11px] font-medium text-[#ada695]">
-            {fm.concurrency.map((line, i) => (
-              <div key={i}>
-                <span className="text-dim-2">{line[0]}</span> {line[1]}
-                {line[2] != null && <> · <span className="text-dim-2">{line[2]}</span> {line[3]}</>}
-              </div>
-            ))}
-          </div>
-        </Row>
+        {(fm.filters.actions.length > 0 || fm.filters.branches.length > 0) && (
+          <Row k="filters:">
+            <div className="flex flex-col gap-[5px] font-mono text-[11px] font-medium text-[#ada695]">
+              {fm.filters.actions.length > 0 && <div><span className="text-dim-2">actions</span> [{fm.filters.actions.join(', ')}]</div>}
+              {fm.filters.branches.length > 0 && <div><span className="text-dim-2">branches</span> [{fm.filters.branches.join(', ')}]</div>}
+            </div>
+          </Row>
+        )}
       </div>
     </div>
   );
@@ -84,78 +82,6 @@ function ReactiveFlowCard({ d }: { d: RoutineDetail }) {
               <div className="mt-0.5 font-mono text-[10px] text-dim">{n.sub}</div>
             </span>
           </span>
-        ))}
-      </div>
-      {d.reactions.length > 0 && (
-        <>
-          <div className="mb-2.5 font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2">On the opened PR — reactions</div>
-          <div className="flex flex-col gap-[9px]">
-            {d.reactions.map((r, i) => (
-              <div key={i} className="flex items-center gap-2.5">
-                <Dot color={r.dot} size={7} />
-                <span className="flex-1 font-mono text-[11px] font-medium text-[#ada695]">{r.when}</span>
-                <span className="text-faint">→</span>
-                <span className="rounded-[5px] font-mono text-[11px] font-semibold" style={{ padding: '2px 8px', color: toneColor[r.toTone], background: `${r.toTone === 'ok' ? 'rgba(95,191,134,.1)' : 'rgba(91,158,230,.1)'}`, border: `1px solid ${r.toTone === 'ok' ? 'rgba(95,191,134,.25)' : 'rgba(91,158,230,.25)'}` }}>{r.to}</span>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function LeaseCard({ d }: { d: RoutineDetail }) {
-  if (!d.lease) return null;
-  const l = d.lease;
-  const bar = (pct: number, color: string) => (
-    <div className="relative h-[6px] overflow-hidden rounded-[3px]" style={{ background: 'rgba(255,255,255,.09)' }}>
-      <div className="absolute left-0 top-0 bottom-0 rounded-[3px]" style={{ width: `${pct}%`, background: color }} />
-    </div>
-  );
-  return (
-    <div className="rounded-lg border bg-surface p-[18px]" style={{ borderColor: 'rgba(180,154,230,.28)' }}>
-      <div className="mb-[15px] font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-lease">Live lease &amp; budget</div>
-      <div className="mb-3.5 flex items-center justify-between">
-        <span className="font-sans text-[12px] font-medium text-muted">Claiming</span>
-        <span className="font-mono text-[12px] font-semibold text-lease">{l.claiming}</span>
-      </div>
-      <div className="mb-3.5">
-        <div className="mb-1.5 flex justify-between font-mono text-[11px] font-medium text-muted-2"><span>Lease TTL</span><span className="text-t2">{l.ttlLeft}</span></div>
-        {bar(l.ttlPct, SIGNAL.lease)}
-      </div>
-      <div className="mb-3.5">
-        <div className="mb-1.5 flex justify-between font-mono text-[11px] font-medium text-muted-2"><span>Iteration budget</span><span className="text-t2">{l.budget}</span></div>
-        {bar(l.budgetPct, SIGNAL.needs_human)}
-      </div>
-      <div className="flex items-center justify-between border-t border-line-soft pt-[11px] font-mono text-[11px] font-medium">
-        <span className="text-muted-2">yield_to_human <span className="text-ok">{l.yield ? 'on' : 'off'}</span></span>
-        <span className="text-muted-2">barrier <span className="text-[#ada695]">{l.barrier}</span></span>
-      </div>
-    </div>
-  );
-}
-
-function OwnedPRsCard({ d }: { d: RoutineDetail }) {
-  if (!d.ownedPRs.length) return null;
-  return (
-    <div className={CARD}>
-      <div className="mb-3.5 flex items-center gap-2">
-        <span className={LABEL}>Owned PRs · subscriptions</span>
-        <span className="rounded-[5px] bg-white/[0.05] px-1.5 font-mono text-[10px] font-semibold text-dim">{d.ownedPRs.length}</span>
-      </div>
-      <div className="flex flex-col gap-3">
-        {d.ownedPRs.map((p) => (
-          <div key={p.ref} className="border-b border-line-soft pb-3 last:border-0 last:pb-0">
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <span className="flex min-w-0 items-center gap-2">
-                <span className="font-mono text-[12px] font-semibold text-brand">{p.ref}</span>
-                <span className="truncate font-sans text-[12px] font-medium text-t2">{p.title}</span>
-              </span>
-              <Pill label={p.label} color={SIGNAL[p.status as keyof typeof SIGNAL] ?? SIGNAL.idle} />
-            </div>
-            <div className="font-mono text-[10.5px] font-medium text-dim">{p.waiting} · last {p.last} · budget {p.budget}</div>
-          </div>
         ))}
       </div>
     </div>
@@ -283,24 +209,15 @@ export function RoutineDetailPage() {
           </div>
         </div>
         <div className="flex min-w-0 flex-col gap-[18px]">
-          <LeaseCard d={d} />
-          <OwnedPRsCard d={d} />
-          {(d.sinks?.length > 0 || d.chain?.length > 0) && (
+          {d.chain?.length > 0 && (
             <div className={CARD}>
-              <div className={`${LABEL} mb-3`}>Outputs &amp; chain</div>
+              <div className={`${LABEL} mb-3`}>Chain · on success</div>
               <div className="flex flex-col gap-2.5">
-                {d.sinks.map((s, i) => (
-                  <div key={i} className="flex items-center gap-2.5">
-                    <Dot color="#5fbf86" size={7} />
-                    <span className="font-mono text-[12px] font-semibold text-t2">{s.type}</span>
-                    {s.target && <span className="font-mono text-[11px] text-dim">→ {s.target}</span>}
-                  </div>
-                ))}
                 {d.chain.map((c) => (
                   <div key={c} className="flex items-center gap-2.5">
                     <span className="text-faint">↳</span>
                     <Link to={`/routines/${c}`} className="font-mono text-[12px] font-semibold text-brand">{c}</Link>
-                    <span className="font-mono text-[11px] text-dim">chained on success</span>
+                    <span className="font-mono text-[11px] text-dim">fires with this run’s output</span>
                   </div>
                 ))}
               </div>

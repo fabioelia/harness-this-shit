@@ -6,9 +6,9 @@ export function ActivityPage() {
   return (
     <div className="font-sans text-fg animate-fade-up">
       <div className="border-b border-line-soft bg-head px-[26px] py-[22px]">
-        <div className="mb-3 font-mono text-[12px] font-medium text-dim"><span className="text-brand">Switchboard</span> › Audit</div>
-        <div className="font-display text-[23px] font-bold tracking-tight">Audit &amp; activity</div>
-        <div className="mt-1 text-[13px] text-muted-2">The live event log — what fired, what the dispatcher decided, and what it touched.</div>
+        <div className="mb-3 font-mono text-[12px] font-medium text-dim"><span className="text-brand">Switchboard</span> › Activity</div>
+        <div className="font-display text-[23px] font-bold tracking-tight">Activity</div>
+        <div className="mt-1 text-[13px] text-muted-2">The live event log — runs that fired, and dispatch decisions (skips, kill-switch drops).</div>
       </div>
       <div className="mx-auto max-w-[860px] px-[26px] py-6">
         <div className="mb-3 flex items-center gap-2">

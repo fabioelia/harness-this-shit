@@ -106,6 +106,7 @@ export function getDb() {
   ensure('runs', 'session_id', "session_id TEXT NOT NULL DEFAULT ''");
   ensure('routines', 'schedule', "schedule TEXT NOT NULL DEFAULT ''");
   ensure('routines', 'filters', "filters TEXT NOT NULL DEFAULT '{}'");
+  ensure('runs', 'dur_ms', 'dur_ms INTEGER');
   const n = _db.prepare('SELECT COUNT(*) AS n FROM routines').get();
   if (fresh || n.n === 0) seed(_db);
   return _db;
