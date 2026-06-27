@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS routines (
   chain TEXT NOT NULL DEFAULT '[]',   -- json: downstream routine slugs
   schedule TEXT NOT NULL DEFAULT '',  -- 5-field cron for the schedule trigger
   filters TEXT NOT NULL DEFAULT '{}', -- json: actions/branches event sub-filters
-  reactions TEXT NOT NULL DEFAULT '[]' -- json: [{source,kind,when,run}] follow-the-work
+  reactions TEXT NOT NULL DEFAULT '[]', -- json: [{source,kind,when,run}] follow-the-work
+  effort TEXT NOT NULL DEFAULT ''       -- session reasoning effort (low|medium|high|xhigh|max), '' = CLI default
 );
 CREATE TABLE IF NOT EXISTS watches (
   id TEXT PRIMARY KEY,
@@ -113,6 +114,7 @@ export function getDb() {
   ensure('routines', 'schedule', "schedule TEXT NOT NULL DEFAULT ''");
   ensure('routines', 'filters', "filters TEXT NOT NULL DEFAULT '{}'");
   ensure('routines', 'reactions', "reactions TEXT NOT NULL DEFAULT '[]'");
+  ensure('routines', 'effort', "effort TEXT NOT NULL DEFAULT ''");
   ensure('runs', 'dur_ms', 'dur_ms INTEGER');
   const n = _db.prepare('SELECT COUNT(*) AS n FROM routines').get();
   if (fresh || n.n === 0) seed(_db);

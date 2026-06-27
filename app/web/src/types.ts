@@ -13,6 +13,7 @@ export interface Routine {
   filters: { actions?: string[]; branches?: string[] };
   reactions: Reaction[];
   model: string;
+  effort: string;
   repo: string;
   branch: string;
   state: string;

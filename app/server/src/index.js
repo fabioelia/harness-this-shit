@@ -45,6 +45,19 @@ const fmtDur = (ms) => (ms == null ? '…' : ms < 60_000 ? `${(ms / 1000).toFixe
 const fmtOffset = (ms) => `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, '0')}`;
 
 // Redact obvious secrets before a trace event is ever written to disk.
+// Runtime options the CLI actually accepts (verified against `claude --model/--effort`).
+const MODELS = [
+  { id: 'claude-opus-4-8', label: 'Opus 4.8' },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
+  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
+  { id: 'claude-fable-5', label: 'Fable 5' },
+];
+const MODEL_IDS = MODELS.map((m) => m.id);
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const DEFAULT_MODEL = 'claude-opus-4-8';
+const normModel = (m) => (MODEL_IDS.includes((m || '').trim()) ? m.trim() : DEFAULT_MODEL);
+const normEffort = (e) => (EFFORTS.includes((e || '').trim()) ? e.trim() : '');
+
 const MAX_PAYLOAD = 16_000;
 const redact = (s) => String(s)
   .replace(/xox[baprs]-[A-Za-z0-9-]+/g, 'xoxb-***')
@@ -60,7 +73,7 @@ const shapeRoutine = (r) => {
     owner: r.owner, team: r.team, ownerColor: r.av_color, initials: r.initials,
     triggers: j(r.triggers), connectors: j(r.connectors), chain: j(r.chain),
     schedule: r.schedule || '', filters: jObj(r.filters) || {}, reactions: j(r.reactions),
-    model: r.model, repo: r.repo, branch: r.branch,
+    model: r.model, effort: r.effort || '', repo: r.repo, branch: r.branch,
     state: r.enabled ? r.state : 'disabled', enabled: !!r.enabled,
     lastAgo: r.last_ago, lastStatus: r.last_status, next: r.next,
     recent, successRate, spend: r.spend, avg: r.avg, runCount: recent.length,
@@ -77,7 +90,7 @@ function detailOf(r) {
     frontMatter: {
       on: j(r.triggers).map((t) => ({ key: `trigger · ${t}`, detail: t === 'schedule' && r.schedule ? r.schedule : '' })),
       tools: conns.map((c) => ({ sign: '+', name: c, tone: 'ok' })),
-      runtime: [r.model || 'claude-opus-4-8', `· repos ${repos.join(', ') || '*'}`, `· branch ${r.branch || 'main'}`],
+      runtime: [r.model || 'claude-opus-4-8', `${r.effort ? `· ${r.effort} effort ` : ''}· repos ${repos.join(', ') || '*'}`, `· branch ${r.branch || 'main'}`],
       filters: { actions: flt.actions || [], branches: flt.branches || [] },
     },
     // trigger → session → (tools), reflecting the real shape only.
@@ -154,7 +167,7 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       } catch { /* one malformed event must not kill the run */ }
     };
 
-    const res = await runClaude(prompt, { tools, onEvent, model: r.model });
+    const res = await runClaude(prompt, { tools, onEvent, model: normModel(r.model), effort: normEffort(r.effort) });
     const ok = !res.isError && !!res.finalText;
     const rawOut = ok ? res.finalText
       : (res.finalText || (res.code === 124 ? `timed out after ${Math.round(res.ms / 1000)}s` : res.stderr || `claude exited ${res.code}`));
@@ -401,6 +414,7 @@ if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(tickWatches, 45_00
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.get('/api/health', (_q, res) => res.json({ ok: true }));
+app.get('/api/models', (_q, res) => res.json({ models: MODELS, efforts: EFFORTS, defaultModel: DEFAULT_MODEL }));
 
 // The user's real GitHub repos — so the UI can see & target repositories.
 // ?owner=<org|*> & ?q=<search> for cross-org browse / GitHub-wide search.
@@ -461,14 +475,14 @@ app.post('/api/routines', (req, res) => {
 
   run(
     `INSERT INTO routines
-      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     slug, name, (b.summary || '').trim(), owner, team,
     JSON.stringify(triggers), JSON.stringify(connectors),
     'idle', 'never', 'idle', next, null, '$0.00', enabled, '', '', '—',
     ownerColor(owner), initialsOf(owner), ord,
-    (b.prompt || '').trim(), (b.model || 'claude-opus-4-8').trim(), (b.repo || '').trim(), (b.branch || 'main').trim(),
-    JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions)
+    (b.prompt || '').trim(), normModel(b.model), (b.repo || '').trim(), (b.branch || 'main').trim(),
+    JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions), normEffort(b.effort)
   );
   res.status(201).json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', slug)));
 });
@@ -483,7 +497,9 @@ function buildRoutineMd(r) {
     else L.push(`  - ${t}: {}`);
   });
   if (j(r.connectors).length) { L.push('tools:', `  grant: [${j(r.connectors).join(', ')}]`); }
-  L.push('runtime:', `  model: ${r.model}`, `  repos: [${(r.repo || '').split(',').map((s) => s.trim()).filter(Boolean).join(', ') || '*'}]`, `  branch: ${r.branch}`);
+  L.push('runtime:', `  model: ${r.model}`);
+  if (r.effort) L.push(`  effort: ${r.effort}`);
+  L.push(`  repos: [${(r.repo || '').split(',').map((s) => s.trim()).filter(Boolean).join(', ') || '*'}]`, `  branch: ${r.branch}`);
   const chain = j(r.chain);
   if (chain.length) L.push(`chain: [${chain.join(', ')}]`);
   const reactions = cleanReactions(j(r.reactions));
@@ -512,12 +528,13 @@ app.put('/api/routines/:slug', (req, res) => {
   const reactions = b.reactions != null ? cleanReactions(b.reactions) : j(r.reactions);
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
   run(
-    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=? WHERE slug=?`,
+    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
     JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
     JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
-    (b.model ?? r.model).trim() || 'claude-opus-4-8', (b.repo ?? r.repo).trim(), (b.branch ?? r.branch).trim() || 'main',
-    (b.prompt ?? r.prompt).trim(), ownerColor(owner), initialsOf(owner), next, schedule, JSON.stringify(filters), JSON.stringify(reactions), r.slug
+    normModel(b.model ?? r.model), (b.repo ?? r.repo).trim(), (b.branch ?? r.branch).trim() || 'main',
+    (b.prompt ?? r.prompt).trim(), ownerColor(owner), initialsOf(owner), next, schedule, JSON.stringify(filters), JSON.stringify(reactions),
+    b.effort != null ? normEffort(b.effort) : (r.effort || ''), r.slug
   );
   res.json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', r.slug)));
 });
@@ -539,7 +556,7 @@ app.post('/api/routines/:slug/validate', async (req, res) => {
     { label: 'Identity', ok: !!r.name && !!r.slug, detail: `${r.name} · ${r.slug}.routine.md` },
     { label: 'Triggers', ok: j(r.triggers).length > 0, detail: j(r.triggers).join(', ') || 'no triggers — manual only' },
     { label: 'Instruction', ok: !!(r.prompt && r.prompt.trim().length > 12), detail: `${(r.prompt || '').length} chars` },
-    { label: 'Model', ok: !!r.model, detail: r.model },
+    { label: 'Model', ok: MODEL_IDS.includes(r.model), detail: MODEL_IDS.includes(r.model) ? `${MODELS.find((m) => m.id === r.model)?.label || r.model}${r.effort ? ` · ${r.effort} effort` : ''}` : `unknown model "${r.model}" — pick a valid one` },
   ];
   if (tools.includes('github')) checks.push({ label: 'Tool · gh', ok: st.github.connected, detail: st.github.connected ? `authed as @${st.github.account}` : 'gh not authed — run `gh auth login`' });
   if (tools.includes('slack')) checks.push({ label: 'Tool · slack-post', ok: st.slack.connected, detail: st.slack.connected ? `${st.slack.team} · @${st.slack.bot}` : 'SLACK_BOT_TOKEN not set' });

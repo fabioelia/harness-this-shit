@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useCreateRoutine, useUpdateRoutine, useRoutine, useGithubRepos, useGithubOrgs, useGithubChecks } from '@/lib/api';
+import { useCreateRoutine, useUpdateRoutine, useRoutine, useGithubRepos, useGithubOrgs, useGithubChecks, useModels } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 const TRIGGER_GROUPS: { label: string; items: string[] }[] = [
@@ -191,6 +191,9 @@ export function NewRoutinePage() {
   const create = useCreateRoutine();
   const update = useUpdateRoutine();
   const mut = isEdit ? update : create;
+  const { data: modelsData } = useModels();
+  const MODELS = modelsData?.models ?? [{ id: 'claude-opus-4-8', label: 'Opus 4.8' }];
+  const EFFORTS = modelsData?.efforts ?? ['low', 'medium', 'high', 'xhigh', 'max'];
 
   const [name, setName] = useState('');
   const [slugTouched, setSlugTouched] = useState(false);
@@ -201,6 +204,7 @@ export function NewRoutinePage() {
   const [triggers, setTriggers] = useState<string[]>([]);
   const [connectors, setConnectors] = useState<string[]>([]);
   const [model, setModel] = useState('claude-opus-4-8');
+  const [effort, setEffort] = useState('');
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('main');
   const [prompt, setPrompt] = useState('');
@@ -228,7 +232,7 @@ export function NewRoutinePage() {
     setName(d.name); setSlugTouched(true); setSlugInput(d.slug);
     setSummary(d.summary); setOwner(d.owner); setTeam(d.team);
     setTriggers(d.triggers); setConnectors(d.connectors);
-    setModel(d.model || 'claude-opus-4-8'); setRepo(d.repo || ''); setBranch(d.branch || 'main');
+    setModel(d.model || 'claude-opus-4-8'); setEffort(d.effort || ''); setRepo(d.repo || ''); setBranch(d.branch || 'main');
     setPrompt(d.prompt || '');
     setChain(d.chain.join(', '));
     if (d.schedule) setSchedule(d.schedule);
@@ -257,6 +261,7 @@ export function NewRoutinePage() {
     if (connectors.length) { L.push('tools:'); L.push(`  grant: [${connectors.join(', ')}]`); }
     L.push('runtime:');
     L.push(`  model: ${model || 'claude-opus-4-8'}`);
+    if (effort) L.push(`  effort: ${effort}`);
     L.push(`  repos: [${repo.split(',').map((s) => s.trim()).filter(Boolean).join(', ') || '*'}]`);
     L.push(`  branch: ${branch || 'main'}`);
     if (chainArr.length) L.push(`chain: [${chainArr.join(', ')}]`);
@@ -268,12 +273,12 @@ export function NewRoutinePage() {
     L.push('');
     L.push(prompt.trim() || '## Prompt\nDescribe what this routine should do, step by step.');
     return L.join('\n');
-  }, [name, slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, chain, schedule, filterActions, filterBranches, reactions]);
+  }, [name, slug, summary, owner, team, triggers, connectors, model, effort, repo, branch, prompt, chain, schedule, filterActions, filterBranches, reactions]);
 
   const valid = name.trim().length > 0 && slug.length > 0;
   function submit() {
     if (!valid) return;
-    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions };
+    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions };
     if (isEdit) update.mutate({ slug: editSlug!, body }, { onSuccess: () => navigate(`/routines/${editSlug}`) });
     else create.mutate(body, { onSuccess: (r) => navigate(`/routines/${r.slug}`) });
   }
@@ -400,10 +405,23 @@ export function NewRoutinePage() {
 
           <div className={CARD}>
             <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Runtime</div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><div className={LABEL}>Model</div><input value={model} onChange={(e) => setModel(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')} /></div>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <div className={LABEL}>Model</div>
+                <select value={model} onChange={(e) => setModel(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')}>
+                  {MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                </select>
+              </div>
+              <div>
+                <div className={LABEL}>Effort</div>
+                <select value={effort} onChange={(e) => setEffort(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')}>
+                  <option value="">default</option>
+                  {EFFORTS.map((e) => <option key={e} value={e}>{e}</option>)}
+                </select>
+              </div>
               <div><div className={LABEL}>Branch</div><input value={branch} onChange={(e) => setBranch(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')} /></div>
             </div>
+            <div className="mt-2.5 text-[11.5px] text-dim-2">The session runs on this model (passed to <span className="font-mono">claude --model</span>); effort tunes its reasoning depth (<span className="font-mono">--effort</span>).</div>
           </div>
 
           <div className={CARD}>

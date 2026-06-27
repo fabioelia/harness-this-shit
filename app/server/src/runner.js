@@ -22,7 +22,7 @@ export function allowedToolsFor(connectors = []) {
   return allow;
 }
 
-export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, model } = {}) {
+export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, model, effort } = {}) {
   return new Promise((resolve) => {
     const start = Date.now();
     const allow = allowedToolsFor(tools);
@@ -33,6 +33,7 @@ export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, mo
     // stream-json (NDJSON) so we capture every step; --verbose is required under -p.
     const args = ['-p', '--strict-mcp-config', '--output-format', 'stream-json', '--verbose'];
     if (model) args.push('--model', model); // honour the routine's chosen model
+    if (effort) args.push('--effort', effort); // and its reasoning-effort level
     if (allow.length) args.push('--allowed-tools', ...allow);
     // tools dir on PATH so `slack-post` (and future tool scripts) resolve by name
     const env = { ...process.env, PATH: `${TOOLS_DIR}:${process.env.PATH}` };
