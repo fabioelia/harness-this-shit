@@ -137,6 +137,7 @@ export function FleetPage() {
   const [tag, setTag] = useState('');
   const [conn, setConn] = useState('');
   const [needsReview, setNeedsReview] = useState(false);
+  const [grouped, setGrouped] = useState(false);
   const [params] = useSearchParams();
   const searchRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -247,6 +248,7 @@ export function FleetPage() {
         {(team || trig || conn || tag || needsReview || q) && (
           <button onClick={() => { setTeam(''); setTrig(''); setConn(''); setTag(''); setNeedsReview(false); setQ(''); }} className="font-mono text-[11px] text-dim hover:text-fg">clear</button>
         )}
+        <button onClick={() => setGrouped((v) => !v)} className={cn('flex h-[34px] items-center gap-[6px] rounded-md border px-2.5 font-mono text-[11.5px] font-medium', grouped ? 'border-brand/50 bg-brand/10 text-brand-soft' : 'border-line text-dim hover:text-t2')} title="group by team">⊞ team</button>
         <span className="ml-auto text-[12px] text-dim">{list.length} of {routines?.length ?? 0}</span>
       </div>
 
@@ -286,6 +288,16 @@ export function FleetPage() {
               )
             }
           />
+        ) : grouped ? (
+          [...new Set([...list].sort((a, b) => a.team.localeCompare(b.team)).map((r) => r.team))].map((tm) => {
+            const rs = [...list].filter((r) => r.team === tm).sort((a, b) => Number(b.pinned) - Number(a.pinned));
+            return (
+              <div key={tm || '—'}>
+                <div className="flex items-center gap-2 border-b border-line bg-surface-2 px-4 py-1.5 font-display text-[11px] font-semibold uppercase tracking-[0.06em] text-dim-2">{tm || 'no team'} <span className="font-mono text-dim">· {rs.length}</span></div>
+                {rs.map((r, i) => <FleetRow key={r.slug} r={r} i={i} selected={sel.has(r.slug)} onSelect={onSelect} />)}
+              </div>
+            );
+          })
         ) : (
           [...list].sort((a, b) => Number(b.pinned) - Number(a.pinned)).map((r, i) => <FleetRow key={r.slug} r={r} i={i} selected={sel.has(r.slug)} onSelect={onSelect} />)
         )}
