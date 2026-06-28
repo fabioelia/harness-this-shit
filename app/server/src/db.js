@@ -185,6 +185,8 @@ export function getDb() {
   ensure('runs', 'assert_result', "assert_result TEXT NOT NULL DEFAULT ''");
   ensure('runs', 'dur_ms', 'dur_ms INTEGER');
   ensure('runs', 'model_used', "model_used TEXT NOT NULL DEFAULT ''");
+  ensure('runs', 'assignee', "assignee TEXT NOT NULL DEFAULT ''");
+  ensure('runs', 'triage', "triage TEXT NOT NULL DEFAULT ''");
   ensure('runs', 'in_tokens', 'in_tokens INTEGER');
   ensure('runs', 'out_tokens', 'out_tokens INTEGER');
   const n = _db.prepare('SELECT COUNT(*) AS n FROM routines').get();

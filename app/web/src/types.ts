@@ -119,6 +119,8 @@ export interface RunDetail {
   matchExplain: { fired: boolean; checks: { label: string; ok: boolean; detail: string }[] } | null;
   baseline: { drift: number } | null;
   slaBreach: { expected: number; actual: number } | null;
+  assignee: string;
+  triage: string;
   inbox: { summary: string; ago: string; pending: boolean }[];
   assertResult: { passed: boolean; results: { type: string; value: string; ok: boolean; detail: string }[] } | null;
   lineage: RunLineage;

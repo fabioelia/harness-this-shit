@@ -1985,6 +1985,16 @@ app.post('/api/runs/:id/rerun', (req, res) => {
   const runId = executeRoutine(r, { ...ev, _rerun: true, upstream: { routine: r.slug, run: x.id } }, `edited rerun · ${x.id}`);
   res.json({ ok: true, runId });
 });
+// Run handoff: assign a run to a teammate to investigate, with a triage status.
+app.post('/api/runs/:id/assign', (req, res) => {
+  const x = one('SELECT id FROM runs WHERE id=?', req.params.id);
+  if (!x) return res.status(404).json({ error: 'not found' });
+  const assignee = String(req.body?.assignee ?? '').trim().slice(0, 40);
+  const triage = ['', 'open', 'investigating', 'resolved'].includes(req.body?.triage) ? req.body.triage : 'open';
+  run('UPDATE runs SET assignee=?, triage=? WHERE id=?', assignee, (assignee || triage === 'resolved') ? triage : '', req.params.id);
+  if (assignee) logActivity(`run ${req.params.id} assigned to ${assignee} (${triage})`, 'idle');
+  res.json({ ok: true, assignee, triage });
+});
 // Cancel a running run: kill its live session, mark it failed, free its lease.
 app.post('/api/runs/:id/cancel', (req, res) => {
   const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
@@ -2061,6 +2071,7 @@ app.get('/api/runs/:id', (req, res) => {
     matchExplain: r && ev ? explainMatch(r, ev) : null,
     baseline: r && r.baseline ? { drift: driftPct(r.baseline, x.output) } : null,
     slaBreach: r && r.sla_s > 0 && x.dur_ms && x.dur_ms > r.sla_s * 1000 ? { expected: r.sla_s, actual: Math.round(x.dur_ms / 1000) } : null,
+    assignee: x.assignee || '', triage: x.triage || '',
     stdout: x.output, event: ev, trace, inbox, toolBreakdown,
     assertResult: jObj(x.assert_result) || null,
     lineage: { triggeredBy, downstream, watches },

@@ -314,6 +314,10 @@ export function useSetBaseline() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (id: string) => post(`/api/runs/${id}/baseline`), onSuccess: (_r, id) => qc.invalidateQueries({ queryKey: ['run', id] }) });
 }
+export function useAssignRun() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ id, assignee, triage }: { id: string; assignee: string; triage: string }) => post<{ ok: boolean }>(`/api/runs/${id}/assign`, { assignee, triage }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['run', v.id] }); qc.invalidateQueries({ queryKey: ['runs'] }); } });
+}
 export function useCancelRun() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (id: string) => post<{ ok: boolean; killed: boolean }>(`/api/runs/${id}/cancel`), onSuccess: (_r, id) => { qc.invalidateQueries({ queryKey: ['run', id] }); qc.invalidateQueries({ queryKey: ['runs'] }); } });
