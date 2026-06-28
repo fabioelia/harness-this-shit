@@ -1173,6 +1173,21 @@ app.get('/api/heatmap', (req, res) => {
   }
   res.json({ grid, max: Math.max(1, ...grid.flat()), days });
 });
+// Attention rollup: the single "what needs me right now" summary across signals.
+app.get('/api/attention', (_q, res) => {
+  const rows = all('SELECT * FROM routines WHERE archived=0');
+  const slugSet = new Set(all('SELECT slug FROM routines').map((x) => x.slug));
+  const failing = rows.filter((r) => r.enabled && (r.last_status === 'failing' || r.fail_streak > 0)).map((r) => ({ slug: r.slug, name: r.name }));
+  const warnings = rows.reduce((a, r) => a + lintRoutine(r, slugSet).length, 0);
+  const longRunning = all("SELECT routine_slug FROM runs WHERE status IN ('running','waiting') AND created_at < ?", now() - 8 * 60_000).length;
+  const stale = rows.filter((r) => r.enabled).filter((r) => { const t = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND status='succeeded'", r.slug)?.t || 0; return t > 0 && now() - t > 7 * 86_400_000; }).length;
+  const items = [];
+  if (failing.length) items.push({ kind: 'failing', n: failing.length, text: `${failing.length} routine${failing.length > 1 ? 's' : ''} failing`, link: '/?needsReview=1' });
+  if (longRunning) items.push({ kind: 'stuck', n: longRunning, text: `${longRunning} run${longRunning > 1 ? 's' : ''} stuck (>8m)`, link: '/insights' });
+  if (warnings) items.push({ kind: 'config', n: warnings, text: `${warnings} config warning${warnings > 1 ? 's' : ''}`, link: '/insights' });
+  if (stale) items.push({ kind: 'stale', n: stale, text: `${stale} routine${stale > 1 ? 's' : ''} stale (>7d)`, link: '/' });
+  res.json({ total: items.reduce((a, i) => a + i.n, 0), items });
+});
 // Recommendations: analyze recent runs + config and suggest concrete optimizations.
 app.get('/api/recommendations', (req, res) => {
   const since = now() - 14 * 86_400_000;

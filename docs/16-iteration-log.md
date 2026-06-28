@@ -115,6 +115,7 @@ dropdowns · Fleet inbox badge.
 | 94 | Insights custom date range (60/90 presets + custom day input, cap 365) | observability | ✅ done |
 | 95 | "Down since" current-incident duration on the MTTR card | observability | ✅ done |
 | 96 | Notes markdown rendering (safe: bold/code/links/lists/headings) | UX | ✅ done |
+| 97 | Needs-attention rollup banner (failing/stuck/warnings/stale) on Fleet | observability/eliminating-humans | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { useRoutines, useStats, useToggleRoutine, useKillSwitch, useConnectors, useLoadSamples, useImportRoutine, useBulkRoutines, usePinRoutine, useFleetViews, useSaveView, useDeleteView } from '@/lib/api';
+import { useRoutines, useStats, useToggleRoutine, useKillSwitch, useConnectors, useLoadSamples, useImportRoutine, useBulkRoutines, usePinRoutine, useFleetViews, useSaveView, useDeleteView, useAttention } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { Routine, Stats } from '@/types';
@@ -124,6 +124,7 @@ export function FleetPage() {
   const importRoutine = useImportRoutine();
   const bulk = useBulkRoutines();
   const { data: views } = useFleetViews();
+  const { data: attention } = useAttention();
   const saveView = useSaveView();
   const deleteView = useDeleteView();
   const applyView = (p: Record<string, string | boolean>) => { setQ(String(p.q || '')); setTeam(String(p.team || '')); setTrig(String(p.trig || '')); setConn(String(p.conn || '')); setTag(String(p.tag || '')); setNeedsReview(!!p.needsReview); };
@@ -209,6 +210,14 @@ export function FleetPage() {
         </div>
       </div>
 
+      {attention && attention.items.length > 0 && (
+        <div className="mb-[18px] flex flex-wrap items-center gap-2 rounded-xl border border-warn/30 bg-warn/[0.06] px-4 py-2.5">
+          <span className="font-display text-[11px] font-semibold uppercase tracking-[0.08em] text-warn">⚠ Needs attention</span>
+          {attention.items.map((it) => (
+            <Link key={it.kind} to={it.link} className="rounded-md border border-line bg-surface-2 px-2.5 py-1 font-mono text-[12px] text-t2 hover:border-hair">{it.text}</Link>
+          ))}
+        </div>
+      )}
       <StatStrip s={stats} />
 
       {(ghOff || slackOff) && (
