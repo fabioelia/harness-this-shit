@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInsights, useSchedule, useSetBudget, useGraph, useLeases } from '@/lib/api';
+import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest } from '@/lib/api';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -14,7 +14,11 @@ export function InsightsPage() {
   const setBudget = useSetBudget();
   const { data: graph } = useGraph();
   const { data: conc } = useLeases();
+  const setDigest = useSetDigest();
+  const sendDigest = useSendDigest();
   const [capDraft, setCapDraft] = useState('');
+  const [digestCh, setDigestCh] = useState<string | null>(null);
+  const [digestHr, setDigestHr] = useState<number | null>(null);
   const maxCost = Math.max(0.0001, ...(d?.daily ?? []).map((x) => x.cost));
   const maxRuns = Math.max(1, ...(d?.daily ?? []).map((x) => x.runs));
 
@@ -61,6 +65,19 @@ export function InsightsPage() {
                 <button onClick={() => setBudget.mutate(parseFloat(capDraft) || 0, { onSuccess: () => setCapDraft('') })} className="h-8 rounded-md border border-line bg-surface-2 px-3 font-display text-[12px] font-semibold text-t2 hover:border-hair">Set</button>
                 {d.budget.cap > 0 && <button onClick={() => setBudget.mutate(0)} className="h-8 rounded-md border border-line bg-surface-2 px-3 font-display text-[12px] font-semibold text-dim hover:text-bad">Off</button>}
               </div>
+            </div>
+
+            <div className={`${CARD} mb-[18px] flex flex-wrap items-center gap-3`}>
+              <span className={LABEL}>Daily digest</span>
+              <input value={digestCh ?? d.digest.channel} onChange={(e) => setDigestCh(e.target.value)} placeholder="#ops or @fabio" className="h-8 w-40 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+              <span className="font-mono text-[12px] text-dim">at</span>
+              <input type="number" min={-1} max={23} value={digestHr ?? d.digest.hour} onChange={(e) => setDigestHr(+e.target.value)} className="h-8 w-16 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+              <span className="font-mono text-[11px] text-dim-2">:00h ({d.digest.hour < 0 ? 'off' : `${d.digest.hour}:00 daily`})</span>
+              <div className="ml-auto flex items-center gap-2">
+                <button onClick={() => setDigest.mutate({ channel: digestCh ?? d.digest.channel, hour: digestHr ?? d.digest.hour }, { onSuccess: () => { setDigestCh(null); setDigestHr(null); } })} className="h-8 rounded-md border border-line bg-surface-2 px-3 font-display text-[12px] font-semibold text-t2 hover:border-hair">Save</button>
+                <button onClick={() => sendDigest.mutate()} className="h-8 rounded-md border border-line bg-surface-2 px-3 font-display text-[12px] font-semibold text-brand-soft hover:border-hair">{sendDigest.isPending ? 'Sending…' : 'Send now'}</button>
+              </div>
+              {sendDigest.data && <div className="w-full font-mono text-[11px] text-dim-2">{sendDigest.data.sent ? 'sent · ' : 'no channel · '}{sendDigest.data.preview}</div>}
             </div>
 
             <div className="mb-[18px] grid grid-cols-2 gap-[14px] md:grid-cols-5">

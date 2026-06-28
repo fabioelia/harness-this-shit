@@ -724,6 +724,12 @@ export function cronMatches(expr, d) {
 }
 const _lastFired = new Map();
 function tickScheduler() {
+  // Daily digest: fire once when the local hour matches digest_hour and it hasn't run today.
+  const dh = parseInt(metaGet('digest_hour', '-1'), 10);
+  if (dh >= 0 && metaGet('digest_channel', '').trim()) {
+    const nd = new Date(); const today = nd.toISOString().slice(0, 10);
+    if (nd.getHours() === dh && metaGet('last_digest', '') !== today) { setMeta('last_digest', today); sendDigest(); }
+  }
   if (meta('kill_switch', 'false') === 'true' || overBudget()) return;
   const d = new Date();
   const stamp = `${d.getFullYear()}/${d.getMonth()}/${d.getDate()} ${d.getHours()}:${d.getMinutes()}`;
@@ -896,6 +902,28 @@ app.get('/api/github/labels', async (req, res) => {
   res.json({ labels: r.code === 0 ? r.out.split('\n').map((s) => s.trim()).filter(Boolean) : [] });
 });
 
+// Daily digest: a self-posting Slack rollup of the day's runs/spend/failures.
+function buildDigest() {
+  const since = (() => { const s = new Date(now()); s.setHours(0, 0, 0, 0); return s.getTime(); })();
+  const t = one('SELECT COUNT(*) AS runs, COALESCE(SUM(cost_usd),0) AS cost, SUM(CASE WHEN status=\'failed\' THEN 1 ELSE 0 END) AS fails FROM runs WHERE created_at > ?', since);
+  const top = all("SELECT routine_slug, COUNT(*) AS n, COALESCE(SUM(cost_usd),0) AS c FROM runs WHERE created_at > ? GROUP BY routine_slug ORDER BY c DESC LIMIT 3", since);
+  const topStr = top.map((x) => `${x.routine_slug} (${x.n}, $${x.c.toFixed(2)})`).join(', ') || 'none';
+  return `:bar_chart: *Switchboard daily digest* — ${t.runs} runs, $${t.cost.toFixed(2)} spent, ${t.fails || 0} failed today.\nBusiest: ${topStr}.`;
+}
+function sendDigest() {
+  const target = metaGet('digest_channel', '').trim();
+  if (!target) return false;
+  execCapture('slack-post', [target, buildDigest()], { env: { ...process.env, PATH: `${SCRIPT_TOOLS_DIR}:${process.env.PATH}` }, timeoutMs: 15_000 })
+    .then((res) => logActivity(`daily digest ${res.code === 0 ? `sent → ${target}` : `error: ${(res.err || '').slice(0, 50)}`}`, 'idle')).catch(() => {});
+  return true;
+}
+app.post('/api/digest', (req, res) => {
+  const b = req.body || {};
+  if (b.channel != null) setMeta('digest_channel', String(b.channel).trim());
+  if (b.hour != null) setMeta('digest_hour', String(Math.max(-1, Math.min(23, parseInt(b.hour, 10)))));
+  res.json({ channel: metaGet('digest_channel', ''), hour: parseInt(metaGet('digest_hour', '-1'), 10) });
+});
+app.post('/api/digest/send', (_q, res) => res.json({ sent: sendDigest(), preview: buildDigest() }));
 // Live concurrency: leases currently held + inbox tasks waiting to be picked up.
 app.get('/api/leases', (_q, res) => {
   const leases = all('SELECT * FROM leases ORDER BY acquired_at DESC').map((l) => ({
@@ -965,6 +993,7 @@ app.get('/api/insights', (req, res) => {
     perRoutine,
     totals: { runs: T.runs, cost: +T.cost.toFixed(2), turns: T.turns, avgMs: T.nMs ? Math.round(T.ms / T.nMs) : 0, fails: T.fails, failRate: T.runs ? Math.round((100 * T.fails) / T.runs) : 0 },
     budget: { cap: budgetCap(), today: +todaySpend().toFixed(2), over: overBudget() },
+    digest: { channel: metaGet('digest_channel', ''), hour: parseInt(metaGet('digest_hour', '-1'), 10) },
   });
 });
 app.post('/api/budget', (req, res) => {

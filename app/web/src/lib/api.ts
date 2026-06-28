@@ -43,6 +43,14 @@ export interface Insights {
   perRoutine: { slug: string; name: string; runs: number; cost: number; turns: number; avgMs: number; fails: number; failRate: number }[];
   totals: { runs: number; cost: number; turns: number; avgMs: number; fails: number; failRate: number };
   budget: { cap: number; today: number; over: boolean };
+  digest: { channel: string; hour: number };
+}
+export function useSetDigest() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (b: { channel?: string; hour?: number }) => post('/api/digest', b), onSuccess: () => qc.invalidateQueries({ queryKey: ['insights'] }) });
+}
+export function useSendDigest() {
+  return useMutation({ mutationFn: () => post<{ sent: boolean; preview: string }>('/api/digest/send', {}) });
 }
 export function useSetBudget() {
   const qc = useQueryClient();
