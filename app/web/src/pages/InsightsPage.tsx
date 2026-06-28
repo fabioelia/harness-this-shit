@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures, useHeatmap, useReleaseLease, usePruneRuns, useSetRetention, useActiveRuns, useRecommendations, useTeams, useOwners } from '@/lib/api';
+import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures, useHeatmap, useReleaseLease, usePruneRuns, useSetRetention, useActiveRuns, useRecommendations, useTeams, useOwners, useSetTeamBudget } from '@/lib/api';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -26,6 +26,7 @@ export function InsightsPage() {
   const { data: recs } = useRecommendations();
   const { data: teams } = useTeams();
   const { data: owners } = useOwners();
+  const setTeamBudget = useSetTeamBudget();
   const setDigest = useSetDigest();
   const sendDigest = useSendDigest();
   const [capDraft, setCapDraft] = useState('');
@@ -402,7 +403,7 @@ export function InsightsPage() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-[12.5px]">
                     <thead><tr className="border-b border-line-soft text-left font-display text-[10px] font-semibold uppercase tracking-[0.06em] text-dim-2">
-                      <th className="pb-2 pr-3 font-medium">Team</th><th className="pb-2 px-3 text-right font-medium">Routines</th><th className="pb-2 px-3 text-right font-medium">Owners</th><th className="pb-2 px-3 text-right font-medium">Runs·14d</th><th className="pb-2 px-3 text-right font-medium">Spend</th><th className="pb-2 pl-3 text-right font-medium">Fail rate</th>
+                      <th className="pb-2 pr-3 font-medium">Team</th><th className="pb-2 px-3 text-right font-medium">Routines</th><th className="pb-2 px-3 text-right font-medium">Owners</th><th className="pb-2 px-3 text-right font-medium">Runs·14d</th><th className="pb-2 px-3 text-right font-medium">Spend</th><th className="pb-2 px-3 text-right font-medium">Fail rate</th><th className="pb-2 pl-3 text-right font-medium">Daily budget</th>
                     </tr></thead>
                     <tbody className="font-mono">
                       {teams.teams.map((t) => (
@@ -412,7 +413,13 @@ export function InsightsPage() {
                           <td className="py-2 px-3 text-right text-dim-2" title={t.owners.join(', ')}>{t.owners.length}</td>
                           <td className="py-2 px-3 text-right text-muted-2">{t.runs}</td>
                           <td className="py-2 px-3 text-right text-t2">${t.cost.toFixed(2)}</td>
-                          <td className="py-2 pl-3 text-right"><span className={t.failRate > 20 ? 'text-bad' : t.failRate > 0 ? 'text-warn' : 'text-dim'}>{t.failRate}%</span></td>
+                          <td className="py-2 px-3 text-right"><span className={t.failRate > 20 ? 'text-bad' : t.failRate > 0 ? 'text-warn' : 'text-dim'}>{t.failRate}%</span></td>
+                          <td className="py-2 pl-3 text-right">
+                            <span className="inline-flex items-center gap-1">
+                              {t.budget > 0 && <span className={`text-[10px] ${t.spentToday >= t.budget ? 'text-bad' : 'text-dim'}`}>${t.spentToday.toFixed(2)}/</span>}
+                              <input defaultValue={t.budget || ''} onBlur={(e) => { const cap = parseFloat(e.target.value) || 0; if (cap !== t.budget) setTeamBudget.mutate({ team: t.team, cap }); }} placeholder="—" className="h-6 w-14 rounded border border-line bg-surface-2 px-1.5 text-right text-[11px] text-t2 focus:border-brand/60 focus:outline-none" />
+                            </span>
+                          </td>
                         </tr>
                       ))}
                     </tbody>

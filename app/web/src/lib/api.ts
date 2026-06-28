@@ -38,8 +38,12 @@ async function del<T = unknown>(url: string): Promise<T> {
 export const useStats = () => useQuery({ queryKey: ['stats'], queryFn: () => get<Stats>('/api/stats'), refetchInterval: 8000 });
 export interface Owners { owners: { owner: string; routines: number; enabled: number; failing: number; runs: number; cost: number; assignedOpen: number }[] }
 export const useOwners = () => useQuery({ queryKey: ['owners'], queryFn: () => get<Owners>('/api/owners'), refetchInterval: 20000 });
-export interface Teams { teams: { team: string; routines: number; enabled: number; owners: string[]; runs: number; cost: number; failRate: number }[] }
+export interface Teams { teams: { team: string; routines: number; enabled: number; owners: string[]; runs: number; cost: number; failRate: number; budget: number; spentToday: number }[] }
 export const useTeams = () => useQuery({ queryKey: ['teams-rollup'], queryFn: () => get<Teams>('/api/teams'), refetchInterval: 20000 });
+export function useSetTeamBudget() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (b: { team: string; cap: number }) => post('/api/team-budgets', b), onSuccess: () => qc.invalidateQueries({ queryKey: ['teams-rollup'] }) });
+}
 export interface Attention { total: number; items: { kind: string; n: number; text: string; link: string }[] }
 export const useAttention = () => useQuery({ queryKey: ['attention'], queryFn: () => get<Attention>('/api/attention'), refetchInterval: 12000 });
 

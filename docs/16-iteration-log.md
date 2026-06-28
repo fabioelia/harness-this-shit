@@ -131,9 +131,11 @@ dropdowns · Fleet inbox badge.
 | 106 | Triage queue — shared list of unresolved failed runs (assignee + status) | collaboration | ✅ done |
 | 107 | Change review / approval — edits flag needs-review, reviewer approves (recorded) | collaboration | ✅ done |
 | 108 | Owner workload view (per-person routines/failing/triage/runs/spend) | collaboration | ✅ done |
+| 109 | Per-team daily budget caps — throttle only the over-budget team | collaboration/governance | ✅ done |
 
 ### Loop-3 QA backlog (test at iteration 110)
 - [ ] (iter 107) substantive edit (prompt/triggers/etc) flags needs_review; approve records reviewer + clears it; non-substantive edits (name) do not flag; Fleet badge.
+- [ ] (iter 109) a team over its daily budget skips only its own routines (other teams run); cap=0 off; editable per-team in the By-team table.
 - [ ] (iter 103) comment post/list/delete; commentCount on detail; author persists in localStorage.
 - [ ] (iter 101) Fleet owner filter; routine-detail inline owner/team reassign persists via PUT.
 

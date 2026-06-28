@@ -44,6 +44,15 @@ const setMeta = (k, v) => run("INSERT INTO meta (key,value) VALUES (?,?) ON CONF
 const todaySpend = () => { const s = new Date(now()); s.setHours(0, 0, 0, 0); return one('SELECT COALESCE(SUM(cost_usd),0) AS s FROM runs WHERE created_at > ?', s.getTime()).s || 0; };
 const budgetCap = () => parseFloat(metaGet('daily_budget', '')) || 0;
 const overBudget = () => { const cap = budgetCap(); return cap > 0 && todaySpend() >= cap; };
+// Per-team daily budgets — throttle only the offending team, not the whole fleet.
+const readTeamBudgets = () => { try { return JSON.parse(metaGet('team_budgets', '{}')); } catch { return {}; } };
+function teamSpendToday(team) {
+  const s = new Date(now()); s.setHours(0, 0, 0, 0);
+  const slugs = all('SELECT slug FROM routines WHERE team=?', team).map((x) => x.slug);
+  if (!slugs.length) return 0;
+  return one(`SELECT COALESCE(SUM(cost_usd),0) AS s FROM runs WHERE created_at > ? AND routine_slug IN (${slugs.map(() => '?').join(',')})`, s.getTime(), ...slugs).s || 0;
+}
+function teamOverBudget(team) { const cap = parseFloat(readTeamBudgets()[team]) || 0; return cap > 0 && teamSpendToday(team) >= cap; }
 // UI-configured secrets are stored in meta; load them into the process env so the
 // runner's child sessions and the integrations both see them (env wins if already set).
 const TOKEN_ENV = { slack: 'SLACK_BOT_TOKEN', atlassian: 'ATLASSIAN_API_TOKEN' };
@@ -454,6 +463,13 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", 'outside active window — skipped', id);
     run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
     logActivity(`${r.slug} skipped · outside active window`, 'idle');
+    return id;
+  }
+  // Per-team budget: skip this routine if its team's daily cap is reached (others keep running).
+  if (r.team && teamOverBudget(r.team)) {
+    run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", `team "${r.team}" daily budget reached — skipped`, id);
+    run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
+    logActivity(`${r.slug} skipped · team ${r.team} budget reached`, 'idle');
     return id;
   }
   // Auto-pause: if a required connector is offline, skip (don't burn a session that'll fail).
@@ -1188,6 +1204,21 @@ app.get('/api/heatmap', (req, res) => {
   }
   res.json({ grid, max: Math.max(1, ...grid.flat()), days });
 });
+// Per-team budgets — get current caps + today's spend, set a cap.
+app.get('/api/team-budgets', (_q, res) => {
+  const budgets = readTeamBudgets();
+  const teams = [...new Set(all('SELECT team FROM routines WHERE archived=0').map((x) => (x.team || '').trim() || 'no team'))];
+  res.json({ budgets, today: Object.fromEntries(teams.map((t) => [t, +teamSpendToday(t).toFixed(2)])) });
+});
+app.post('/api/team-budgets', (req, res) => {
+  const team = String(req.body?.team || '').trim();
+  if (!team) return res.status(400).json({ error: 'team required' });
+  const cap = Math.max(0, parseFloat(req.body?.cap) || 0);
+  const b = readTeamBudgets();
+  if (cap > 0) b[team] = cap; else delete b[team];
+  setMeta('team_budgets', JSON.stringify(b));
+  res.json({ ok: true, budgets: b });
+});
 // Owner workload: per-person load — routines owned, health, spend, open triage assigned.
 app.get('/api/owners', (req, res) => {
   const since = now() - 14 * 86_400_000;
@@ -1216,7 +1247,8 @@ app.get('/api/teams', (req, res) => {
     e.routines++; if (r.enabled) e.enabled++; if (r.owner && r.owner !== 'unassigned') e.owners.add(r.owner);
     const a = runAgg[r.slug]; if (a) { e.runs += a.runs; e.cost += a.cost; e.fails += a.fails; }
   }
-  res.json({ teams: Object.values(teams).map((t) => ({ team: t.team, routines: t.routines, enabled: t.enabled, owners: [...t.owners], runs: t.runs, cost: +t.cost.toFixed(2), failRate: t.runs ? Math.round((100 * t.fails) / t.runs) : 0 })).sort((a, b) => b.routines - a.routines) });
+  const tb = readTeamBudgets();
+  res.json({ teams: Object.values(teams).map((t) => ({ team: t.team, routines: t.routines, enabled: t.enabled, owners: [...t.owners], runs: t.runs, cost: +t.cost.toFixed(2), failRate: t.runs ? Math.round((100 * t.fails) / t.runs) : 0, budget: parseFloat(tb[t.team]) || 0, spentToday: +teamSpendToday(t.team).toFixed(2) })).sort((a, b) => b.routines - a.routines) });
 });
 // Attention rollup: the single "what needs me right now" summary across signals.
 app.get('/api/attention', (_q, res) => {
