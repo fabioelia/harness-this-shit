@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine } from '@/lib/api';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import type { FrontMatter, RoutineDetail } from '@/types';
 
@@ -170,6 +170,7 @@ export function RoutineDetailPage() {
   const del = useDeleteRoutine();
   const [showRaw, setShowRaw] = useState(false);
   const preview = usePreviewRoutine();
+  const snooze = useSnooze();
   const [msg, setMsg] = useState<{ text: string; tone: 'bad' | 'warn' } | null>(null);
   const raw = useRoutineRaw(slug, showRaw);
   useEffect(() => {
@@ -226,6 +227,9 @@ export function RoutineDetailPage() {
             <button onClick={runNow} disabled={busy || killed} title={killed ? 'Kill switch is engaged' : undefined} className="flex h-[34px] items-center gap-[7px] rounded-md bg-brand px-3.5 font-display text-[12.5px] font-semibold text-[#16130f] transition-colors hover:bg-brand-deep disabled:opacity-40">
               <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M3 2 L10 6 L3 10 Z" /></svg>{dispatch.isPending ? 'Running…' : 'Run now'}
             </button>
+            {d.snoozedUntil > 0
+              ? <button onClick={() => snooze.mutate({ slug: d.slug, hours: 0 })} className="flex h-[34px] items-center rounded-md border border-lease/50 bg-lease/10 px-[13px] font-display text-[12.5px] font-semibold text-lease hover:bg-lease/20" title={`Snoozed until ${new Date(d.snoozedUntil).toLocaleString()}`}>💤 Resume</button>
+              : <button onClick={() => snooze.mutate({ slug: d.slug, hours: 4 })} className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair" title="Pause triggers + schedule for 4h, then auto-resume">Snooze 4h</button>}
             <button onClick={() => navigate(`/routines/${d.slug}/edit`)} className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Edit</button>
             <button onClick={() => validate.mutate(d.slug)} disabled={validate.isPending} className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair disabled:opacity-40">{validate.isPending ? 'Validating…' : 'Validate'}</button>
             <button onClick={d.enabled ? onKill : onDelete} disabled={del.isPending} className="flex h-[34px] items-center rounded-md border border-bad/40 px-[13px] font-display text-[12.5px] font-semibold text-bad hover:bg-bad/10 disabled:opacity-40">{d.enabled ? 'Disable' : 'Delete'}</button>

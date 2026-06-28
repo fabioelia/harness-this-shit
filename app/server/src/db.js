@@ -163,6 +163,7 @@ export function getDb() {
   ensure('routines', 'alert_on_fail', 'alert_on_fail INTEGER NOT NULL DEFAULT 0');
   ensure('routines', 'alert_target', "alert_target TEXT NOT NULL DEFAULT ''");
   ensure('routines', 'timeout_s', 'timeout_s INTEGER NOT NULL DEFAULT 0');
+  ensure('routines', 'snooze_until', 'snooze_until INTEGER NOT NULL DEFAULT 0');
   ensure('runs', 'assert_result', "assert_result TEXT NOT NULL DEFAULT ''");
   ensure('runs', 'dur_ms', 'dur_ms INTEGER');
   const n = _db.prepare('SELECT COUNT(*) AS n FROM routines').get();

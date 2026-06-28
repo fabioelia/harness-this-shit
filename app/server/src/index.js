@@ -290,7 +290,7 @@ const shapeRoutine = (r) => {
     inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
     scriptMode: !!r.script_mode, scriptLang: r.script_lang || 'bash', compiled: !!(r.script && r.script.trim()), scriptStale: !!r.script_stale,
     retries: r.retries || 0, assertions: j(r.assertions),
-    alertOnFail: !!r.alert_on_fail, alertTarget: r.alert_target || '', timeout: r.timeout_s || 0,
+    alertOnFail: !!r.alert_on_fail, alertTarget: r.alert_target || '', timeout: r.timeout_s || 0, snoozedUntil: r.snooze_until && r.snooze_until > now() ? r.snooze_until : 0,
   };
 };
 
@@ -676,7 +676,7 @@ function dispatchEvent(type, payload) {
   const event = payload && Object.keys(payload).length ? payload : { event: type };
   const labelEvt = isLabelEvent(type, event);
   const candidates = all('SELECT * FROM routines WHERE enabled=1')
-    .filter((r) => { const t = j(r.triggers); return t.includes(type) || (labelEvt && t.includes('label')); });
+    .filter((r) => { if (r.snooze_until > now()) return false; const t = j(r.triggers); return t.includes(type) || (labelEvt && t.includes('label')); });
   const matched = candidates.filter((r) => repoMatches(r, event) && filtersMatch(r, event));
   // Audit: record why subscribed routines stood down (the "logs of if/how" devs want).
   candidates.filter((r) => !matched.includes(r)).forEach((r) => {
@@ -718,6 +718,7 @@ function tickScheduler() {
   const stamp = `${d.getFullYear()}/${d.getMonth()}/${d.getDate()} ${d.getHours()}:${d.getMinutes()}`;
   for (const r of all('SELECT * FROM routines WHERE enabled=1')) {
     if (!j(r.triggers).includes('schedule') || !r.schedule) continue;
+    if (r.snooze_until > now()) continue;
     if (!cronMatches(r.schedule, d)) continue;
     if (_lastFired.get(r.slug) === stamp) continue; // fire at most once per matching minute
     _lastFired.set(r.slug, stamp);
@@ -1151,6 +1152,16 @@ const exportBody = (r) => ({
   concurrency: jObj(r.concurrency) || {}, model: r.model, effort: r.effort, memory: !!r.memory,
   repo: r.repo, prompt: r.prompt, scriptMode: !!r.script_mode, scriptLang: r.script_lang,
   retries: r.retries, assertions: j(r.assertions), alertOnFail: !!r.alert_on_fail, alertTarget: r.alert_target,
+});
+// Snooze: pause a routine's triggers + schedule until a time, then auto-resume.
+app.post('/api/routines/:slug/snooze', (req, res) => {
+  const r = one('SELECT slug FROM routines WHERE slug=?', req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const hours = Math.max(0, Math.min(720, parseFloat(req.body?.hours) || 0));
+  const until = hours > 0 ? now() + hours * 3_600_000 : 0;
+  run('UPDATE routines SET snooze_until=? WHERE slug=?', until, req.params.slug);
+  logActivity(`${req.params.slug} ${until ? `snoozed for ${hours}h` : 'snooze cleared'}`, 'idle');
+  res.json({ ok: true, snoozedUntil: until });
 });
 // Dry-run preview: the exact prompt the agent would get + whether an event matches — $0.
 app.post('/api/routines/:slug/preview', (req, res) => {

@@ -188,6 +188,10 @@ export interface MetricHistory {
 }
 export const useRoutineMetric = (slug: string, enabled = true) => useQuery({ queryKey: ['metric', slug], enabled, queryFn: () => get<MetricHistory>(`/api/routines/${slug}/metric?n=30`), refetchInterval: 15000 });
 export interface RoutinePreview { prompt: string; tools: string[]; agents: string[]; wouldMatch: boolean; leaseKey: string | null; scriptMode: boolean; willCompile: boolean; allowedTools: string[] }
+export function useSnooze() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ slug, hours }: { slug: string; hours: number }) => post<{ ok: boolean; snoozedUntil: number }>(`/api/routines/${slug}/snooze`, { hours }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['routine', v.slug] }); qc.invalidateQueries({ queryKey: ['routines'] }); } });
+}
 export function usePreviewRoutine() {
   return useMutation({ mutationFn: (slug: string) => post<RoutinePreview>(`/api/routines/${slug}/preview`, {}) });
 }

@@ -38,6 +38,7 @@ export interface Routine {
   alertOnFail: boolean;
   alertTarget: string;
   timeout: number;
+  snoozedUntil: number;
 }
 
 export interface FrontMatter {
