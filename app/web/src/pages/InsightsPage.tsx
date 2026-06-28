@@ -52,8 +52,9 @@ export function InsightsPage() {
           <div className="flex items-center gap-2.5">
             <a href={`/api/report.md?days=${days}`} download className="h-[30px] rounded-md border border-line bg-surface-2 px-3 font-display text-[12px] font-semibold leading-[30px] text-t2 hover:border-hair">Report ↓</a>
             <div className="inline-flex overflow-hidden rounded-md border border-line text-[12px] font-semibold">
-              {[7, 14, 30].map((n) => <button key={n} onClick={() => setDays(n)} className={`px-3 py-1.5 font-mono ${days === n ? 'bg-brand/15 text-brand-soft' : 'text-dim hover:text-t2'}`}>{n}d</button>)}
+              {[7, 14, 30, 60, 90].map((n) => <button key={n} onClick={() => setDays(n)} className={`px-2.5 py-1.5 font-mono ${days === n ? 'bg-brand/15 text-brand-soft' : 'text-dim hover:text-t2'}`}>{n}d</button>)}
             </div>
+            <input type="number" min={1} max={365} value={[7, 14, 30, 60, 90].includes(days) ? '' : days} onChange={(e) => { const n = parseInt(e.target.value); if (n >= 1 && n <= 365) setDays(n); }} placeholder="custom" className="h-[30px] w-[78px] rounded-md border border-line bg-surface-2 px-2 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" title="custom day window" />
           </div>
         </div>
       </div>

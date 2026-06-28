@@ -1039,7 +1039,7 @@ app.post('/api/digest', (req, res) => {
 app.post('/api/digest/send', (_q, res) => res.json({ sent: sendDigest(), preview: buildDigest() }));
 // Auto-generated ops report (markdown) — spend, top routines, failures, warnings.
 app.get('/api/report.md', (req, res) => {
-  const days = Math.min(60, Math.max(1, parseInt(req.query.days, 10) || 7));
+  const days = Math.min(365, Math.max(1, parseInt(req.query.days, 10) || 7));
   const since = now() - days * 86_400_000;
   const rows = all("SELECT routine_slug, status, cost_usd, num_turns FROM runs WHERE created_at > ? AND status IN ('succeeded','failed')", since);
   const totalCost = rows.reduce((a, r) => a + (r.cost_usd || 0), 0);
@@ -1207,7 +1207,7 @@ app.get('/api/anomalies', (req, res) => {
 });
 // Observability: cost / runs / turns / latency over time and per routine.
 app.get('/api/insights', (req, res) => {
-  const days = Math.min(60, Math.max(1, parseInt(req.query.days, 10) || 14));
+  const days = Math.min(365, Math.max(1, parseInt(req.query.days, 10) || 14));
   const since = now() - days * 86_400_000;
   const rows = all("SELECT routine_slug, status, cost_usd, num_turns, dur_ms, in_tokens, out_tokens, created_at FROM runs WHERE created_at > ? AND status IN ('succeeded','failed')", since);
   const dayKey = (ts) => new Date(ts).toISOString().slice(0, 10);
