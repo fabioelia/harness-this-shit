@@ -228,6 +228,8 @@ export interface CreateRoutineInput {
   scriptLang?: string;
   retries?: number;
   assertions?: { type: string; value: string }[];
+  alertOnFail?: boolean;
+  alertTarget?: string;
   reactions?: { source: string; kind: string; when: string; run: string; check?: string }[];
   memory?: boolean;
 }

@@ -35,6 +35,8 @@ export interface Routine {
   scriptStale: boolean;
   retries: number;
   assertions: { type: string; value: string }[];
+  alertOnFail: boolean;
+  alertTarget: string;
 }
 
 export interface FrontMatter {
