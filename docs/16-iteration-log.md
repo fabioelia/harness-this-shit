@@ -116,6 +116,7 @@ dropdowns · Fleet inbox badge.
 | 95 | "Down since" current-incident duration on the MTTR card | observability | ✅ done |
 | 96 | Notes markdown rendering (safe: bold/code/links/lists/headings) | UX | ✅ done |
 | 97 | Needs-attention rollup banner (failing/stuck/warnings/stale) on Fleet | observability/eliminating-humans | ✅ done |
+| 98 | Global match preview — which routines a synthetic event would fire | efficiency/observability | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.

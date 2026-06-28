@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Dot, Toggle } from '@/components/sb';
 import { cn } from '@/lib/utils';
-import { useSettings, useSaveSettings, useWebhookConfig, useRepoHooks, useWebhookActions, useWebhookDeliveries } from '@/lib/api';
+import { useSettings, useSaveSettings, useWebhookConfig, useRepoHooks, useWebhookActions, useWebhookDeliveries, useMatchPreview } from '@/lib/api';
 
 export function SettingsPage() {
   const { data } = useSettings();
@@ -89,6 +89,10 @@ const btn = 'h-9 rounded-md border border-line bg-surface-2 px-3.5 font-display 
 function WebhooksPanel() {
   const { data: cfg } = useWebhookConfig();
   const { data: deliv } = useWebhookDeliveries();
+  const matchPrev = useMatchPreview();
+  const [mpType, setMpType] = useState('pull_request');
+  const [mpAction, setMpAction] = useState('opened');
+  const [mpRepo, setMpRepo] = useState('');
   const a = useWebhookActions();
   const [repo, setRepo] = useState('fabioelia/harness-this-shit');
   const [urlDraft, setUrlDraft] = useState('');
@@ -140,6 +144,21 @@ function WebhooksPanel() {
           </div>
         )}
         <div className="mt-2.5 text-[11px] text-dim-2">Installs a hook (pull_request, issue_comment, push, check_run, release…) pointing at this harness. The quick cloudflared URL is ephemeral — for always-on, use a named tunnel or a domain.</div>
+      </div>
+      {/* match preview */}
+      <div className="border-t border-line-soft px-5 py-4">
+        <div className="mb-2 font-display text-[13px] font-semibold">Match preview <span className="font-mono text-[11px] font-normal text-dim-2">— which routines would an event fire?</span></div>
+        <div className="flex flex-wrap items-center gap-2">
+          <input value={mpType} onChange={(e) => setMpType(e.target.value)} placeholder="event type (e.g. pull_request)" className="h-8 w-48 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+          <input value={mpAction} onChange={(e) => setMpAction(e.target.value)} placeholder="action (optional)" className="h-8 w-36 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+          <input value={mpRepo} onChange={(e) => setMpRepo(e.target.value)} placeholder="repo (optional)" className="h-8 w-44 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+          <button onClick={() => matchPrev.mutate({ type: mpType.trim() || 'manual', event: { action: mpAction.trim() || undefined, repository: mpRepo.trim() || undefined, pull_request: { number: 1, base: { ref: 'main' }, head: { ref: 'feature' } } } })} className="h-8 rounded-md border border-brand/50 bg-brand/10 px-3 font-display text-[12px] font-semibold text-brand-soft hover:bg-brand/20">Preview</button>
+        </div>
+        {matchPrev.data && (
+          <div className="mt-2 font-mono text-[12px]">
+            {matchPrev.data.matched.length === 0 ? <span className="text-dim">no routines would fire on this event.</span> : matchPrev.data.matched.map((r) => <span key={r.slug} className="mr-2 inline-block rounded border border-ok/30 bg-ok/10 px-1.5 py-0.5 text-ok">{r.name}</span>)}
+          </div>
+        )}
       </div>
       {/* recent deliveries */}
       <div className="border-t border-line-soft px-5 py-4">

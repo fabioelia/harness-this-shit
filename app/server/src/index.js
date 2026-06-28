@@ -744,6 +744,15 @@ function filtersMatch(r, event) {
   return mode === 'or' ? checks.some(Boolean) : checks.every(Boolean);
 }
 
+// Match preview: given a synthetic event, which routines across the fleet would fire?
+app.post('/api/match-preview', (req, res) => {
+  const type = String(req.body?.type || 'manual');
+  const event = { ...(req.body?.event && typeof req.body.event === 'object' ? req.body.event : {}), event: type };
+  const matched = all('SELECT * FROM routines WHERE enabled=1 AND archived=0')
+    .filter((r) => j(r.triggers).includes(type) && repoMatches(r, event) && filtersMatch(r, event))
+    .map((r) => ({ slug: r.slug, name: r.name, team: r.team }));
+  res.json({ type, matched });
+});
 // Explain why a run matched (or would match): trigger + repo + each filter condition.
 function explainMatch(r, event) {
   const checks = [];
