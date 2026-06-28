@@ -815,9 +815,17 @@ app.post('/api/routines/:slug/validate', async (req, res) => {
   if (tools.includes('github')) checks.push({ label: 'Tool · gh', ok: st.github.connected, detail: st.github.connected ? `authed as @${st.github.account}` : 'gh not authed — run `gh auth login`' });
   if (tools.includes('slack')) checks.push({ label: 'Tool · slack-post', ok: st.slack.connected, detail: st.slack.connected ? `${st.slack.team} · @${st.slack.bot}` : 'SLACK_BOT_TOKEN not set' });
   if (tools.includes('web') || tools.includes('webfetch')) checks.push({ label: 'Tool · web', ok: true, detail: 'WebFetch / WebSearch' });
-  // Flag granted tools the runner can't actually provide.
-  const phantom = tools.filter((c) => !['github', 'slack', 'web', 'webfetch'].includes(c));
-  if (phantom.length) checks.push({ label: 'Tools', ok: false, detail: `not wired: ${phantom.join(', ')} — only github, slack, web are granted` });
+  if (tools.includes('team')) {
+    const n = one('SELECT COUNT(*) AS n FROM agents').n;
+    checks.push({ label: 'Tool · team', ok: n > 0, detail: n > 0 ? `delegate to ${n} agent${n > 1 ? 's' : ''} via agent-message` : 'no agents yet — add some on the Team page' });
+  }
+  // Custom MCP servers are real grants too (loaded via --mcp-config).
+  const mcpSet = mcpNameSet();
+  tools.filter((c) => mcpSet.has(c)).forEach((c) => checks.push({ label: `Tool · ${c}`, ok: true, detail: `custom MCP · mcp__${c}__*` }));
+  // Flag only grants the runner truly can't provide.
+  const known = new Set(['github', 'slack', 'web', 'webfetch', 'team']);
+  const phantom = tools.filter((c) => !known.has(c) && !mcpSet.has(c));
+  if (phantom.length) checks.push({ label: 'Tools', ok: false, detail: `not wired: ${phantom.join(', ')} — add it on the Connectors page, or remove it` });
   // Schedule cron must be present and parseable, else the routine silently never fires.
   if (j(r.triggers).includes('schedule')) {
     const parts = String(r.schedule || '').trim().split(/\s+/);
