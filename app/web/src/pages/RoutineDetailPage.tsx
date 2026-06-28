@@ -591,6 +591,15 @@ export function RoutineDetailPage() {
           <PromptHistoryCard slug={d.slug} />
           <CommentsCard slug={d.slug} />
           <AuditCard slug={d.slug} />
+          <div className={CARD}>
+            <div className={`${LABEL} mb-3`}>People · who to ask</div>
+            <div className="flex flex-col gap-2 font-mono text-[12px]">
+              <div className="flex items-center gap-2"><span className="w-[80px] shrink-0 text-dim">owner</span><span className="text-t2">{d.owner}</span><span className="text-dim-2">· {d.team}</span></div>
+              {d.escalation && <div className="flex items-center gap-2"><span className="w-[80px] shrink-0 text-dim">escalation</span><span className="text-warn">{d.escalation}</span></div>}
+              {d.lastTouched && <div className="flex items-start gap-2"><span className="w-[80px] shrink-0 text-dim">last change</span><span className="text-t2">{d.lastTouched.summary} · {d.lastTouched.ago}</span></div>}
+              <div className="flex items-start gap-2"><span className="w-[80px] shrink-0 text-dim">watching</span><span className="flex-1 text-dim-2">{d.watchers.length ? d.watchers.map((w) => <span key={w} className="mr-1 rounded bg-lease/10 px-1.5 py-px text-lease">{w}</span>) : 'nobody yet'}</span></div>
+            </div>
+          </div>
           {d.dependents && d.dependents.length > 0 && (
             <div className={CARD}>
               <div className={`${LABEL} mb-3`}>Depended on by · {d.dependents.length}</div>

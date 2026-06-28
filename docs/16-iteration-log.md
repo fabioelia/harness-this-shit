@@ -147,6 +147,7 @@ dropdowns · Fleet inbox badge.
 | 122 | Shared run bookmarks — save notable runs (label + author) for the team | collaboration | ✅ done |
 | 123 | Change provenance — capture editor + show "last touched by" on the routine (also fixed escalation not being submitted) | collaboration | ✅ done |
 | 124 | Watch / subscribe to a routine — its changes land in your inbox | collaboration | ✅ done |
+| 125 | People / who-to-ask card (owner, escalation, watchers, last editor) | collaboration/onboarding | ✅ done |
 
 ### Loop-3 QA backlog (test at iteration 110)
 - [x] (iter 107) substantive edit (prompt/triggers/etc) flags needs_review; approve records reviewer + clears it; non-substantive edits (name) do not flag; Fleet badge.

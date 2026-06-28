@@ -94,6 +94,7 @@ export interface RoutineDetail extends Routine {
   runsByDay: { date: string; runs: number; fails: number }[];
   commentCount: number;
   lastTouched: { summary: string; ago: string } | null;
+  watchers: string[];
 }
 
 export interface RegistryServer {

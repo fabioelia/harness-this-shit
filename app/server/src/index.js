@@ -1429,7 +1429,8 @@ app.get('/api/routines/:slug', (req, res) => {
     .filter((x) => x.viaChain || x.viaReaction)
     .map((x) => ({ slug: x.slug, name: x.name, enabled: x.enabled, via: x.viaChain && x.viaReaction ? 'chain + reaction' : x.viaChain ? 'chain' : 'reaction' }));
   res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, script: r.script || '', lastError, costTrend, dependents, mttr, runsByDay, commentCount: one('SELECT COUNT(*) AS n FROM comments WHERE slug=?', r.slug).n,
-    lastTouched: (() => { const a = one('SELECT summary, created_at FROM routine_audit WHERE slug=? ORDER BY id DESC LIMIT 1', r.slug); return a ? { summary: a.summary, ago: relTime(a.created_at) } : null; })() });
+    lastTouched: (() => { const a = one('SELECT summary, created_at FROM routine_audit WHERE slug=? ORDER BY id DESC LIMIT 1', r.slug); return a ? { summary: a.summary, ago: relTime(a.created_at) } : null; })(),
+    watchers: all('SELECT who FROM routine_watch WHERE slug=? ORDER BY who', r.slug).map((x) => x.who) });
 });
 
 function insertRoutine(b) {
