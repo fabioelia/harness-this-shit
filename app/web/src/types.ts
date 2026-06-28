@@ -95,6 +95,7 @@ export interface RoutineDetail extends Routine {
   lastError: { runId: string; output: string; ago: string } | null;
   costTrend: number[];
   dependents: { slug: string; name: string; enabled: boolean; via: string }[];
+  upstream: { slug: string; name: string; enabled: boolean; lastStatus: string; missing: boolean }[];
   mttr: { value: string; incidents: number; openIncident: boolean; downSince: string | null } | null;
   runsByDay: { date: string; runs: number; fails: number }[];
   lastTouched: { summary: string; ago: string } | null;

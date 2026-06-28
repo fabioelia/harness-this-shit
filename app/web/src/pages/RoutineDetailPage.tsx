@@ -658,6 +658,23 @@ export function RoutineDetailPage() {
               )}
             </div>
           </div>
+          {d.upstream && d.upstream.length > 0 && (
+            <div className={CARD}>
+              <div className={`${LABEL} mb-3`}>Upstream feeders · {d.upstream.length}</div>
+              <div className="flex flex-col gap-1.5">
+                {d.upstream.map((u) => {
+                  const broken = u.missing || !u.enabled || u.lastStatus === 'failing';
+                  return (
+                    <div key={u.slug} className="flex items-center gap-2 font-mono text-[12px]">
+                      <span className={broken ? 'text-bad' : 'text-ok'}>{broken ? '⚠' : '✓'}</span>
+                      {u.missing ? <span className="text-dim line-through">{u.slug}</span> : <Link to={`/routines/${u.slug}`} className="text-t2 hover:text-brand">{u.name}</Link>}
+                      <span className="text-dim-2">{u.missing ? 'missing' : !u.enabled ? 'disabled — not feeding you' : u.lastStatus === 'failing' ? 'failing — output may be stale' : 'healthy'}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {d.dependents && d.dependents.length > 0 && (
             <div className={CARD}>
               <div className={`${LABEL} mb-3`}>Depended on by · {d.dependents.length}</div>
