@@ -182,11 +182,14 @@ function ChainPicker({ value, onChange, selfSlug }: { value: string; onChange: (
   );
 }
 
-function ReactionsEditor({ reactions, setReactions, repo }: { reactions: Rx[]; setReactions: (r: Rx[]) => void; repo: string }) {
+function ReactionsEditor({ reactions, setReactions, repo, selfSlug }: { reactions: Rx[]; setReactions: (r: Rx[]) => void; repo: string; selfSlug: string }) {
   const [preset, setPreset] = useState(0);
   const [run, setRun] = useState('');
   const [dur, setDur] = useState('4h');
   const [check, setCheck] = useState('');
+  const runListId = useId();
+  const { data: allRoutines } = useRoutines();
+  const routineSlugs = (allRoutines ?? []).map((r) => r.slug).filter((s) => s !== selfSlug);
   const firstRepo = repo.split(',').map((s) => s.trim()).filter(Boolean)[0] || '';
   const p = REACTION_PRESETS[preset];
   const isChecks = p.kind === 'checks';
@@ -225,7 +228,8 @@ function ReactionsEditor({ reactions, setReactions, repo }: { reactions: Rx[]; s
           </select>
         )}
         <span className="font-mono text-[11px] text-dim-2">→ run</span>
-        <input value={run} onChange={(e) => setRun(e.target.value)} placeholder="routine-slug" onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} className={cn(inputCls, 'min-w-[140px] flex-1 font-mono text-[12px]')} />
+        <input list={runListId} value={run} onChange={(e) => setRun(e.target.value)} placeholder="pick a routine, or type a new slug" onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} className={cn(inputCls, 'min-w-[160px] flex-1 font-mono text-[12px]')} />
+        <datalist id={runListId}>{routineSlugs.map((s) => <option key={s} value={s} />)}</datalist>
         <button type="button" onClick={add} className="h-9 shrink-0 rounded-md border border-line bg-surface-2 px-3 font-display text-[12px] font-semibold text-t2 hover:border-hair">Add</button>
       </div>
       {isChecks && firstRepo && <div className="mt-1.5 font-mono text-[10.5px] text-dim">{isFetching ? `discovering checks in ${firstRepo}…` : `${(checksData?.checks ?? []).length} checks found in ${firstRepo}`}</div>}
@@ -539,7 +543,7 @@ export function NewRoutinePage() {
                 </div>
                 <div className="border-t border-line-soft pt-3.5">
                   <div className={LABEL}>React · <span className="font-mono lowercase tracking-normal text-dim-2">follow the PR this run creates, later</span></div>
-                  <ReactionsEditor reactions={reactions} setReactions={setReactions} repo={repo} />
+                  <ReactionsEditor reactions={reactions} setReactions={setReactions} repo={repo} selfSlug={slug} />
                   <div className="mt-2 text-[11px] text-dim-2">Watches the PR (polls gh) and fires a routine when CI checks finish, it merges, etc. A <span className="font-mono">timeout</span> fires after a delay.</div>
                 </div>
               </div>
