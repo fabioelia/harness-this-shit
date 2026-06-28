@@ -419,6 +419,7 @@ export function NewRoutinePage() {
   const [tags, setTags] = useState('');
   const [rateLimit, setRateLimit] = useState(0);
   const [maxFails, setMaxFails] = useState(0);
+  const [sla, setSla] = useState(0);
   const [notes, setNotes] = useState('');
   const [winStart, setWinStart] = useState<string>('');
   const [winEnd, setWinEnd] = useState<string>('');
@@ -466,7 +467,7 @@ export function NewRoutinePage() {
     setSummary(d.summary); setOwner(d.owner); setTeam(d.team);
     setTriggers(d.triggers); setConnectors(d.connectors);
     setModel(d.model || 'claude-opus-4-8'); setEffort(d.effort || ''); setMemory(!!d.memory); setRepo(d.repo || ''); setBranch(d.branch || 'main');
-    setScriptMode(!!d.scriptMode); setScriptLang(d.scriptLang === 'node' ? 'node' : 'bash'); setRetries(d.retries || 0); setAssertions(d.assertions ?? []); setAlertOnFail(!!d.alertOnFail); setAlertTarget(d.alertTarget || ''); setTimeoutS(d.timeout || 0); setEnvPairs(Object.entries(d.env || {}).map(([k, v]) => ({ k, v: String(v) }))); setTags((d.tags || []).join(', ')); setRateLimit(d.rateLimit || 0); setMaxFails(d.maxFails || 0); setNotes(d.notes || ''); setWinStart(d.activeWindow?.start != null ? String(d.activeWindow.start) : ''); setWinEnd(d.activeWindow?.end != null ? String(d.activeWindow.end) : ''); setWinDays(d.activeWindow?.days || []);
+    setScriptMode(!!d.scriptMode); setScriptLang(d.scriptLang === 'node' ? 'node' : 'bash'); setRetries(d.retries || 0); setAssertions(d.assertions ?? []); setAlertOnFail(!!d.alertOnFail); setAlertTarget(d.alertTarget || ''); setTimeoutS(d.timeout || 0); setEnvPairs(Object.entries(d.env || {}).map(([k, v]) => ({ k, v: String(v) }))); setTags((d.tags || []).join(', ')); setRateLimit(d.rateLimit || 0); setMaxFails(d.maxFails || 0); setSla(d.sla || 0); setNotes(d.notes || ''); setWinStart(d.activeWindow?.start != null ? String(d.activeWindow.start) : ''); setWinEnd(d.activeWindow?.end != null ? String(d.activeWindow.end) : ''); setWinDays(d.activeWindow?.days || []);
     setPrompt(d.prompt || '');
     setChain(d.chain.join(', '));
     if (d.schedule) setSchedule(d.schedule);
@@ -536,7 +537,7 @@ export function NewRoutinePage() {
   }
   function submit() {
     if (!valid) return;
-    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, scriptMode, scriptLang, retries, assertions: assertions.filter((a) => a.type === 'no_tool_errors' || a.value.trim()), alertOnFail, alertTarget, timeout: timeoutS, env: Object.fromEntries(envPairs.filter((p) => p.k.trim()).map((p) => [p.k.trim(), p.v])), tags: tags.split(',').map((t) => t.trim()).filter(Boolean), rateLimit, maxFails, notes, activeWindow: (winStart || winEnd || winDays.length) ? { start: winStart === '' ? null : +winStart, end: winEnd === '' ? null : +winEnd, days: winDays } : null };
+    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, scriptMode, scriptLang, retries, assertions: assertions.filter((a) => a.type === 'no_tool_errors' || a.value.trim()), alertOnFail, alertTarget, timeout: timeoutS, env: Object.fromEntries(envPairs.filter((p) => p.k.trim()).map((p) => [p.k.trim(), p.v])), tags: tags.split(',').map((t) => t.trim()).filter(Boolean), rateLimit, maxFails, notes, sla, activeWindow: (winStart || winEnd || winDays.length) ? { start: winStart === '' ? null : +winStart, end: winEnd === '' ? null : +winEnd, days: winDays } : null };
     if (isEdit) update.mutate({ slug: editSlug!, body }, { onSuccess: () => navigate(`/routines/${editSlug}`) });
     else create.mutate(body, { onSuccess: (r) => navigate(`/routines/${r.slug}`) });
   }
@@ -684,6 +685,7 @@ export function NewRoutinePage() {
                   <div><div className={LABEL}>Max duration (s)</div><input type="number" min={0} max={1800} value={timeoutS || ''} onChange={(e) => setTimeoutS(+e.target.value)} placeholder="240 (default)" className={cn(inputCls, 'font-mono text-[12px]')} /></div>
                   <div><div className={LABEL}>Rate limit · <span className="font-mono lowercase tracking-normal text-dim-2">runs/hour, 0=off</span></div><input type="number" min={0} max={1000} value={rateLimit || ''} onChange={(e) => setRateLimit(+e.target.value)} placeholder="0 (unlimited)" className={cn(inputCls, 'font-mono text-[12px]')} /></div>
                   <div><div className={LABEL}>Auto-disable after · <span className="font-mono lowercase tracking-normal text-dim-2">consecutive fails, 0=off</span></div><input type="number" min={0} max={50} value={maxFails || ''} onChange={(e) => setMaxFails(+e.target.value)} placeholder="0 (never)" className={cn(inputCls, 'font-mono text-[12px]')} /></div>
+                  <div><div className={LABEL}>SLA · <span className="font-mono lowercase tracking-normal text-dim-2">expected max sec, 0=off</span></div><input type="number" min={0} max={3600} value={sla || ''} onChange={(e) => setSla(+e.target.value)} placeholder="0 (no SLA)" className={cn(inputCls, 'font-mono text-[12px]')} /></div>
                   <div className="col-span-2">
                     <div className={LABEL}>Active window · <span className="font-mono lowercase tracking-normal text-dim-2">events outside skip (blank = always)</span></div>
                     <div className="mt-1.5 flex flex-wrap items-center gap-2">

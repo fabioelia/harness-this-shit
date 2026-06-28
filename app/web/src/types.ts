@@ -50,6 +50,7 @@ export interface Routine {
   staleSuccess: boolean;
   longRunning: boolean;
   activeWindow: { start: number | null; end: number | null; days: number[] } | null;
+  sla: number;
 }
 
 export interface FrontMatter {
@@ -114,6 +115,7 @@ export interface RunDetail {
   toolBreakdown: { tool: string; calls: number; errors: number }[];
   matchExplain: { fired: boolean; checks: { label: string; ok: boolean; detail: string }[] } | null;
   baseline: { drift: number } | null;
+  slaBreach: { expected: number; actual: number } | null;
   inbox: { summary: string; ago: string; pending: boolean }[];
   assertResult: { passed: boolean; results: { type: string; value: string; ok: boolean; detail: string }[] } | null;
   lineage: RunLineage;

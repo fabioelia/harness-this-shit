@@ -356,6 +356,7 @@ export interface CreateRoutineInput {
   maxFails?: number;
   notes?: string;
   activeWindow?: { start: number | null; end: number | null; days: number[] } | null;
+  sla?: number;
   reactions?: { source: string; kind: string; when: string; run: string; check?: string }[];
   memory?: boolean;
 }

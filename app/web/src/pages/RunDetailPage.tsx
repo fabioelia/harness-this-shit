@@ -138,6 +138,7 @@ export function RunDetailPage() {
           <div className="flex min-w-0 items-center gap-3">
             <span className="font-mono text-[22px] font-bold tracking-tight">{r.id}</span>
             <Pill label={m.label} color={m.color} />
+            {r.slaBreach && <span title={`took ${r.slaBreach.actual}s vs the ${r.slaBreach.expected}s SLA`} className="rounded-md border border-warn/40 bg-warn/10 px-2 py-0.5 font-mono text-[11px] font-semibold text-warn">SLA +{r.slaBreach.actual - r.slaBreach.expected}s</span>}
             {r.baseline && <span title="line-level divergence from the routine's golden baseline" className={`rounded-md border px-2 py-0.5 font-mono text-[11px] font-semibold ${r.baseline.drift > 40 ? 'border-bad/40 bg-bad/10 text-bad' : r.baseline.drift > 0 ? 'border-warn/40 bg-warn/10 text-warn' : 'border-ok/40 bg-ok/10 text-ok'}`}>{r.baseline.drift}% drift</span>}
           </div>
           <div className="flex items-center gap-2">

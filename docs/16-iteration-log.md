@@ -104,6 +104,7 @@ dropdowns · Fleet inbox badge.
 | 83 | Per-routine throughput chart (runs/day, 14d, fails stacked) | observability | ✅ done |
 | 84 | Run output copy + permalink + byte-size indicator | UX | ✅ done |
 | 85 | Spend by reasoning-effort level on Insights | efficiency/observability | ✅ done |
+| 86 | Per-routine SLA — flag completed runs slower than expected duration | observability/eliminating-humans | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.
@@ -111,6 +112,7 @@ dropdowns · Fleet inbox badge.
 - [x] (iter 56) a repeated x-github-delivery id within 10m is dropped (logged as dup, no dispatch); distinct ids + missing id pass through.
 - [ ] (iter 62) event/schedule run outside window → skipped; manual/replay/rerun bypass; midnight-wrap windows; day filter; blank = always.
 - [ ] (iter 69) prune deletes finished runs + their run_events older than N days (keeps running/waiting); auto-prune fires once/day when retention_days set; insights reports it.
+- [ ] (iter 86) a routine SLA flags a completed run whose dur exceeds it (badge SLA +Ns); timeout still kills hard hangs separately; sla=0 off.
 - [x] (iter 59) match explain re-evaluates trigger/repo/each filter condition against the run event; ✓/✗ correct; fired flag matches dispatcher.
 - [x] (iter 51) /api/anomalies flags runs > 3× routine avg (needs ≥4 samples); ratio + avg correct; Insights card renders/empties.
 
