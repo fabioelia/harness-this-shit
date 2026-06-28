@@ -1606,11 +1606,20 @@ app.post('/api/routines/:slug/recompile', (req, res) => {
   res.json({ ok: true, runId });
 });
 
+// Recent inbound deliveries (webhook + API ingress) — a debug log of what arrived.
+const deliveryLog = [];
+function logDelivery(type, event, matched, source) {
+  deliveryLog.unshift({ at: now(), source, type, repo: eventRepo(event) || '', action: event?.action || '', pr: event?.pull_request?.number ?? event?.number ?? null, labels: labelsOf(event), matched: matched || [] });
+  if (deliveryLog.length > 60) deliveryLog.pop();
+}
+app.get('/api/webhooks/deliveries', (_q, res) => res.json({ deliveries: deliveryLog.map((d) => ({ ...d, ago: relTime(d.at) })) }));
+
 // Generic event ingress — any trigger type. POST /api/events/push, /pull_request, etc.
 app.post('/api/events/:type', (req, res) => {
   const type = req.params.type;
   const payload = type === 'push' && (!req.body || !Object.keys(req.body).length) ? SAMPLE_PUSH() : req.body;
   const out = dispatchEvent(type, payload);
+  logDelivery(type, payload, out.matched, 'api');
   if (out.error) return res.status(409).json(out);
   res.json(out);
 });
@@ -1619,8 +1628,9 @@ app.post('/api/events/:type', (req, res) => {
 app.post('/api/webhooks/github', (req, res) => {
   if (!githubSignatureValid(req)) return res.status(401).json({ error: 'invalid webhook signature' });
   const type = req.get('x-github-event') || 'push';
-  if (type === 'ping') return res.json({ ok: true, pong: true });
+  if (type === 'ping') { logDelivery('ping', {}, [], 'webhook'); return res.json({ ok: true, pong: true }); }
   const out = dispatchEvent(type, req.body || {});
+  logDelivery(type, req.body || {}, out.matched, 'webhook');
   if (out.error) return res.status(409).json(out);
   res.json({ ok: true, ...out });
 });

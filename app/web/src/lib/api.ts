@@ -59,6 +59,8 @@ export const useSchedule = (hours = 48) => useQuery({ queryKey: ['schedule', hou
 export interface WebhookConfig { publicUrl: string; receiverUrl: string; secretSet: boolean; events: string[]; tunnel: { available: boolean; running: boolean; url: string } }
 export interface RepoHook { id: number; url: string; active: boolean; events: string[]; ours: boolean }
 export const useWebhookConfig = () => useQuery({ queryKey: ['wh-config'], queryFn: () => get<WebhookConfig>('/api/webhooks/config'), refetchInterval: 6000 });
+export interface Delivery { at: number; ago: string; source: string; type: string; repo: string; action: string; pr: number | null; labels: string[]; matched: string[] }
+export const useWebhookDeliveries = () => useQuery({ queryKey: ['wh-deliveries'], queryFn: () => get<{ deliveries: Delivery[] }>('/api/webhooks/deliveries'), refetchInterval: 5000 });
 export const useRepoHooks = (repo: string) => useQuery({ queryKey: ['wh-hooks', repo], enabled: /^[\w.-]+\/[\w.-]+$/.test(repo), queryFn: () => get<{ hooks: RepoHook[] }>(`/api/webhooks/hooks?repo=${encodeURIComponent(repo)}`) });
 export function useWebhookActions() {
   const qc = useQueryClient();

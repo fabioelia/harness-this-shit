@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Dot, Toggle } from '@/components/sb';
 import { cn } from '@/lib/utils';
-import { useSettings, useSaveSettings, useWebhookConfig, useRepoHooks, useWebhookActions } from '@/lib/api';
+import { useSettings, useSaveSettings, useWebhookConfig, useRepoHooks, useWebhookActions, useWebhookDeliveries } from '@/lib/api';
 
 export function SettingsPage() {
   const { data } = useSettings();
@@ -88,6 +88,7 @@ const btn = 'h-9 rounded-md border border-line bg-surface-2 px-3.5 font-display 
 
 function WebhooksPanel() {
   const { data: cfg } = useWebhookConfig();
+  const { data: deliv } = useWebhookDeliveries();
   const a = useWebhookActions();
   const [repo, setRepo] = useState('fabioelia/harness-this-shit');
   const [urlDraft, setUrlDraft] = useState('');
@@ -139,6 +140,25 @@ function WebhooksPanel() {
           </div>
         )}
         <div className="mt-2.5 text-[11px] text-dim-2">Installs a hook (pull_request, issue_comment, push, check_run, release…) pointing at this harness. The quick cloudflared URL is ephemeral — for always-on, use a named tunnel or a domain.</div>
+      </div>
+      {/* recent deliveries */}
+      <div className="border-t border-line-soft px-5 py-4">
+        <div className="mb-2 font-display text-[13px] font-semibold">Recent deliveries</div>
+        {!deliv || deliv.deliveries.length === 0 ? (
+          <div className="font-mono text-[11.5px] text-dim">No inbound events yet — they appear here the moment a webhook or API event arrives.</div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {deliv.deliveries.slice(0, 12).map((x, i) => (
+              <div key={i} className="flex items-center gap-2 font-mono text-[11px]">
+                <span className={`w-[52px] shrink-0 ${x.source === 'webhook' ? 'text-lease' : 'text-dim'}`}>{x.source}</span>
+                <span className="w-[120px] shrink-0 truncate text-t2">{x.type}{x.action ? `:${x.action}` : ''}</span>
+                <span className="flex-1 truncate text-dim-2">{x.repo}{x.pr ? ` #${x.pr}` : ''}{x.labels.length ? ` [${x.labels.join(',')}]` : ''}</span>
+                <span className="shrink-0">{x.matched.length ? <span className="text-ok">→ {x.matched.join(', ')}</span> : <span className="text-dim">no match</span>}</span>
+                <span className="w-[56px] shrink-0 text-right text-dim">{x.ago}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
