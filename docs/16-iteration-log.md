@@ -118,6 +118,7 @@ dropdowns · Fleet inbox badge.
 | 97 | Needs-attention rollup banner (failing/stuck/warnings/stale) on Fleet | observability/eliminating-humans | ✅ done |
 | 98 | Global match preview — which routines a synthetic event would fire | efficiency/observability | ✅ done |
 | 99 | Run-output search date filter (all / 7d / 30d window) | observability | ✅ done |
+| 100 | Loop-2 final QA — all endpoints + full page-render sweep | quality | ✅ done — 0 bugs |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.
