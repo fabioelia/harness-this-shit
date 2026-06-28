@@ -36,6 +36,7 @@ dropdowns · Fleet inbox badge.
 | 16 | Inbound delivery log — recent webhook/API events + which routines matched | observability | ✅ done |
 | 17 | Routine snooze — pause triggers+schedule until a time, auto-resume | eliminating-humans/control | ✅ done |
 | 18 | Duplicate a routine (server-side clone → edit) | efficiency | ✅ done |
+| 19 | Activity page filter + search (state chips + text) | observability/UX | ✅ done |
 
 ## QA backlog (test at iteration 10)
 - [x] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.
