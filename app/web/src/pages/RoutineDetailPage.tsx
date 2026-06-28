@@ -67,6 +67,33 @@ function FrontMatterCard({ fm }: { fm: FrontMatter }) {
   );
 }
 
+// Minimal, safe inline markdown: **bold**, `code`, [text](url). Builds React nodes (no HTML injection).
+function inlineMd(text: string): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  const re = /(\*\*([^*]+)\*\*)|(`([^`]+)`)|(\[([^\]]+)\]\((https?:\/\/[^)\s]+)\))/g;
+  let last = 0, m: RegExpExecArray | null, k = 0;
+  while ((m = re.exec(text))) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m[2]) out.push(<strong key={k++} className="font-semibold text-t2">{m[2]}</strong>);
+    else if (m[4]) out.push(<code key={k++} className="rounded bg-white/[0.06] px-1 font-mono text-[11.5px] text-brand-soft">{m[4]}</code>);
+    else if (m[6]) out.push(<a key={k++} href={m[7]} target="_blank" rel="noreferrer" className="text-brand hover:underline">{m[6]}</a>);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+function NotesMd({ text }: { text: string }) {
+  return (
+    <div className="flex flex-col gap-1.5 font-sans text-[13px] leading-relaxed text-muted-2">
+      {text.split('\n').map((ln, i) => {
+        if (/^#{1,3}\s/.test(ln)) return <div key={i} className="font-display text-[12px] font-semibold uppercase tracking-[0.05em] text-dim">{inlineMd(ln.replace(/^#{1,3}\s/, ''))}</div>;
+        if (/^[-*]\s/.test(ln)) return <div key={i} className="flex gap-2 pl-1"><span className="text-dim">•</span><span>{inlineMd(ln.replace(/^[-*]\s/, ''))}</span></div>;
+        if (!ln.trim()) return <div key={i} className="h-1" />;
+        return <div key={i}>{inlineMd(ln)}</div>;
+      })}
+    </div>
+  );
+}
 function ReactiveFlowCard({ d }: { d: RoutineDetail }) {
   return (
     <div className={CARD}>
@@ -496,7 +523,7 @@ export function RoutineDetailPage() {
           {d.notes && d.notes.trim() && (
             <div className={CARD}>
               <div className={`${LABEL} mb-2`}>Notes · runbook</div>
-              <div className="whitespace-pre-wrap break-words font-sans text-[13px] leading-relaxed text-muted-2">{d.notes}</div>
+              <NotesMd text={d.notes} />
             </div>
           )}
           <TestFireCard slug={d.slug} triggers={d.triggers} repo={d.repo} />
