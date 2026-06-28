@@ -240,6 +240,12 @@ export function RoutineDetailPage() {
         {msg && (
           <div className={`mt-3 inline-block rounded-md border px-3 py-1.5 text-[12px] ${msg.tone === 'bad' ? 'border-bad/30 bg-bad/10 text-bad' : 'border-warn/30 bg-warn/10 text-warn'}`}>{msg.text}</div>
         )}
+        {d.lastStatus === 'failing' && d.lastError && (
+          <Link to={`/runs/${d.lastError.runId}`} className="mt-3 block rounded-md border border-bad/30 bg-bad/[0.07] px-3.5 py-2.5 hover:border-bad/50">
+            <div className="mb-1 font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-bad">Last failure · {d.lastError.ago}</div>
+            <div className="break-words font-mono text-[11.5px] leading-[1.5] text-muted-2">{d.lastError.output || '(no output)'}</div>
+          </Link>
+        )}
 
         {validate.data && (
           <div className={`mt-3 rounded-md border px-3.5 py-2.5 ${validate.data.ok ? 'border-ok/30 bg-ok/[0.06]' : 'border-warn/30 bg-warn/[0.06]'}`}>

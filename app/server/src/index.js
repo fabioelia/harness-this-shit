@@ -983,7 +983,9 @@ app.get('/api/routines/:slug', (req, res) => {
     .map((l) => ({ key: l.key, runId: l.run_id, sha: l.head_sha ? l.head_sha.slice(0, 7) : '', held: relTime(l.acquired_at), ttl: fmtDur(Math.max(0, l.expires_at - now())) }));
   const inboxTasks = all("SELECT * FROM run_tasks WHERE routine_slug=? AND handled_by='' ORDER BY created_at DESC LIMIT 20", r.slug)
     .map((t) => ({ summary: t.summary, key: t.lease_key, ago: relTime(t.created_at) }));
-  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, script: r.script || '' });
+  const lf = one("SELECT id, output, created_at FROM runs WHERE routine_slug=? AND status='failed' ORDER BY created_at DESC, ord DESC LIMIT 1", r.slug);
+  const lastError = lf ? { runId: lf.id, output: String(lf.output || '').slice(0, 400), ago: relTime(lf.created_at) } : null;
+  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, script: r.script || '', lastError });
 });
 
 function insertRoutine(b) {

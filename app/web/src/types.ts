@@ -67,6 +67,7 @@ export interface RoutineDetail extends Routine {
   leases: { key: string; runId: string; sha: string; held: string; ttl: string }[];
   inboxTasks: { summary: string; key: string; ago: string }[];
   script: string;
+  lastError: { runId: string; output: string; ago: string } | null;
 }
 
 export interface RegistryServer {
