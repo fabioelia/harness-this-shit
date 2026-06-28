@@ -37,7 +37,10 @@ function ConnectorRow({ c, GRID }: { c: Connector; GRID: React.CSSProperties }) 
         <div className="truncate font-mono text-[11.5px] font-medium text-muted-2">{c.auth}</div>
         <div className="truncate font-mono text-[11.5px] font-medium text-muted">{c.scopes}</div>
         <div className="flex items-center justify-end gap-2">
-          <span className="font-mono text-[12px] font-semibold text-t2">{c.routines}</span>
+          <span className="text-right font-mono text-[12px] font-semibold text-t2" title={`${c.routines} routines · ${c.runs7d ?? 0} runs / $${(c.cost7d ?? 0).toFixed(2)} in the last 7 days`}>
+            {c.routines}
+            {(c.runs7d ?? 0) > 0 && <span className="ml-1.5 font-normal text-dim">· {c.runs7d}r/7d</span>}
+          </span>
           {c.testable && <button onClick={() => test.mutate({ code: c.code, body: c.configKey === 'slack' ? { channel } : {} })} disabled={test.isPending} className={btn}>{test.isPending ? 'Testing…' : 'Test'}</button>}
           {c.configKey && <button onClick={() => setShowCfg((v) => !v)} className={btn}>Configure</button>}
           {c.remote && <button onClick={() => oauth.mutate(c.name)} disabled={oauth.isPending} className={cn(btn, 'border-lease/50 text-lease')}>{oauth.isPending ? 'Opening…' : 'OAuth'}</button>}

@@ -1600,18 +1600,24 @@ app.get('/api/connectors', async (_q, res) => {
   const st = await integrationStatus();
   const rows = all('SELECT connectors FROM routines WHERE enabled=1');
   const uses = (key) => rows.filter((r) => j(r.connectors).includes(key)).length;
+  // 7-day usage attributed to a connector via the routines that grant it.
+  const since7 = now() - 7 * 86_400_000;
+  const runAgg = {};
+  for (const x of all('SELECT routine_slug, cost_usd FROM runs WHERE created_at > ?', since7)) { const e = (runAgg[x.routine_slug] ||= { runs: 0, cost: 0 }); e.runs++; e.cost += x.cost_usd || 0; }
+  const allR = all('SELECT slug, connectors FROM routines');
+  const usageFor = (key) => { let runs = 0, cost = 0; for (const r of allR) { if (j(r.connectors).includes(key)) { const a = runAgg[r.slug]; if (a) { runs += a.runs; cost += a.cost; } } } return { runs7d: runs, cost7d: +cost.toFixed(2) }; };
   const out = [
-    { code: 'GH', name: 'GitHub', kind: 'CLI · gh', health: st.github.connected ? 'ok' : 'off', auth: st.github.connected ? `gh · @${st.github.account}` : 'run `gh auth login`', scopes: 'read/write PRs, issues, checks, gists', routines: uses('github'), avColor: '#7f9bd1', testable: true, configKey: '' },
-    { code: 'SL', name: 'Slack', kind: 'Bot', health: st.slack.connected ? 'ok' : 'off', auth: st.slack.connected ? `${st.slack.team} · @${st.slack.bot}` : 'set a bot token', scopes: 'post messages via slack-post', routines: uses('slack'), avColor: '#c9a24a', testable: true, configKey: 'slack' },
-    { code: 'WB', name: 'Web fetch', kind: 'Built-in', health: 'ok', auth: 'no auth needed', scopes: 'fetch & read public URLs', routines: uses('web'), avColor: '#8aa0b8', testable: true, configKey: '' },
-    { code: 'AT', name: 'Atlassian / Confluence', kind: 'API · planned', health: process.env.ATLASSIAN_API_TOKEN ? 'ok' : 'off', auth: process.env.ATLASSIAN_API_TOKEN ? 'token set' : 'set an API token', scopes: 'publish to Confluence (not yet a granted tool)', routines: uses('confluence'), avColor: '#6fae9a', testable: true, configKey: 'atlassian' },
+    { code: 'GH', name: 'GitHub', kind: 'CLI · gh', health: st.github.connected ? 'ok' : 'off', auth: st.github.connected ? `gh · @${st.github.account}` : 'run `gh auth login`', scopes: 'read/write PRs, issues, checks, gists', routines: uses('github'), ...usageFor('github'), avColor: '#7f9bd1', testable: true, configKey: '' },
+    { code: 'SL', name: 'Slack', kind: 'Bot', health: st.slack.connected ? 'ok' : 'off', auth: st.slack.connected ? `${st.slack.team} · @${st.slack.bot}` : 'set a bot token', scopes: 'post messages via slack-post', routines: uses('slack'), ...usageFor('slack'), avColor: '#c9a24a', testable: true, configKey: 'slack' },
+    { code: 'WB', name: 'Web fetch', kind: 'Built-in', health: 'ok', auth: 'no auth needed', scopes: 'fetch & read public URLs', routines: uses('web'), ...usageFor('web'), avColor: '#8aa0b8', testable: true, configKey: '' },
+    { code: 'AT', name: 'Atlassian / Confluence', kind: 'API · planned', health: process.env.ATLASSIAN_API_TOKEN ? 'ok' : 'off', auth: process.env.ATLASSIAN_API_TOKEN ? 'token set' : 'set an API token', scopes: 'publish to Confluence (not yet a granted tool)', routines: uses('confluence'), ...usageFor('confluence'), avColor: '#6fae9a', testable: true, configKey: 'atlassian' },
   ];
   for (const s of all('SELECT name, config, auth FROM mcp_servers ORDER BY name')) {
     const cfg = jObj(s.config) || {};
     const authed = !!(jObj(s.auth) || {}).token;
     const remote = isMcpRemote(cfg);
     const transport = remote ? `remote · ${mcpRemoteUrl(cfg)}` : cfg.command ? `stdio · ${cfg.command}` : cfg.url ? `http · ${cfg.url}` : 'custom MCP';
-    out.push({ code: s.name, name: s.name, kind: remote ? 'MCP · remote' : 'MCP', health: 'ok', auth: `${transport}${authed ? ' · 🔑 token' : ''}`, scopes: `mcp__${s.name}__*`, routines: uses(s.name), avColor: '#b49ae6', testable: true, configKey: '', mcp: true, authed, remote });
+    out.push({ code: s.name, name: s.name, kind: remote ? 'MCP · remote' : 'MCP', health: 'ok', auth: `${transport}${authed ? ' · 🔑 token' : ''}`, scopes: `mcp__${s.name}__*`, routines: uses(s.name), ...usageFor(s.name), avColor: '#b49ae6', testable: true, configKey: '', mcp: true, authed, remote });
   }
   res.json(out);
 });
