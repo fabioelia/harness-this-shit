@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt, useRoutineAudit, useArchiveRoutine, useUpdateRoutine, useApproveRoutine, useComments, useAddComment, useDeleteComment, usePinComment, useWatch, useToggleWatch } from '@/lib/api';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt, useRoutineAudit, useArchiveRoutine, useUpdateRoutine, useApproveRoutine, useComments, useAddComment, useDeleteComment, usePinComment, useWatch, useToggleWatch, useTimeline } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import { useOperator } from '@/lib/operator';
@@ -155,6 +155,26 @@ function CostTrendCard({ trend }: { trend: number[] }) {
           <polyline points={pts} fill="none" stroke="#5fbf86" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
           {trend.map((v, i) => <circle key={i} cx={(i / Math.max(1, trend.length - 1)) * W} cy={H - ((v - min) / span) * (H - 6) - 3} r={i === trend.length - 1 ? 2.5 : 1} fill="#5fbf86" />)}
         </svg>
+      </div>
+    </div>
+  );
+}
+function TimelineCard({ slug }: { slug: string }) {
+  const { data } = useTimeline(slug);
+  if (!data || data.events.length === 0) return null;
+  const tone: Record<string, string> = { approval: 'text-ok', change: 'text-brand-soft', comment: 'text-lease' };
+  const dot: Record<string, string> = { approval: '✓', change: '✎', comment: '💬' };
+  return (
+    <div className={CARD}>
+      <div className={`${LABEL} mb-3`}>Timeline</div>
+      <div className="flex flex-col gap-2">
+        {data.events.slice(0, 15).map((e, i) => (
+          <div key={i} className="flex items-start gap-2 font-mono text-[11.5px]">
+            <span className={`shrink-0 ${tone[e.kind] || 'text-dim'}`}>{dot[e.kind] || '·'}</span>
+            <span className="flex-1 break-words text-muted-2">{e.text}</span>
+            <span className="shrink-0 text-dim">{e.ago}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -620,6 +640,7 @@ export function RoutineDetailPage() {
           <TestFireCard slug={d.slug} triggers={d.triggers} repo={d.repo} />
           <PromptHistoryCard slug={d.slug} />
           <ReadinessCard d={d} />
+          <TimelineCard slug={d.slug} />
           <CommentsCard slug={d.slug} />
           <AuditCard slug={d.slug} />
           <div className={CARD}>

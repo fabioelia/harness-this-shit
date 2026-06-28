@@ -2441,6 +2441,15 @@ app.get('/api/mentions', (req, res) => {
   const rows = all('SELECT mentioned, by, slug, snippet, created_at FROM mentions ORDER BY id DESC LIMIT 30');
   res.json({ mentions: rows.map((m) => ({ mentioned: m.mentioned, by: m.by || 'anon', slug: m.slug, snippet: m.snippet, ago: relTime(m.created_at) })) });
 });
+// Routine timeline — merged chronological feed of changes/approvals + comments.
+app.get('/api/routines/:slug/timeline', (req, res) => {
+  const slug = req.params.slug;
+  const ev = [];
+  for (const a of all('SELECT summary, created_at FROM routine_audit WHERE slug=?', slug)) ev.push({ kind: a.summary.startsWith('approved') ? 'approval' : 'change', text: a.summary, at: a.created_at });
+  for (const c of all('SELECT author, body, created_at FROM comments WHERE slug=?', slug)) ev.push({ kind: 'comment', text: `${c.author || 'anon'}: ${c.body.slice(0, 140)}`, at: c.created_at });
+  ev.sort((a, b) => b.at - a.at);
+  res.json({ events: ev.slice(0, 40).map((e) => ({ kind: e.kind, text: e.text, ago: relTime(e.at) })) });
+});
 // Watch / subscribe — follow a routine; its changes surface in the watcher's inbox.
 app.get('/api/routines/:slug/watch', (req, res) => {
   const who = String(req.query.who || '').trim();

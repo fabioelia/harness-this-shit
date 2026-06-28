@@ -304,6 +304,8 @@ export function useToggleWatch() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: ({ slug, who, on }: { slug: string; who: string; on: boolean }) => post(`/api/routines/${slug}/watch`, { who, on }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['watch', v.slug] }); qc.invalidateQueries({ queryKey: ['inbox'] }); } });
 }
+export interface Timeline { events: { kind: string; text: string; ago: string }[] }
+export const useTimeline = (slug: string) => useQuery({ queryKey: ['timeline', slug], enabled: !!slug, queryFn: () => get<Timeline>(`/api/routines/${slug}/timeline`), refetchInterval: 20000 });
 export interface Mentions { mentions: { mentioned: string; by: string; slug: string; snippet: string; ago: string }[] }
 export const useMentions = () => useQuery({ queryKey: ['mentions'], queryFn: () => get<Mentions>('/api/mentions'), refetchInterval: 15000 });
 export interface Comments { comments: { id: number; author: string; body: string; pinned: boolean; ago: string }[] }

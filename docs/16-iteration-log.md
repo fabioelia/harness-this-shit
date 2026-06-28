@@ -158,6 +158,7 @@ dropdowns · Fleet inbox badge.
 | 133 | Sunset date for deprecated routines (overdue badge + lint) | lifecycle/governance | ✅ done |
 | 134 | Emoji reactions on runs (👍🔥👀🎉❤️ toggle per person) | collaboration | ✅ done |
 | 135 | Routine readiness checklist (owner/notes/escalation/links/reviewed/healthy) | collaboration/standards | ✅ done |
+| 136 | Routine timeline — merged changes/approvals/comments chronology | collaboration | ✅ done |
 
 ### Loop-3 QA backlog (test at iteration 110)
 - [x] (iter 107) substantive edit (prompt/triggers/etc) flags needs_review; approve records reviewer + clears it; non-substantive edits (name) do not flag; Fleet badge.
