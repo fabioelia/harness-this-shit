@@ -1314,7 +1314,7 @@ app.get('/api/routines/:slug', (req, res) => {
     if (h.status === 'failed' && failStart == null) failStart = h.created_at;
     else if (h.status === 'succeeded' && failStart != null) { gaps.push(h.created_at - failStart); failStart = null; }
   }
-  const mttr = gaps.length ? { value: fmtDur(Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length)), incidents: gaps.length, openIncident: failStart != null } : (failStart != null ? { value: '—', incidents: 0, openIncident: true } : null);
+  const mttr = gaps.length ? { value: fmtDur(Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length)), incidents: gaps.length, openIncident: failStart != null, downSince: failStart != null ? relTime(failStart) : null } : (failStart != null ? { value: '—', incidents: 0, openIncident: true, downSince: relTime(failStart) } : null);
   const dependents = all('SELECT slug,name,chain,reactions,enabled FROM routines WHERE slug != ?', r.slug)
     .map((x) => ({ slug: x.slug, name: x.name, enabled: !!x.enabled, viaChain: j(x.chain).includes(r.slug), viaReaction: j(x.reactions).some((rx) => rx.run === r.slug) }))
     .filter((x) => x.viaChain || x.viaReaction)

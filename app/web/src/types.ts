@@ -83,7 +83,7 @@ export interface RoutineDetail extends Routine {
   lastError: { runId: string; output: string; ago: string } | null;
   costTrend: number[];
   dependents: { slug: string; name: string; enabled: boolean; via: string }[];
-  mttr: { value: string; incidents: number; openIncident: boolean } | null;
+  mttr: { value: string; incidents: number; openIncident: boolean; downSince: string | null } | null;
   runsByDay: { date: string; runs: number; fails: number }[];
 }
 

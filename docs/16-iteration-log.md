@@ -113,6 +113,7 @@ dropdowns · Fleet inbox badge.
 | 92 | Connector test latency (response time on test, slow=warn) | observability | ✅ done |
 | 93 | Trace copy-all (copy the full run trace as text) | UX | ✅ done |
 | 94 | Insights custom date range (60/90 presets + custom day input, cap 365) | observability | ✅ done |
+| 95 | "Down since" current-incident duration on the MTTR card | observability | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.

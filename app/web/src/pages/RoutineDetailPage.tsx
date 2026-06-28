@@ -522,7 +522,7 @@ export function RoutineDetailPage() {
               <div className={`${LABEL} mb-2`}>Reliability · MTTR</div>
               <div className="flex items-baseline gap-3">
                 <div className="font-display text-[22px] font-bold leading-none text-fg">{d.mttr.value}</div>
-                <div className="font-mono text-[11.5px] text-dim-2">{d.mttr.incidents} recover{d.mttr.incidents === 1 ? 'y' : 'ies'}{d.mttr.openIncident && <span className="ml-1 text-bad">· currently failing</span>}</div>
+                <div className="font-mono text-[11.5px] text-dim-2">{d.mttr.incidents} recover{d.mttr.incidents === 1 ? 'y' : 'ies'}{d.mttr.openIncident && <span className="ml-1 text-bad">· down since {d.mttr.downSince}</span>}</div>
               </div>
               <div className="mt-1.5 font-mono text-[10.5px] text-dim-2">mean time from a failure to the next success.</div>
             </div>
