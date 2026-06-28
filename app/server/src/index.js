@@ -291,6 +291,7 @@ const shapeRoutine = (r) => {
     inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
     scriptMode: !!r.script_mode, scriptLang: r.script_lang || 'bash', compiled: !!(r.script && r.script.trim()), scriptStale: !!r.script_stale,
     retries: r.retries || 0, assertions: j(r.assertions), tags: j(r.tags), rateLimit: r.rate_limit || 0, maxFails: r.max_fails || 0, failStreak: r.fail_streak || 0, notes: r.notes || '', pinned: !!r.pinned, activeWindow: jObj(r.active_window) || null,
+    longRunning: (() => { const t = one("SELECT MIN(created_at) AS t FROM runs WHERE routine_slug=? AND status IN ('running','waiting')", r.slug)?.t; return !!(t && now() - t > 8 * 60_000); })(),
     lastSuccessAgo: (() => { const t = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND status='succeeded'", r.slug)?.t || 0; return t ? relTime(t) : ''; })(),
     staleSuccess: (() => { const t = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND status='succeeded'", r.slug)?.t || 0; return !!r.enabled && t > 0 && (now() - t) > 7 * 86_400_000; })(),
     alertOnFail: !!r.alert_on_fail, alertTarget: r.alert_target || '', timeout: r.timeout_s || 0, env: jObj(r.env) || {}, snoozedUntil: r.snooze_until && r.snooze_until > now() ? r.snooze_until : 0,
