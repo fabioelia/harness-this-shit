@@ -159,6 +159,34 @@ function CostTrendCard({ trend }: { trend: number[] }) {
     </div>
   );
 }
+function ReadinessCard({ d }: { d: RoutineDetail }) {
+  const checks = [
+    { label: 'Has an owner', ok: !!d.owner && d.owner !== 'unassigned' },
+    { label: 'Runbook / notes written', ok: !!(d.notes && d.notes.trim()) },
+    { label: 'Escalation contact set', ok: !!d.escalation },
+    { label: 'Reference links added', ok: (d.links?.length ?? 0) > 0 },
+    { label: 'Config reviewed', ok: d.reviewStatus !== 'needs_review' },
+    { label: 'Not failing', ok: d.lastStatus !== 'failing' },
+  ];
+  const done = checks.filter((c) => c.ok).length;
+  const pct = Math.round((100 * done) / checks.length);
+  return (
+    <div className={CARD}>
+      <div className="mb-3 flex items-center justify-between">
+        <div className={LABEL}>Readiness</div>
+        <div className="flex items-center gap-2"><div className="h-1.5 w-20 overflow-hidden rounded-full bg-surface-2"><div className={`h-full rounded-full ${pct === 100 ? 'bg-ok/70' : pct >= 50 ? 'bg-warn/70' : 'bg-bad/70'}`} style={{ width: `${pct}%` }} /></div><span className="font-mono text-[11px] text-dim">{done}/{checks.length}</span></div>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {checks.map((c) => (
+          <div key={c.label} className="flex items-center gap-2 font-mono text-[12px]">
+            <span className={c.ok ? 'text-ok' : 'text-dim-3'}>{c.ok ? '✓' : '○'}</span>
+            <span className={c.ok ? 'text-muted-2' : 'text-dim'}>{c.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 function CommentsCard({ slug }: { slug: string }) {
   const { data } = useComments(slug, true);
   const add = useAddComment();
@@ -591,6 +619,7 @@ export function RoutineDetailPage() {
           )}
           <TestFireCard slug={d.slug} triggers={d.triggers} repo={d.repo} />
           <PromptHistoryCard slug={d.slug} />
+          <ReadinessCard d={d} />
           <CommentsCard slug={d.slug} />
           <AuditCard slug={d.slug} />
           <div className={CARD}>
