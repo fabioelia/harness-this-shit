@@ -300,7 +300,7 @@ const shapeRoutine = (r) => {
     inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
     scriptMode: !!r.script_mode, scriptLang: r.script_lang || 'bash', compiled: !!(r.script && r.script.trim()), scriptStale: !!r.script_stale,
     retries: r.retries || 0, assertions: j(r.assertions), tags: j(r.tags), rateLimit: r.rate_limit || 0, maxFails: r.max_fails || 0, failStreak: r.fail_streak || 0, notes: r.notes || '', pinned: !!r.pinned, activeWindow: jObj(r.active_window) || null, sla: r.sla_s || 0, archived: !!r.archived, lifecycle: r.lifecycle || 'active',
-    reviewStatus: r.review_status || '', reviewedBy: r.reviewed_by || '', reviewedAgo: r.reviewed_at ? relTime(r.reviewed_at) : '',
+    reviewStatus: r.review_status || '', reviewedBy: r.reviewed_by || '', reviewedAgo: r.reviewed_at ? relTime(r.reviewed_at) : '', gateReview: !!r.gate_review,
     longRunning: (() => { const t = one("SELECT MIN(created_at) AS t FROM runs WHERE routine_slug=? AND status IN ('running','waiting')", r.slug)?.t; return !!(t && now() - t > 8 * 60_000); })(),
     lastSuccessAgo: (() => { const t = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND status='succeeded'", r.slug)?.t || 0; return t ? relTime(t) : ''; })(),
     staleSuccess: (() => { const t = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND status='succeeded'", r.slug)?.t || 0; return !!r.enabled && t > 0 && (now() - t) > 7 * 86_400_000; })(),
@@ -463,6 +463,13 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", 'outside active window — skipped', id);
     run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
     logActivity(`${r.slug} skipped · outside active window`, 'idle');
+    return id;
+  }
+  // Approval gate: block dispatch of an unreviewed change (manual run is allowed through).
+  if (r.gate_review && r.review_status === 'needs_review' && !manualish) {
+    run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", 'awaiting approval — config changed since last review', id);
+    run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
+    logActivity(`${r.slug} skipped · awaiting approval`, 'idle');
     return id;
   }
   // Per-team budget: skip this routine if its team's daily cap is reached (others keep running).
@@ -1429,8 +1436,8 @@ function insertRoutine(b) {
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
   run(
     `INSERT INTO routines
-      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,script_mode,script_lang,retries,assertions,alert_on_fail,alert_target,timeout_s,env,tags,rate_limit,max_fails,notes,active_window,sla_s,lifecycle)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,script_mode,script_lang,retries,assertions,alert_on_fail,alert_target,timeout_s,env,tags,rate_limit,max_fails,notes,active_window,sla_s,lifecycle,gate_review)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     slug, (b.name || '').trim(), (b.summary || '').trim(), owner, team,
     JSON.stringify(triggers), JSON.stringify(connectors),
     'idle', 'never', 'idle', next, null, '$0.00', enabled, '', '', '—',
@@ -1438,7 +1445,7 @@ function insertRoutine(b) {
     (b.prompt || '').trim(), normModel(b.model), (b.repo || '').trim(), (b.branch || 'main').trim(),
     JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions), normEffort(b.effort), b.memory ? 1 : 0, JSON.stringify(cleanConcurrency(b.concurrency)),
     b.scriptMode ? 1 : 0, b.scriptLang === 'node' ? 'node' : 'bash', normRetries(b.retries), JSON.stringify(cleanAssertions(b.assertions)),
-    b.alertOnFail ? 1 : 0, (b.alertTarget || '').trim(), Math.max(0, Math.min(1800, parseInt(b.timeout, 10) || 0)), JSON.stringify(cleanEnv(b.env)), JSON.stringify(Array.isArray(b.tags) ? b.tags.map((t) => String(t).trim()).filter(Boolean) : []), Math.max(0, Math.min(1000, parseInt(b.rateLimit, 10) || 0)), Math.max(0, Math.min(50, parseInt(b.maxFails, 10) || 0)), String(b.notes || '').slice(0, 4000), cleanWindow(b.activeWindow), Math.max(0, Math.min(3600, parseInt(b.sla, 10) || 0)), ['draft','active','deprecated'].includes(b.lifecycle) ? b.lifecycle : 'active'
+    b.alertOnFail ? 1 : 0, (b.alertTarget || '').trim(), Math.max(0, Math.min(1800, parseInt(b.timeout, 10) || 0)), JSON.stringify(cleanEnv(b.env)), JSON.stringify(Array.isArray(b.tags) ? b.tags.map((t) => String(t).trim()).filter(Boolean) : []), Math.max(0, Math.min(1000, parseInt(b.rateLimit, 10) || 0)), Math.max(0, Math.min(50, parseInt(b.maxFails, 10) || 0)), String(b.notes || '').slice(0, 4000), cleanWindow(b.activeWindow), Math.max(0, Math.min(3600, parseInt(b.sla, 10) || 0)), ['draft','active','deprecated'].includes(b.lifecycle) ? b.lifecycle : 'active', b.gateReview ? 1 : 0
   );
   return slug;
 }
@@ -1561,7 +1568,7 @@ app.put('/api/routines/:slug', (req, res) => {
     if (changed.some((f) => ['prompt', 'triggers', 'connectors', 'filters', 'reactions', 'chain', 'model'].includes(f))) run("UPDATE routines SET review_status='needs_review' WHERE slug=?", r.slug);
   }
   run(
-    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=?,retries=?,assertions=?,alert_on_fail=?,alert_target=?,timeout_s=?,env=?,tags=?,rate_limit=?,max_fails=?,notes=?,active_window=?,sla_s=?,lifecycle=? WHERE slug=?`,
+    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=?,retries=?,assertions=?,alert_on_fail=?,alert_target=?,timeout_s=?,env=?,tags=?,rate_limit=?,max_fails=?,notes=?,active_window=?,sla_s=?,lifecycle=?,gate_review=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
     JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
     JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
@@ -1586,6 +1593,7 @@ app.put('/api/routines/:slug', (req, res) => {
     b.activeWindow !== undefined ? cleanWindow(b.activeWindow) : r.active_window,
     b.sla != null ? Math.max(0, Math.min(3600, parseInt(b.sla, 10) || 0)) : r.sla_s,
     ['draft','active','deprecated'].includes(b.lifecycle) ? b.lifecycle : r.lifecycle,
+    b.gateReview != null ? (b.gateReview ? 1 : 0) : r.gate_review,
     r.slug
   );
   const updated = one('SELECT * FROM routines WHERE slug=?', r.slug);

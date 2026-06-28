@@ -56,6 +56,7 @@ export interface Routine {
   reviewStatus: string;
   reviewedBy: string;
   reviewedAgo: string;
+  gateReview: boolean;
 }
 
 export interface FrontMatter {
