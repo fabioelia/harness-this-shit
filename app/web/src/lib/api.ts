@@ -36,6 +36,24 @@ async function del<T = unknown>(url: string): Promise<T> {
 }
 
 export const useStats = () => useQuery({ queryKey: ['stats'], queryFn: () => get<Stats>('/api/stats'), refetchInterval: 8000 });
+
+// GitHub webhooks
+export interface WebhookConfig { publicUrl: string; receiverUrl: string; secretSet: boolean; events: string[]; tunnel: { available: boolean; running: boolean; url: string } }
+export interface RepoHook { id: number; url: string; active: boolean; events: string[]; ours: boolean }
+export const useWebhookConfig = () => useQuery({ queryKey: ['wh-config'], queryFn: () => get<WebhookConfig>('/api/webhooks/config'), refetchInterval: 6000 });
+export const useRepoHooks = (repo: string) => useQuery({ queryKey: ['wh-hooks', repo], enabled: /^[\w.-]+\/[\w.-]+$/.test(repo), queryFn: () => get<{ hooks: RepoHook[] }>(`/api/webhooks/hooks?repo=${encodeURIComponent(repo)}`) });
+export function useWebhookActions() {
+  const qc = useQueryClient();
+  const inval = () => { qc.invalidateQueries({ queryKey: ['wh-config'] }); qc.invalidateQueries({ queryKey: ['wh-hooks'] }); };
+  return {
+    genSecret: useMutation({ mutationFn: () => post('/api/webhooks/secret', {}), onSuccess: inval }),
+    setUrl: useMutation({ mutationFn: (publicUrl: string) => post('/api/webhooks/config', { publicUrl }), onSuccess: inval }),
+    startTunnel: useMutation({ mutationFn: () => post<{ url?: string; error?: string }>('/api/webhooks/tunnel/start', {}), onSuccess: inval }),
+    stopTunnel: useMutation({ mutationFn: () => post('/api/webhooks/tunnel/stop', {}), onSuccess: inval }),
+    setup: useMutation({ mutationFn: (repo: string) => post<{ id?: number; error?: string }>('/api/webhooks/setup', { repo }), onSuccess: inval }),
+    remove: useMutation({ mutationFn: (v: { repo: string; id: number }) => del(`/api/webhooks/hooks?repo=${encodeURIComponent(v.repo)}&id=${v.id}`), onSuccess: inval }),
+  };
+}
 export const useModels = () => useQuery({ queryKey: ['models'], queryFn: () => get<{ models: { id: string; label: string }[]; efforts: string[]; defaultModel: string }>('/api/models'), staleTime: Infinity });
 export const useGithubOrgs = () => useQuery({ queryKey: ['gh-orgs'], queryFn: () => get<{ orgs: string[] }>('/api/github/orgs'), staleTime: 300_000 });
 export const useGithubChecks = (repo: string) =>

@@ -23,7 +23,7 @@ getDb();
 
 // Verify a GitHub webhook HMAC (X-Hub-Signature-256) when a secret is configured.
 function githubSignatureValid(req) {
-  const secret = process.env.GITHUB_WEBHOOK_SECRET;
+  const secret = process.env.GITHUB_WEBHOOK_SECRET || metaGet('webhook_secret', '');
   if (!secret) return process.env.NODE_ENV !== 'production'; // fail-closed in prod, accept in local/dev
   const sig = req.get('x-hub-signature-256') || '';
   if (!sig) return false; // a secret is set → an unsigned request is rejected
@@ -38,6 +38,8 @@ const PORT = process.env.PORT || 4317;
 const j = (s) => { try { const v = JSON.parse(s); return Array.isArray(v) ? v : []; } catch { return []; } };
 const jObj = (s) => { try { return JSON.parse(s); } catch { return null; } };
 const meta = (k, d) => one('SELECT value FROM meta WHERE key=?', k)?.value ?? d;
+const metaGet = meta; // alias used before `meta` is in scope in hoisted fns
+const setMeta = (k, v) => run("INSERT INTO meta (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", k, String(v));
 // UI-configured secrets are stored in meta; load them into the process env so the
 // runner's child sessions and the integrations both see them (env wins if already set).
 const TOKEN_ENV = { slack: 'SLACK_BOT_TOKEN', atlassian: 'ATLASSIAN_API_TOKEN' };
@@ -132,7 +134,7 @@ function ensureMemory(slug) {
 const cleanFilters = (f) => {
   const o = f && typeof f === 'object' ? f : {};
   const arr = (x) => (Array.isArray(x) ? x.map((s) => String(s).trim()).filter(Boolean) : []);
-  return { actions: arr(o.actions), branches: arr(o.branches), mode: o.mode === 'or' ? 'or' : 'and' };
+  return { actions: arr(o.actions), branches: arr(o.branches), labels: arr(o.labels), mode: o.mode === 'or' ? 'or' : 'and' };
 };
 const cleanConcurrency = (c) => {
   const o = c && typeof c === 'object' ? c : {};
@@ -414,15 +416,25 @@ const eventStates = (e) => [
   e?.check_run?.conclusion, e?.check_suite?.conclusion, e?.workflow_run?.conclusion,
   e?.deployment_status?.state, e?.review?.state,
 ].filter(Boolean);
+// Label names on an event: the just-added/removed one (e.label.name) + all current labels.
+const labelsOf = (e) => [...new Set([
+  e?.label?.name,
+  ...((e?.pull_request?.labels || e?.issue?.labels || e?.labels || []).map((l) => (typeof l === 'string' ? l : l?.name))),
+].filter(Boolean))];
+// A "labeled"/"unlabeled" pull_request/issues delivery also satisfies the `label` trigger.
+const LABEL_TYPES = new Set(['pull_request', 'pull_request_target', 'issues']);
+const isLabelEvent = (type, e) => LABEL_TYPES.has(type) && (e?.action === 'labeled' || e?.action === 'unlabeled');
 function filtersMatch(r, event) {
   let f; try { f = JSON.parse(r.filters || '{}'); } catch { f = {}; }
   const actions = Array.isArray(f.actions) ? f.actions : [];
   const branches = Array.isArray(f.branches) ? f.branches : [];
+  const labels = Array.isArray(f.labels) ? f.labels : [];
   const mode = f.mode === 'or' ? 'or' : 'and';
   const checks = [];
   // Within a filter, the listed values are OR'd; across filters they combine by `mode`.
   if (actions.length) { const vals = eventStates(event); checks.push(!vals.length || vals.some((v) => actions.includes(v))); }
   if (branches.length) { const br = branchOf(event); checks.push(!br || branches.includes(br)); }
+  if (labels.length) { const labs = labelsOf(event); checks.push(!labs.length || labs.some((l) => labels.includes(l))); }
   if (!checks.length) return true;
   return mode === 'or' ? checks.some(Boolean) : checks.every(Boolean);
 }
@@ -433,7 +445,9 @@ function dispatchEvent(type, payload) {
     return { error: 'kill switch engaged' };
   }
   const event = payload && Object.keys(payload).length ? payload : { event: type };
-  const candidates = all('SELECT * FROM routines WHERE enabled=1').filter((r) => j(r.triggers).includes(type));
+  const labelEvt = isLabelEvent(type, event);
+  const candidates = all('SELECT * FROM routines WHERE enabled=1')
+    .filter((r) => { const t = j(r.triggers); return t.includes(type) || (labelEvt && t.includes('label')); });
   const matched = candidates.filter((r) => repoMatches(r, event) && filtersMatch(r, event));
   // Audit: record why subscribed routines stood down (the "logs of if/how" devs want).
   candidates.filter((r) => !matched.includes(r)).forEach((r) => {
@@ -1161,9 +1175,97 @@ app.post('/api/events/:type', (req, res) => {
 app.post('/api/webhooks/github', (req, res) => {
   if (!githubSignatureValid(req)) return res.status(401).json({ error: 'invalid webhook signature' });
   const type = req.get('x-github-event') || 'push';
+  if (type === 'ping') return res.json({ ok: true, pong: true });
   const out = dispatchEvent(type, req.body || {});
   if (out.error) return res.status(409).json(out);
   res.json({ ok: true, ...out });
+});
+
+// ── GitHub webhook setup: secret, public URL (cloudflared tunnel), per-repo hooks ──
+// The GitHub events we subscribe to, mapped to our trigger types.
+const HOOK_EVENTS = ['pull_request', 'pull_request_review', 'issue_comment', 'issues', 'push', 'check_run', 'check_suite', 'status', 'deployment_status', 'workflow_run', 'release'];
+const receiverUrl = () => { const base = meta('webhook_public_url', ''); return base ? base.replace(/\/$/, '') + '/api/webhooks/github' : ''; };
+let tunnelProc = null; let tunnelUrl = '';
+
+app.get('/api/webhooks/config', (_q, res) => res.json({
+  publicUrl: meta('webhook_public_url', ''),
+  receiverUrl: receiverUrl(),
+  secretSet: !!(process.env.GITHUB_WEBHOOK_SECRET || meta('webhook_secret', '')),
+  events: HOOK_EVENTS,
+  tunnel: { available: true, running: !!tunnelProc, url: tunnelUrl }, // cloudflared presence checked on start
+}));
+app.post('/api/webhooks/config', (req, res) => {
+  const url = String(req.body?.publicUrl || '').trim().replace(/\/$/, '');
+  if (url) { try { new URL(url); } catch { return res.status(400).json({ error: 'invalid URL' }); } }
+  setMeta('webhook_public_url', url);
+  res.json({ ok: true, publicUrl: url, receiverUrl: receiverUrl() });
+});
+app.post('/api/webhooks/secret', (_q, res) => {
+  const secret = crypto.randomBytes(24).toString('hex');
+  setMeta('webhook_secret', secret);
+  process.env.GITHUB_WEBHOOK_SECRET = secret;
+  res.json({ ok: true, secretSet: true }); // never returns the secret
+});
+
+// Quick public URL via cloudflared (no account needed) → auto-fills publicUrl.
+app.post('/api/webhooks/tunnel/start', (req, res) => {
+  if (tunnelProc) return res.json({ ok: true, url: tunnelUrl, already: true });
+  let child;
+  try { child = spawn('cloudflared', ['tunnel', '--url', `http://localhost:${PORT}`], { env: process.env }); }
+  catch (e) { return res.status(500).json({ error: `couldn't start cloudflared: ${e.message}` }); }
+  tunnelProc = child; tunnelUrl = '';
+  let done = false;
+  const finish = (payload, code) => { if (done) return; done = true; clearTimeout(timer); res.status(code || 200).json(payload); };
+  const scan = (d) => {
+    const m = String(d).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+    if (m && !tunnelUrl) { tunnelUrl = m[0]; setMeta('webhook_public_url', tunnelUrl); finish({ ok: true, url: tunnelUrl, receiverUrl: receiverUrl() }); }
+  };
+  child.stdout.on('data', scan); child.stderr.on('data', scan);
+  child.on('error', (e) => { tunnelProc = null; finish({ error: `cloudflared failed: ${e.message}` }, 500); });
+  child.on('exit', () => { if (tunnelProc === child) { tunnelProc = null; tunnelUrl = ''; } if (!done) finish({ error: 'cloudflared exited before a URL appeared' }, 500); });
+  const timer = setTimeout(() => finish({ error: 'cloudflared did not produce a URL in time' }, 504), 20_000);
+});
+app.post('/api/webhooks/tunnel/stop', (_q, res) => {
+  if (tunnelProc) { try { tunnelProc.kill(); } catch { /* ignore */ } tunnelProc = null; tunnelUrl = ''; }
+  res.json({ ok: true });
+});
+
+// Per-repo hooks via gh (needs the repo scope, which admins repo webhooks).
+app.get('/api/webhooks/hooks', async (req, res) => {
+  const repo = String(req.query.repo || '').trim();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return res.status(400).json({ error: 'repo must be owner/name' });
+  const r = await gh(['api', `repos/${repo}/hooks`]);
+  if (r.code !== 0) return res.status(502).json({ error: r.err || 'gh failed' });
+  let hooks; try { hooks = JSON.parse(r.out); } catch { hooks = []; }
+  const mine = receiverUrl();
+  res.json({ hooks: hooks.map((h) => ({ id: h.id, url: h.config?.url, active: h.active, events: h.events, ours: h.config?.url === mine })) });
+});
+app.post('/api/webhooks/setup', async (req, res) => {
+  const repo = String(req.body?.repo || '').trim();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return res.status(400).json({ error: 'repo must be owner/name' });
+  const url = receiverUrl();
+  if (!url) return res.status(400).json({ error: 'set a public URL (or start the tunnel) first' });
+  let secret = process.env.GITHUB_WEBHOOK_SECRET || meta('webhook_secret', '');
+  if (!secret) { secret = crypto.randomBytes(24).toString('hex'); setMeta('webhook_secret', secret); process.env.GITHUB_WEBHOOK_SECRET = secret; }
+  const args = ['api', `repos/${repo}/hooks`, '--method', 'POST', '-f', 'name=web', '-F', 'active=true',
+    '-f', `config[url]=${url}`, '-f', 'config[content_type]=json', '-f', `config[secret]=${secret}`,
+    ...HOOK_EVENTS.flatMap((e) => ['-f', `events[]=${e}`])];
+  const r = await gh(args);
+  if (r.code !== 0) {
+    const dup = /already exists|Hook already/i.test(r.err || '');
+    return res.status(dup ? 409 : 502).json({ error: dup ? 'a webhook for this URL already exists on the repo' : (r.err || 'gh failed').slice(0, 300) });
+  }
+  let hook; try { hook = JSON.parse(r.out); } catch { hook = {}; }
+  logActivity(`webhook installed on ${repo} → ${url}`, 'success');
+  res.json({ ok: true, id: hook.id, url, events: HOOK_EVENTS });
+});
+app.delete('/api/webhooks/hooks', async (req, res) => {
+  const repo = String(req.body?.repo || req.query.repo || '').trim();
+  const id = String(req.body?.id || req.query.id || '').trim();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^\d+$/.test(id)) return res.status(400).json({ error: 'repo (owner/name) + numeric id required' });
+  const r = await gh(['api', `repos/${repo}/hooks/${id}`, '--method', 'DELETE']);
+  if (r.code !== 0) return res.status(502).json({ error: r.err || 'gh failed' });
+  res.json({ ok: true });
 });
 
 function SAMPLE_PUSH() {
