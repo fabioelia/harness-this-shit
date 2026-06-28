@@ -169,6 +169,12 @@ export function useDispatchRoutine() {
     },
   });
 }
+export interface MetricHistory {
+  points: { runId: string; at: number; ago: string; value: number | null; raw: string }[];
+  numeric: boolean;
+  latest: { runId: string; at: number; ago: string; value: number | null; raw: string } | null;
+}
+export const useRoutineMetric = (slug: string, enabled = true) => useQuery({ queryKey: ['metric', slug], enabled, queryFn: () => get<MetricHistory>(`/api/routines/${slug}/metric?n=30`), refetchInterval: 15000 });
 export function useReplayRun() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (id: string) => post<{ ok: boolean; runId: string }>(`/api/runs/${id}/replay`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['runs'] }); } });

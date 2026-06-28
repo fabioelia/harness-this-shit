@@ -1461,6 +1461,18 @@ app.post('/api/routines/:slug/dispatch', (req, res) => {
   const event = req.body?.event ?? { event: 'manual', routine: r.slug, dispatched_at: new Date().toISOString() };
   res.json({ ok: true, runId: executeRoutine(r, event, 'manual'), status: 'running' });
 });
+// Metric history: the (numeric) value each successful run produced, over time.
+app.get('/api/routines/:slug/metric', (req, res) => {
+  if (!one('SELECT 1 FROM routines WHERE slug=?', req.params.slug)) return res.status(404).json({ error: 'not found' });
+  const n = Math.min(120, Math.max(2, parseInt(req.query.n, 10) || 30));
+  const rows = all("SELECT id, output, cost_usd, created_at FROM runs WHERE routine_slug=? AND status='succeeded' ORDER BY created_at DESC LIMIT ?", req.params.slug, n).reverse();
+  const points = rows.map((x) => {
+    const m = String(x.output || '').match(/-?\d[\d,]*\.?\d*/);
+    return { runId: x.id, at: x.created_at, ago: relTime(x.created_at), value: m ? Number(m[0].replace(/,/g, '')) : null, raw: String(x.output || '').replace(/\s+/g, ' ').slice(0, 80) };
+  });
+  const nums = points.filter((p) => p.value != null);
+  res.json({ points, numeric: nums.length >= 2, latest: points.length ? points[points.length - 1] : null });
+});
 // Rebuild a script routine's extractor: an agent run that recompiles the script.
 app.post('/api/routines/:slug/recompile', (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile } from '@/lib/api';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import type { FrontMatter, RoutineDetail } from '@/types';
 
@@ -88,6 +88,34 @@ function ReactiveFlowCard({ d }: { d: RoutineDetail }) {
   );
 }
 
+function MetricCard({ slug }: { slug: string }) {
+  const { data } = useRoutineMetric(slug, true);
+  if (!data || !data.numeric) return null;
+  const nums = data.points.filter((p) => p.value != null).map((p) => p.value as number);
+  const last = nums[nums.length - 1];
+  const prev = nums.length > 1 ? nums[nums.length - 2] : undefined;
+  const delta = prev != null ? last - prev : undefined;
+  const min = Math.min(...nums); const max = Math.max(...nums); const span = max - min || 1;
+  const W = 320; const H = 44;
+  const pts = nums.map((v, i) => `${(i / Math.max(1, nums.length - 1)) * W},${H - ((v - min) / span) * (H - 6) - 3}`).join(' ');
+  return (
+    <div className={CARD}>
+      <div className={`${LABEL} mb-3`}>Metric history · {nums.length} runs</div>
+      <div className="flex items-end gap-3">
+        <div>
+          <div className="font-display text-[28px] font-bold leading-none tracking-tight text-fg">{last.toLocaleString()}</div>
+          {delta != null && delta !== 0 && <div className={`mt-1 font-mono text-[11.5px] ${delta > 0 ? 'text-bad' : 'text-ok'}`}>{delta > 0 ? '▲' : '▼'} {Math.abs(delta).toLocaleString()} vs prev</div>}
+          {delta === 0 && <div className="mt-1 font-mono text-[11.5px] text-dim">unchanged</div>}
+        </div>
+        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="ml-auto" preserveAspectRatio="none">
+          <polyline points={pts} fill="none" stroke="var(--brand, #5b9ee6)" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
+          {nums.map((v, i) => <circle key={i} cx={(i / Math.max(1, nums.length - 1)) * W} cy={H - ((v - min) / span) * (H - 6) - 3} r={i === nums.length - 1 ? 2.5 : 1.2} fill="#5b9ee6" />)}
+        </svg>
+      </div>
+      <div className="mt-2 font-mono text-[11px] text-dim-2">latest <span className="text-t2">{data.latest?.ago}</span> · range {min.toLocaleString()}–{max.toLocaleString()} · the leading number in each successful run's output.</div>
+    </div>
+  );
+}
 function ScriptCard({ slug, lang, compiled, stale, script }: { slug: string; lang: string; compiled: boolean; stale: boolean; script: string }) {
   const recompile = useRecompile();
   return (
@@ -317,6 +345,7 @@ export function RoutineDetailPage() {
               )}
             </div>
           )}
+          <MetricCard slug={d.slug} />
           {d.scriptMode && <ScriptCard slug={d.slug} lang={d.scriptLang} compiled={d.compiled} stale={d.scriptStale} script={d.script} />}
           {d.memory && <MemoryCard slug={d.slug} />}
           {d.chain?.length > 0 && (
