@@ -1297,6 +1297,7 @@ app.get('/api/attention', (_q, res) => {
   const longRunning = all("SELECT routine_slug FROM runs WHERE status IN ('running','waiting') AND created_at < ?", now() - 8 * 60_000).length;
   const stale = rows.filter((r) => r.enabled).filter((r) => { const t = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND status='succeeded'", r.slug)?.t || 0; return t > 0 && now() - t > 7 * 86_400_000; }).length;
   const unowned = rows.filter((r) => r.enabled && (!r.owner || r.owner === 'unassigned')).length;
+  const awaitingReview = rows.filter((r) => r.review_status === 'needs_review').length;
   const items = [];
   if (critFailing) items.push({ kind: 'critical', n: critFailing, text: `${critFailing} CRITICAL routine${critFailing > 1 ? 's' : ''} failing`, link: '/?tier=critical' });
   if (failing.length) items.push({ kind: 'failing', n: failing.length, text: `${failing.length} routine${failing.length > 1 ? 's' : ''} failing`, link: '/?needsReview=1' });
@@ -1304,6 +1305,7 @@ app.get('/api/attention', (_q, res) => {
   if (warnings) items.push({ kind: 'config', n: warnings, text: `${warnings} config warning${warnings > 1 ? 's' : ''}`, link: '/insights' });
   if (stale) items.push({ kind: 'stale', n: stale, text: `${stale} routine${stale > 1 ? 's' : ''} stale (>7d)`, link: '/' });
   if (unowned) items.push({ kind: 'unowned', n: unowned, text: `${unowned} routine${unowned > 1 ? 's' : ''} with no owner`, link: '/?owner=unassigned' });
+  if (awaitingReview) items.push({ kind: 'review', n: awaitingReview, text: `${awaitingReview} change${awaitingReview > 1 ? 's' : ''} awaiting review`, link: '/?needsReview=1' });
   res.json({ total: items.reduce((a, i) => a + i.n, 0), items });
 });
 // Recommendations: analyze recent runs + config and suggest concrete optimizations.
