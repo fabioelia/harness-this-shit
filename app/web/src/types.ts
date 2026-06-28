@@ -28,6 +28,7 @@ export interface Routine {
   runCount: number;
   spend: string;
   avg: string;
+  inbox: number;
 }
 
 export interface FrontMatter {
@@ -54,6 +55,7 @@ export interface RoutineDetail extends Routine {
   runHistory: RunRow[];
   watches: Watch[];
   leases: { key: string; runId: string; sha: string; held: string; ttl: string }[];
+  inboxTasks: { summary: string; key: string; ago: string }[];
 }
 
 export interface RegistryServer {

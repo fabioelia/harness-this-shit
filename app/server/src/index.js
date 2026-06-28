@@ -256,6 +256,7 @@ const shapeRoutine = (r) => {
     state: r.enabled ? r.state : 'disabled', enabled: !!r.enabled,
     lastAgo: r.last_ago, lastStatus: r.last_status, next: r.next,
     recent, successRate, spend: r.spend, avg: r.avg, runCount: recent.length,
+    inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
   };
 };
 
@@ -760,7 +761,9 @@ app.get('/api/routines/:slug', (req, res) => {
   const watches = all('SELECT * FROM watches WHERE origin_routine=? ORDER BY created_at DESC LIMIT 20', r.slug).map(shapeWatch);
   const leases = all('SELECT * FROM leases WHERE routine_slug=? AND expires_at > ? ORDER BY acquired_at DESC', r.slug, now())
     .map((l) => ({ key: l.key, runId: l.run_id, sha: l.head_sha ? l.head_sha.slice(0, 7) : '', held: relTime(l.acquired_at), ttl: fmtDur(Math.max(0, l.expires_at - now())) }));
-  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases });
+  const inboxTasks = all("SELECT * FROM run_tasks WHERE routine_slug=? AND handled_by='' ORDER BY created_at DESC LIMIT 20", r.slug)
+    .map((t) => ({ summary: t.summary, key: t.lease_key, ago: relTime(t.created_at) }));
+  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks });
 });
 
 function insertRoutine(b) {

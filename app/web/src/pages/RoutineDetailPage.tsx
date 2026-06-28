@@ -277,6 +277,21 @@ export function RoutineDetailPage() {
                   ))}
                 </div>
               )}
+              {d.inboxTasks.length > 0 && (
+                <div className="mt-3 border-t border-line-soft pt-3">
+                  <div className="mb-1.5 font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-lease">Inbox · {d.inboxTasks.length} handed off, waiting</div>
+                  <div className="flex flex-col gap-1">
+                    {d.inboxTasks.map((t, i) => (
+                      <div key={i} className="flex items-center gap-2 font-mono text-[11px]">
+                        <Dot color="#e6b052" size={6} pulse />
+                        <span className="flex-1 truncate text-t2">{t.summary}</span>
+                        <span className="shrink-0 text-dim">{t.ago}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-1.5 text-[10.5px] text-dim-2">Coalesced events waiting for the running agent (or a drain run) to pick up.</div>
+                </div>
+              )}
             </div>
           )}
           {d.memory && <MemoryCard slug={d.slug} />}

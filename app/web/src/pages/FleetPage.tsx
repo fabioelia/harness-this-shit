@@ -68,7 +68,10 @@ function FleetRow({ r, i }: { r: Routine; i: number }) {
     >
       <div><Toggle on={r.enabled} onCheckedChange={(v) => toggle.mutate({ slug: r.slug, enabled: v })} /></div>
       <div className="min-w-0 pr-3.5">
-        <Link to={`/routines/${r.slug}`} className="block truncate font-display text-[14px] font-semibold text-fg-2 hover:text-brand">{r.name}</Link>
+        <div className="flex items-center gap-2">
+          <Link to={`/routines/${r.slug}`} className="truncate font-display text-[14px] font-semibold text-fg-2 hover:text-brand">{r.name}</Link>
+          {r.inbox > 0 && <Link to={`/routines/${r.slug}`} title={`${r.inbox} task${r.inbox > 1 ? 's' : ''} handed off, waiting to be picked up`} className="shrink-0 rounded-full border border-lease/40 bg-lease/10 px-1.5 py-px font-mono text-[10px] font-semibold text-lease">📥 {r.inbox}</Link>}
+        </div>
         <div className="mt-0.5 truncate font-sans text-[12px] text-muted-2">{r.summary}</div>
         <div className="mt-[3px] font-mono text-[11px] font-medium text-faint">{r.slug}.routine.md</div>
       </div>
