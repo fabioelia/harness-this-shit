@@ -132,12 +132,13 @@ dropdowns · Fleet inbox badge.
 | 107 | Change review / approval — edits flag needs-review, reviewer approves (recorded) | collaboration | ✅ done |
 | 108 | Owner workload view (per-person routines/failing/triage/runs/spend) | collaboration | ✅ done |
 | 109 | Per-team daily budget caps — throttle only the over-budget team | collaboration/governance | ✅ done |
+| 110 | Loop-3 QA checkpoint — collaboration endpoints + full page-render sweep | quality | ✅ done — 0 bugs |
 
 ### Loop-3 QA backlog (test at iteration 110)
-- [ ] (iter 107) substantive edit (prompt/triggers/etc) flags needs_review; approve records reviewer + clears it; non-substantive edits (name) do not flag; Fleet badge.
-- [ ] (iter 109) a team over its daily budget skips only its own routines (other teams run); cap=0 off; editable per-team in the By-team table.
-- [ ] (iter 103) comment post/list/delete; commentCount on detail; author persists in localStorage.
-- [ ] (iter 101) Fleet owner filter; routine-detail inline owner/team reassign persists via PUT.
+- [x] (iter 107) substantive edit (prompt/triggers/etc) flags needs_review; approve records reviewer + clears it; non-substantive edits (name) do not flag; Fleet badge.
+- [x] (iter 109) a team over its daily budget skips only its own routines (other teams run); cap=0 off; editable per-team in the By-team table.
+- [x] (iter 103) comment post/list/delete; commentCount on detail; author persists in localStorage.
+- [x] (iter 101) Fleet owner filter; routine-detail inline owner/team reassign persists via PUT.
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.
