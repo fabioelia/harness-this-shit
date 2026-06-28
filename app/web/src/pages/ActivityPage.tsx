@@ -18,8 +18,10 @@ export function ActivityPage() {
   const [showAudit, setShowAudit] = useState(false);
   const [q, setQ] = useState('');
   const [state, setState] = useState('all');
+  const PEOPLE_RE = /commented|mentioned|approved|handed over|review requested|signed off|snoozed|handover/i;
   const filtered = (activity ?? []).filter((a) => {
-    if (state !== 'all' && !STATE_GROUPS[state]?.includes(a.state)) return false;
+    if (state === 'people') { if (!PEOPLE_RE.test(a.text)) return false; }
+    else if (state !== 'all' && !STATE_GROUPS[state]?.includes(a.state)) return false;
     if (q.trim() && !a.text.toLowerCase().includes(q.toLowerCase())) return false;
     return true;
   });
@@ -106,7 +108,7 @@ export function ActivityPage() {
           <span className="font-display text-[11px] font-semibold uppercase tracking-[0.1em] text-t2">Live activity</span>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="filter…" className="h-8 min-w-[180px] flex-1 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
           <span className="inline-flex overflow-hidden rounded-md border border-line text-[11px] font-semibold">
-            {[['all', 'all'], ['success', 'ran'], ['failing', 'failed'], ['idle', 'skips'], ['queued', 'queued']].map(([v, l]) => (
+            {[['all', 'all'], ['people', 'people'], ['success', 'ran'], ['failing', 'failed'], ['idle', 'skips'], ['queued', 'queued']].map(([v, l]) => (
               <button key={v} onClick={() => setState(v)} className={cn('px-2 py-1 font-mono', state === v ? 'bg-brand/15 text-brand-soft' : 'text-dim hover:text-t2')}>{l}</button>
             ))}
           </span>
