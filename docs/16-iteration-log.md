@@ -76,6 +76,7 @@ dropdowns · Fleet inbox badge.
 | 55 | Cancel a running run — kill the live session, free lease, no retry | control/eliminating-humans | ✅ done |
 | 56 | Webhook delivery idempotency — drop repeated X-GitHub-Delivery within 10m | eliminating-humans/reliability | ✅ done |
 | 57 | Run activity heatmap (day-of-week × hour) on Insights | observability | ✅ done |
+| 58 | Saved Fleet views — named filter presets (apply/save/delete) | efficiency/UX | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [ ] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.

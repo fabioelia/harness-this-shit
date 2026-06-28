@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { useRoutines, useStats, useToggleRoutine, useKillSwitch, useConnectors, useLoadSamples, useImportRoutine, useBulkRoutines, usePinRoutine } from '@/lib/api';
+import { useRoutines, useStats, useToggleRoutine, useKillSwitch, useConnectors, useLoadSamples, useImportRoutine, useBulkRoutines, usePinRoutine, useFleetViews, useSaveView, useDeleteView } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { Routine, Stats } from '@/types';
@@ -121,6 +121,10 @@ export function FleetPage() {
   const loadSamples = useLoadSamples();
   const importRoutine = useImportRoutine();
   const bulk = useBulkRoutines();
+  const { data: views } = useFleetViews();
+  const saveView = useSaveView();
+  const deleteView = useDeleteView();
+  const applyView = (p: Record<string, string | boolean>) => { setQ(String(p.q || '')); setTeam(String(p.team || '')); setTrig(String(p.trig || '')); setConn(String(p.conn || '')); setTag(String(p.tag || '')); setNeedsReview(!!p.needsReview); };
   const [sel, setSel] = useState<Set<string>>(new Set());
   const onSelect = (slug: string) => setSel((prev) => { const n = new Set(prev); n.has(slug) ? n.delete(slug) : n.add(slug); return n; });
   const navigate = useNavigate();
@@ -243,6 +247,21 @@ export function FleetPage() {
           <button onClick={() => { setTeam(''); setTrig(''); setConn(''); setTag(''); setNeedsReview(false); setQ(''); }} className="font-mono text-[11px] text-dim hover:text-fg">clear</button>
         )}
         <span className="ml-auto text-[12px] text-dim">{list.length} of {routines?.length ?? 0}</span>
+      </div>
+
+      {/* saved views */}
+      <div className="mb-3.5 flex flex-wrap items-center gap-2">
+        <span className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-dim-2">Views</span>
+        {(views?.views ?? []).map((v) => (
+          <span key={v.name} className="inline-flex items-center gap-1 rounded-md border border-line bg-surface-2 py-1 pl-2.5 pr-1.5 text-[12px]">
+            <button onClick={() => applyView(v.params)} className="font-medium text-t2 hover:text-brand">{v.name}</button>
+            <button onClick={() => deleteView.mutate(v.name)} className="text-dim hover:text-bad" aria-label={`delete ${v.name}`}>×</button>
+          </span>
+        ))}
+        {(team || trig || conn || tag || needsReview || q) && (
+          <button onClick={() => { const name = prompt('Save current filters as view:'); if (name) saveView.mutate({ name, params: { q, team, trig, conn, tag, needsReview } }); }} className="font-mono text-[11.5px] text-brand-soft hover:underline">+ save current</button>
+        )}
+        {!(views?.views ?? []).length && !(team || trig || conn || tag || needsReview || q) && <span className="font-mono text-[11px] text-dim">apply filters, then “save current” to pin a preset</span>}
       </div>
 
       {/* table */}

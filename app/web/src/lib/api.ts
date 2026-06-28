@@ -112,6 +112,16 @@ export function usePinRoutine() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (slug: string) => post<{ ok: boolean; pinned: boolean }>(`/api/routines/${slug}/pin`), onSuccess: () => qc.invalidateQueries({ queryKey: ['routines'] }) });
 }
+export interface FleetView { name: string; params: Record<string, string | boolean> }
+export const useFleetViews = () => useQuery({ queryKey: ['views'], queryFn: () => get<{ views: FleetView[] }>('/api/views') });
+export function useSaveView() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (v: FleetView) => post('/api/views', v), onSuccess: () => qc.invalidateQueries({ queryKey: ['views'] }) });
+}
+export function useDeleteView() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (name: string) => del(`/api/views?name=${encodeURIComponent(name)}`), onSuccess: () => qc.invalidateQueries({ queryKey: ['views'] }) });
+}
 export function useBulkRoutines() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (b: { slugs: string[]; action: string; hours?: number; tag?: string }) => post<{ ok: boolean; affected: number }>('/api/routines/bulk', b), onSuccess: () => { qc.invalidateQueries({ queryKey: ['routines'] }); qc.invalidateQueries({ queryKey: ['stats'] }); } });

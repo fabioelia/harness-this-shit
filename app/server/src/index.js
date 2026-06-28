@@ -1450,6 +1450,22 @@ app.post('/api/routines/:slug/restore/:id', (req, res) => {
   logActivity(`${r.slug} prompt restored from a prior version`, 'idle');
   res.json({ ok: true });
 });
+// Saved Fleet views — named filter presets persisted in meta.
+const readViews = () => { try { return JSON.parse(metaGet('fleet_views', '[]')); } catch { return []; } };
+app.get('/api/views', (_q, res) => res.json({ views: readViews() }));
+app.post('/api/views', (req, res) => {
+  const name = String(req.body?.name || '').trim().slice(0, 40);
+  if (!name) return res.status(400).json({ error: 'a view name is required' });
+  const params = req.body?.params && typeof req.body.params === 'object' ? req.body.params : {};
+  const next = [...readViews().filter((v) => v.name !== name), { name, params }].slice(-20);
+  setMeta('fleet_views', JSON.stringify(next));
+  res.json({ views: next });
+});
+app.delete('/api/views', (req, res) => {
+  const next = readViews().filter((v) => v.name !== String(req.query.name || ''));
+  setMeta('fleet_views', JSON.stringify(next));
+  res.json({ views: next });
+});
 // Bulk operations across many routines at once.
 app.post('/api/routines/bulk', (req, res) => {
   const { slugs = [], action, hours, tag } = req.body || {};
