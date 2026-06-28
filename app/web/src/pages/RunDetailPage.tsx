@@ -105,7 +105,9 @@ export function RunDetailPage() {
   // Prefer the live stream whenever it's ahead of the last polled snapshot.
   const trace = liveTrace.length > r.trace.length ? liveTrace : r.trace;
   const shownTrace = trace.filter((e) => {
-    if (tType === 'tools' ? !(e.type === 'tool_use' || e.type === 'tool_result') : tType !== 'all' && e.type !== tType) return false;
+    if (tType === 'tools') { if (!(e.type === 'tool_use' || e.type === 'tool_result')) return false; }
+    else if (tType === 'errors') { if (!(e.type === 'tool_result' && e.ok === 0)) return false; }
+    else if (tType !== 'all' && e.type !== tType) return false;
     if (tQ.trim() && !`${e.tool || ''} ${e.text || ''} ${e.type}`.toLowerCase().includes(tQ.toLowerCase())) return false;
     return true;
   });
@@ -210,7 +212,7 @@ export function RunDetailPage() {
               {trace.length > 4 && (<>
                 <input value={tQ} onChange={(e) => setTQ(e.target.value)} placeholder="filter steps…" className="h-7 min-w-[120px] flex-1 rounded-md border border-line bg-surface-2 px-2 font-mono text-[11px] text-fg focus:border-brand/60 focus:outline-none" />
                 <span className="inline-flex overflow-hidden rounded-md border border-line text-[10.5px] font-semibold">
-                  {[['all','all'],['tools','tools'],['text','text'],['result','result']].map(([v,l]) => <button key={v} onClick={() => setTType(v)} className={cn('px-1.5 py-1 font-mono', tType===v ? 'bg-brand/15 text-brand-soft':'text-dim hover:text-t2')}>{l}</button>)}
+                  {(() => { const errN = trace.filter((e) => e.type === 'tool_result' && e.ok === 0).length; return [['all', 'all'], ['tools', 'tools'], ['text', 'text'], ['result', 'result'], ['errors', errN ? `errors ${errN}` : 'errors']].map(([v, l]) => <button key={v} onClick={() => setTType(v)} className={cn('px-1.5 py-1 font-mono', tType === v ? (v === 'errors' ? 'bg-bad/15 text-bad' : 'bg-brand/15 text-brand-soft') : v === 'errors' && errN ? 'text-bad/70 hover:text-bad' : 'text-dim hover:text-t2')}>{l}</button>); })()}
                 </span>
               </>)}
               <span className="font-mono text-[10.5px] font-medium text-dim">secrets redacted</span>
