@@ -135,7 +135,7 @@ const cleanFilters = (f) => {
   const o = f && typeof f === 'object' ? f : {};
   const arr = (x) => (Array.isArray(x) ? x.map((s) => String(s).trim()).filter(Boolean) : []);
   if (Array.isArray(o.groups)) {
-    const FIELDS = ['action', 'branch', 'base', 'label', 'author', 'title', 'draft'];
+    const FIELDS = ['action', 'check', 'branch', 'base', 'label', 'author', 'title', 'draft'];
     const OPS = ['is', 'is_not', 'contains', 'matches'];
     const groups = o.groups.map((g) => ({
       match: g && g.match === 'any' ? 'any' : 'all',
@@ -487,6 +487,7 @@ const isLabelEvent = (type, e) => LABEL_TYPES.has(type) && (e?.action === 'label
 // A condition's field → the event's value(s) for it (always an array).
 const FILTER_FIELDS = {
   action: (e) => eventStates(e),
+  check: (e) => [e?.check_run?.name, e?.check_suite?.app?.slug, e?.workflow_run?.name, e?.workflow_job?.name, e?.context, e?.deployment?.task].filter(Boolean),
   branch: (e) => [branchOf(e)].filter(Boolean),
   base: (e) => [e?.pull_request?.base?.ref].filter(Boolean),
   label: (e) => labelsOf(e),

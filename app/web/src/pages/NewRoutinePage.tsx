@@ -3,22 +3,6 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useCreateRoutine, useUpdateRoutine, useRoutine, useRoutines, useGithubRepos, useGithubOrgs, useGithubChecks, useGithubLabels, useModels, useMcp } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
-// Suggested GitHub actions/conclusions per trigger type — for the action pick-list.
-const ACTION_SUGGESTIONS: Record<string, string[]> = {
-  pull_request: ['opened', 'synchronize', 'reopened', 'closed', 'edited', 'ready_for_review', 'labeled', 'unlabeled', 'assigned', 'review_requested'],
-  pull_request_target: ['opened', 'synchronize', 'reopened', 'closed', 'labeled', 'unlabeled'],
-  pull_request_review: ['submitted', 'dismissed', 'edited'],
-  issues: ['opened', 'edited', 'closed', 'reopened', 'labeled', 'unlabeled', 'assigned'],
-  issue_comment: ['created', 'edited', 'deleted'],
-  label: ['labeled', 'unlabeled'],
-  release: ['published', 'released', 'prereleased', 'created', 'edited'],
-  check_run: ['completed', 'success', 'failure', 'neutral', 'cancelled', 'timed_out', 'action_required', 'skipped'],
-  check_suite: ['completed', 'success', 'failure', 'neutral', 'cancelled', 'timed_out'],
-  workflow_run: ['completed', 'requested', 'success', 'failure', 'cancelled'],
-  status: ['success', 'failure', 'error', 'pending'],
-  deployment_status: ['success', 'failure', 'error', 'pending', 'in_progress'],
-};
-
 // Dropdown of known values that also accepts free text — selected items become chips.
 function TokenPicker({ value, onChange, suggestions, placeholder }: { value: string; onChange: (v: string) => void; suggestions: string[]; placeholder: string }) {
   const tokens = value.split(',').map((s) => s.trim()).filter(Boolean);
@@ -53,11 +37,78 @@ function TokenPicker({ value, onChange, suggestions, placeholder }: { value: str
 
 type Cond = { field: string; op: string; values: string[] };
 type FilterGroup = { match: 'all' | 'any'; conditions: Cond[] };
+type ValueGroup = { label: string; items: string[] };
 const FILTER_FIELDS = [
-  { v: 'action', label: 'action / conclusion' }, { v: 'label', label: 'label' },
+  { v: 'action', label: 'action / conclusion' }, { v: 'check', label: 'check / job name' }, { v: 'label', label: 'label' },
   { v: 'branch', label: 'head branch' }, { v: 'base', label: 'base branch' },
   { v: 'author', label: 'author' }, { v: 'title', label: 'title' }, { v: 'draft', label: 'draft' },
 ];
+
+// Action/conclusion suggestions, grouped by category, contextual to the chosen triggers.
+function actionGroups(triggers: string[]): ValueGroup[] {
+  const has = (...t: string[]) => t.some((x) => triggers.includes(x));
+  const g: ValueGroup[] = [];
+  if (has('pull_request', 'pull_request_target', 'issues', 'label', 'issue_comment'))
+    g.push({ label: 'PR / issue actions', items: ['opened', 'synchronize', 'reopened', 'closed', 'edited', 'ready_for_review', 'labeled', 'unlabeled', 'assigned', 'created', 'deleted'] });
+  if (has('pull_request_review')) g.push({ label: 'Review', items: ['submitted', 'dismissed', 'approved', 'changes_requested', 'commented'] });
+  if (has('release')) g.push({ label: 'Release', items: ['published', 'released', 'prereleased', 'created', 'edited'] });
+  if (has('check_run', 'check_suite', 'workflow_run', 'status', 'deployment_status')) {
+    g.push({ label: 'CI conclusion', items: ['success', 'failure', 'neutral', 'cancelled', 'timed_out', 'action_required', 'skipped', 'error', 'pending'] });
+    g.push({ label: 'CI status', items: ['queued', 'in_progress', 'completed', 'requested'] });
+  }
+  return g.length ? g : [{ label: 'Actions', items: ['opened', 'closed', 'edited'] }];
+}
+
+// Dropdown of category-grouped values that also accepts free text; selections become chips.
+function GroupedPicker({ value, onChange, groups, placeholder }: { value: string; onChange: (v: string) => void; groups: ValueGroup[]; placeholder: string }) {
+  const tokens = value.split(',').map((s) => s.trim()).filter(Boolean);
+  const [draft, setDraft] = useState('');
+  const [open, setOpen] = useState(false);
+  const add = (v: string) => { const t = v.trim(); if (t && !tokens.includes(t)) onChange([...tokens, t].join(', ')); setDraft(''); };
+  const remove = (t: string) => onChange(tokens.filter((x) => x !== t).join(', '));
+  const q = draft.toLowerCase();
+  const filtered = groups
+    .map((g) => ({ label: g.label, items: g.items.filter((it) => !tokens.includes(it) && (!q || it.toLowerCase().includes(q))) }))
+    .filter((g) => g.items.length);
+  return (
+    <div className="relative">
+      {tokens.length > 0 && (
+        <div className="mb-1 flex flex-wrap gap-1">
+          {tokens.map((t) => (
+            <span key={t} className="inline-flex items-center gap-1 rounded border border-brand/40 bg-brand/10 py-0.5 pl-2 pr-1 font-mono text-[11px] text-brand-soft">
+              {t}<button type="button" onClick={() => remove(t)} className="text-brand/60 hover:text-brand" aria-label={`remove ${t}`}>×</button>
+            </span>
+          ))}
+        </div>
+      )}
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(draft); } }}
+        placeholder={placeholder}
+        className={cn(inputCls, 'h-8 font-mono text-[12px]')}
+      />
+      {open && (filtered.length > 0 || draft.trim()) && (
+        <div className="absolute z-20 mt-1 max-h-[260px] w-full overflow-auto rounded-md border border-line bg-surface-2 py-1 shadow-lg">
+          {draft.trim() && !filtered.some((g) => g.items.includes(draft.trim())) && (
+            <button type="button" onMouseDown={(e) => { e.preventDefault(); add(draft); }} className="block w-full px-2.5 py-1 text-left font-mono text-[12px] text-brand-soft hover:bg-brand/10">+ add “{draft.trim()}”</button>
+          )}
+          {filtered.map((g) => (
+            <div key={g.label} className="px-1 pb-0.5">
+              {g.label && <div className="px-1.5 pt-1.5 pb-0.5 font-display text-[9.5px] font-semibold uppercase tracking-[0.08em] text-dim-2">{g.label}</div>}
+              {g.items.map((it) => (
+                <button key={it} type="button" onMouseDown={(e) => { e.preventDefault(); add(it); }} className="block w-full rounded px-1.5 py-0.5 text-left font-mono text-[12px] text-t2 hover:bg-brand/10 hover:text-brand-soft">{it}</button>
+              ))}
+            </div>
+          ))}
+          {!filtered.length && !draft.trim() && <div className="px-2.5 py-1 font-mono text-[11px] text-dim">no suggestions — type a value</div>}
+        </div>
+      )}
+    </div>
+  );
+}
 const FILTER_OPS = [
   { v: 'is', label: 'is any of' }, { v: 'is_not', label: 'is none of' },
   { v: 'contains', label: 'contains' }, { v: 'matches', label: 'matches /regex/' },
@@ -68,9 +119,9 @@ const AndOr = ({ value, onChange, labels }: { value: 'all' | 'any'; onChange: (v
   </span>
 );
 
-function FilterBuilder({ top, setTop, groups, setGroups, actionSuggestions, labelSuggestions }: {
+function FilterBuilder({ top, setTop, groups, setGroups, valueGroups }: {
   top: 'all' | 'any'; setTop: (v: 'all' | 'any') => void; groups: FilterGroup[]; setGroups: (g: FilterGroup[]) => void;
-  actionSuggestions: string[]; labelSuggestions: string[];
+  valueGroups: (field: string) => ValueGroup[];
 }) {
   const setGroup = (gi: number, g: FilterGroup) => setGroups(groups.map((x, i) => (i === gi ? g : x)));
   const addGroup = () => setGroups([...groups, { match: 'all', conditions: [{ field: 'action', op: 'is', values: [] }] }]);
@@ -78,7 +129,6 @@ function FilterBuilder({ top, setTop, groups, setGroups, actionSuggestions, labe
   const setCond = (gi: number, ci: number, c: Cond) => setGroup(gi, { ...groups[gi], conditions: groups[gi].conditions.map((x, i) => (i === ci ? c : x)) });
   const addCond = (gi: number) => setGroup(gi, { ...groups[gi], conditions: [...groups[gi].conditions, { field: 'action', op: 'is', values: [] }] });
   const removeCond = (gi: number, ci: number) => setGroup(gi, { ...groups[gi], conditions: groups[gi].conditions.filter((_, i) => i !== ci) });
-  const suggFor = (field: string) => (field === 'action' ? actionSuggestions : field === 'label' ? labelSuggestions : field === 'draft' ? ['true', 'false'] : []);
   const sel = 'h-7 shrink-0 rounded-md border border-line bg-surface-2 px-1.5 font-mono text-[11px] text-fg focus:border-brand/60 focus:outline-none';
   if (!groups.length) return (
     <button type="button" onClick={addGroup} className="rounded-md border border-dashed border-line px-3 py-1.5 font-mono text-[11.5px] text-dim hover:border-hair hover:text-t2">+ add a filter</button>
@@ -105,7 +155,7 @@ function FilterBuilder({ top, setTop, groups, setGroups, actionSuggestions, labe
                     <select value={c.field} onChange={(e) => setCond(gi, ci, { ...c, field: e.target.value, values: [] })} className={sel}>{FILTER_FIELDS.map((f) => <option key={f.v} value={f.v}>{f.label}</option>)}</select>
                     <select value={c.op} onChange={(e) => setCond(gi, ci, { ...c, op: e.target.value })} className={sel}>{FILTER_OPS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}</select>
                     <div className="min-w-0 flex-1">
-                      <TokenPicker value={c.values.join(', ')} onChange={(v) => setCond(gi, ci, { ...c, values: v.split(',').map((s) => s.trim()).filter(Boolean) })} suggestions={suggFor(c.field)} placeholder={c.op === 'matches' ? 'regex…' : 'value…'} />
+                      <GroupedPicker value={c.values.join(', ')} onChange={(v) => setCond(gi, ci, { ...c, values: v.split(',').map((s) => s.trim()).filter(Boolean) })} groups={c.op === 'contains' || c.op === 'matches' ? [] : valueGroups(c.field)} placeholder={c.op === 'matches' ? 'regex…' : 'value…'} />
                     </div>
                     <button type="button" onClick={() => removeCond(gi, ci)} className="mt-1 shrink-0 text-dim hover:text-bad" aria-label="remove condition">✕</button>
                   </div>
@@ -372,8 +422,16 @@ export function NewRoutinePage() {
   // CI / GitHub events that carry an `action` and can be filtered.
   const actionable = triggers.some((t) => ['pull_request', 'pull_request_review', 'issues', 'issue_comment', 'label', 'release', 'check_run', 'check_suite', 'workflow_run', 'deployment_status'].includes(t));
   const labelable = triggers.some((t) => ['label', 'pull_request', 'pull_request_target', 'issues'].includes(t));
-  const actionSuggestions = [...new Set(triggers.flatMap((t) => ACTION_SUGGESTIONS[t] || []))];
-  const { data: labelsData } = useGithubLabels(repo.split(',')[0]?.trim() || '');
+  const firstRepoSel = repo.split(',')[0]?.trim() || '';
+  const { data: labelsData } = useGithubLabels(firstRepoSel);
+  const { data: repoChecksData } = useGithubChecks(firstRepoSel);
+  const valueGroups = (field: string): ValueGroup[] => {
+    if (field === 'action') return actionGroups(triggers);
+    if (field === 'check') return [{ label: repoChecksData?.checks?.length ? `${firstRepoSel} jobs / checks` : 'no checks found yet — type a name', items: repoChecksData?.checks ?? [] }];
+    if (field === 'label') return [{ label: labelsData?.labels?.length ? `${firstRepoSel} labels` : 'labels', items: labelsData?.labels ?? [] }];
+    if (field === 'draft') return [{ label: '', items: ['true', 'false'] }];
+    return [];
+  };
   const cleanGroups = filterGroups
     .map((g) => ({ match: g.match, conditions: g.conditions.filter((c) => c.values.length || c.op === 'is_not') }))
     .filter((g) => g.conditions.length);
@@ -537,7 +595,7 @@ export function NewRoutinePage() {
                   <span className={LABEL.replace('mb-1.5', '')}>Refine · run only when the event matches</span>
                   {!filterGroups.length && <span className="font-mono text-[10.5px] text-dim-3">optional — blank = every event</span>}
                 </div>
-                <FilterBuilder top={filterTop} setTop={setFilterTop} groups={filterGroups} setGroups={setFilterGroups} actionSuggestions={actionSuggestions} labelSuggestions={labelsData?.labels ?? []} />
+                <FilterBuilder top={filterTop} setTop={setFilterTop} groups={filterGroups} setGroups={setFilterGroups} valueGroups={valueGroups} />
                 <div className="mt-1.5 text-[11px] text-dim-2">Build conditions on the event — <span className="font-mono">action</span>, <span className="font-mono">label</span>, <span className="font-mono">branch</span>, <span className="font-mono">author</span>, <span className="font-mono">title</span>… Group them with <span className="font-semibold text-t2">all (AND)</span> / <span className="font-semibold text-t2">any (OR)</span> for logic like <span className="font-mono">(opened AND jira-ticket) OR (push to main)</span>.</div>
               </div>
             )}

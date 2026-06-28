@@ -12,6 +12,14 @@
     <script>
       // Apply the saved theme before paint to avoid a flash.
       try { if (localStorage.getItem('sb-theme') === 'light') document.documentElement.classList.add('light'); } catch (e) {}
+      // frontend-debug bridge — dev only (localhost), survives navigation.
+      try {
+        if (['localhost', '127.0.0.1'].includes(location.hostname)) {
+          var s = document.createElement('script');
+          s.src = 'http://127.0.0.1:8765/client.js?app=harness';
+          document.head.appendChild(s);
+        }
+      } catch (e) {}
     </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
