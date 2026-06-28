@@ -1188,6 +1188,22 @@ app.get('/api/heatmap', (req, res) => {
   }
   res.json({ grid, max: Math.max(1, ...grid.flat()), days });
 });
+// Owner workload: per-person load — routines owned, health, spend, open triage assigned.
+app.get('/api/owners', (req, res) => {
+  const since = now() - 14 * 86_400_000;
+  const runAgg = {};
+  for (const x of all('SELECT routine_slug, status, cost_usd FROM runs WHERE created_at > ?', since)) { const e = (runAgg[x.routine_slug] ||= { runs: 0, fails: 0, cost: 0 }); e.runs++; if (x.status === 'failed') e.fails++; e.cost += x.cost_usd || 0; }
+  const owners = {};
+  for (const r of all('SELECT slug,owner,enabled,last_status FROM routines WHERE archived=0')) {
+    const o = (r.owner || '').trim() || 'unassigned';
+    const e = (owners[o] ||= { owner: o, routines: 0, enabled: 0, failing: 0, runs: 0, cost: 0 });
+    e.routines++; if (r.enabled) e.enabled++; if (r.enabled && r.last_status === 'failing') e.failing++;
+    const a = runAgg[r.slug]; if (a) { e.runs += a.runs; e.cost += a.cost; }
+  }
+  const assigned = {};
+  for (const x of all("SELECT assignee FROM runs WHERE assignee != '' AND triage != 'resolved'")) assigned[x.assignee] = (assigned[x.assignee] || 0) + 1;
+  res.json({ owners: Object.values(owners).map((o) => ({ ...o, cost: +o.cost.toFixed(2), assignedOpen: assigned[o.owner] || 0 })).sort((a, b) => b.routines - a.routines) });
+});
 // Team rollup: per-team ownership, health, and spend — how the org's work divides up.
 app.get('/api/teams', (req, res) => {
   const since = now() - 14 * 86_400_000;

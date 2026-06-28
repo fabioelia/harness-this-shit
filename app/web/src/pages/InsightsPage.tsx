@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures, useHeatmap, useReleaseLease, usePruneRuns, useSetRetention, useActiveRuns, useRecommendations, useTeams } from '@/lib/api';
+import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures, useHeatmap, useReleaseLease, usePruneRuns, useSetRetention, useActiveRuns, useRecommendations, useTeams, useOwners } from '@/lib/api';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -25,6 +25,7 @@ export function InsightsPage() {
   const { data: active } = useActiveRuns();
   const { data: recs } = useRecommendations();
   const { data: teams } = useTeams();
+  const { data: owners } = useOwners();
   const setDigest = useSetDigest();
   const sendDigest = useSendDigest();
   const [capDraft, setCapDraft] = useState('');
@@ -366,6 +367,31 @@ export function InsightsPage() {
                   {d.byEffort.map((e) => (
                     <span key={e.effort} className="rounded-md border border-line bg-surface-2 px-2.5 py-1 font-mono text-[12px]"><span className="text-t2">{e.effort}</span> <span className="text-dim-2">${e.cost.toFixed(2)}</span> <span className="text-dim">· {e.runs}r</span></span>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {owners && owners.owners.length > 0 && (
+              <div className={`${CARD} mb-[18px]`}>
+                <div className={`${LABEL} mb-3`}>By owner · {owners.owners.length}</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[12.5px]">
+                    <thead><tr className="border-b border-line-soft text-left font-display text-[10px] font-semibold uppercase tracking-[0.06em] text-dim-2">
+                      <th className="pb-2 pr-3 font-medium">Owner</th><th className="pb-2 px-3 text-right font-medium">Routines</th><th className="pb-2 px-3 text-right font-medium">Failing</th><th className="pb-2 px-3 text-right font-medium">Open triage</th><th className="pb-2 px-3 text-right font-medium">Runs·14d</th><th className="pb-2 pl-3 text-right font-medium">Spend</th>
+                    </tr></thead>
+                    <tbody className="font-mono">
+                      {owners.owners.map((o) => (
+                        <tr key={o.owner} className="border-b border-line-soft last:border-0">
+                          <td className="py-2 pr-3"><Link to={`/?owner=${encodeURIComponent(o.owner)}`} className="font-sans font-semibold text-t2 hover:text-brand">{o.owner}</Link></td>
+                          <td className="py-2 px-3 text-right text-muted-2">{o.enabled}/{o.routines}</td>
+                          <td className="py-2 px-3 text-right"><span className={o.failing ? 'text-bad' : 'text-dim'}>{o.failing}</span></td>
+                          <td className="py-2 px-3 text-right"><span className={o.assignedOpen ? 'text-warn' : 'text-dim'}>{o.assignedOpen}</span></td>
+                          <td className="py-2 px-3 text-right text-muted-2">{o.runs}</td>
+                          <td className="py-2 pl-3 text-right text-t2">${o.cost.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}

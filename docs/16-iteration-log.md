@@ -130,6 +130,7 @@ dropdowns · Fleet inbox badge.
 | 105 | Run handoff — assign a run to a teammate + triage status (open/investigating/resolved) | collaboration | ✅ done |
 | 106 | Triage queue — shared list of unresolved failed runs (assignee + status) | collaboration | ✅ done |
 | 107 | Change review / approval — edits flag needs-review, reviewer approves (recorded) | collaboration | ✅ done |
+| 108 | Owner workload view (per-person routines/failing/triage/runs/spend) | collaboration | ✅ done |
 
 ### Loop-3 QA backlog (test at iteration 110)
 - [ ] (iter 107) substantive edit (prompt/triggers/etc) flags needs_review; approve records reviewer + clears it; non-substantive edits (name) do not flag; Fleet badge.
