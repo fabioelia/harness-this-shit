@@ -78,6 +78,7 @@ function FleetRow({ r, i }: { r: Routine; i: number }) {
       </div>
       <div className="flex flex-wrap gap-[5px] pr-3.5">
         {r.triggers.map((t) => <Chip key={t}>{t}</Chip>)}
+        {(r.tags || []).map((t) => <span key={t} className="rounded-[4px] border border-line bg-surface-2 px-1.5 py-px font-mono text-[10px] text-dim-2">#{t}</span>)}
       </div>
       <div className="flex min-w-0 items-center gap-[9px]">
         <Avatar color={r.ownerColor} initials={r.initials} />
@@ -121,6 +122,7 @@ export function FleetPage() {
   const [q, setQ] = useState('');
   const [team, setTeam] = useState('');
   const [trig, setTrig] = useState('');
+  const [tag, setTag] = useState('');
   const [conn, setConn] = useState('');
   const [needsReview, setNeedsReview] = useState(false);
   const [params] = useSearchParams();
@@ -142,9 +144,9 @@ export function FleetPage() {
   }, [params]);
 
   const opts = useMemo(() => {
-    const teams = new Set<string>(), trigs = new Set<string>(), conns = new Set<string>();
-    (routines ?? []).forEach((r) => { if (r.team) teams.add(r.team); r.triggers.forEach((t) => trigs.add(t)); r.connectors.forEach((c) => conns.add(c)); });
-    return { teams: [...teams], trigs: [...trigs], conns: [...conns] };
+    const teams = new Set<string>(), trigs = new Set<string>(), conns = new Set<string>(), tags = new Set<string>();
+    (routines ?? []).forEach((r) => { if (r.team) teams.add(r.team); r.triggers.forEach((t) => trigs.add(t)); r.connectors.forEach((c) => conns.add(c)); (r.tags || []).forEach((t) => tags.add(t)); });
+    return { teams: [...teams], trigs: [...trigs], conns: [...conns], tags: [...tags] };
   }, [routines]);
 
   const list = (routines ?? []).filter((r) => {
@@ -152,6 +154,7 @@ export function FleetPage() {
     if (team && r.team !== team) return false;
     if (trig && !r.triggers.includes(trig)) return false;
     if (conn && !r.connectors.includes(conn)) return false;
+    if (tag && !(r.tags || []).includes(tag)) return false;
     if (needsReview && !(r.state === 'failing' || r.lastStatus === 'failing' || (r.successRate != null && r.successRate < 75))) return false;
     return true;
   });
@@ -218,6 +221,7 @@ export function FleetPage() {
         <FilterSelect value={team} onChange={setTeam} label="Team" options={opts.teams} />
         <FilterSelect value={trig} onChange={setTrig} label="Trigger" options={opts.trigs} />
         <FilterSelect value={conn} onChange={setConn} label="Connector" options={opts.conns} />
+        {opts.tags.length > 0 && <FilterSelect value={tag} onChange={setTag} label="Tag" options={opts.tags} />}
         <button
           onClick={() => setNeedsReview((v) => !v)}
           className={cn(
@@ -228,8 +232,8 @@ export function FleetPage() {
           Health: needs review
           {needsReview && <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="#d8b486" strokeWidth="1.4"><path d="M3 3 L7 7 M7 3 L3 7" strokeLinecap="round" /></svg>}
         </button>
-        {(team || trig || conn || needsReview || q) && (
-          <button onClick={() => { setTeam(''); setTrig(''); setConn(''); setNeedsReview(false); setQ(''); }} className="font-mono text-[11px] text-dim hover:text-fg">clear</button>
+        {(team || trig || conn || tag || needsReview || q) && (
+          <button onClick={() => { setTeam(''); setTrig(''); setConn(''); setTag(''); setNeedsReview(false); setQ(''); }} className="font-mono text-[11px] text-dim hover:text-fg">clear</button>
         )}
         <span className="ml-auto text-[12px] text-dim">{list.length} of {routines?.length ?? 0}</span>
       </div>

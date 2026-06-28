@@ -40,6 +40,7 @@ export interface Routine {
   timeout: number;
   snoozedUntil: number;
   env: Record<string, string>;
+  tags: string[];
 }
 
 export interface FrontMatter {

@@ -165,6 +165,7 @@ export function getDb() {
   ensure('routines', 'timeout_s', 'timeout_s INTEGER NOT NULL DEFAULT 0');
   ensure('routines', 'snooze_until', 'snooze_until INTEGER NOT NULL DEFAULT 0');
   ensure('routines', 'env', "env TEXT NOT NULL DEFAULT '{}'");
+  ensure('routines', 'tags', "tags TEXT NOT NULL DEFAULT '[]'");
   ensure('runs', 'assert_result', "assert_result TEXT NOT NULL DEFAULT ''");
   ensure('runs', 'dur_ms', 'dur_ms INTEGER');
   const n = _db.prepare('SELECT COUNT(*) AS n FROM routines').get();
