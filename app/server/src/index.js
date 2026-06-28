@@ -2329,6 +2329,11 @@ app.post('/api/routines/:slug/enable', (req, res) => {
   if (!!r.enabled !== !!en) run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', r.slug, en ? 'enabled' : 'disabled', now());
   res.json({ ok: true, enabled: !!en });
 });
+// Mentions feed — recent @mentions from comments (directed asks).
+app.get('/api/mentions', (req, res) => {
+  const rows = all('SELECT mentioned, by, slug, snippet, created_at FROM mentions ORDER BY id DESC LIMIT 30');
+  res.json({ mentions: rows.map((m) => ({ mentioned: m.mentioned, by: m.by || 'anon', slug: m.slug, snippet: m.snippet, ago: relTime(m.created_at) })) });
+});
 // Routine discussion — team comments / context that lives with the routine.
 app.get('/api/routines/:slug/comments', (req, res) => {
   const rows = all('SELECT id, author, body, created_at FROM comments WHERE slug=? ORDER BY id', req.params.slug);
@@ -2341,6 +2346,8 @@ app.post('/api/routines/:slug/comments', (req, res) => {
   const author = String(req.body?.author || '').trim().slice(0, 40) || 'anon';
   run('INSERT INTO comments (slug, author, body, created_at) VALUES (?,?,?,?)', req.params.slug, author, body, now());
   logActivity(`${author} commented on ${req.params.slug}`, 'idle');
+  const mentioned = [...new Set((body.match(/@([a-z0-9_.-]+)/gi) || []).map((m) => m.slice(1)))];
+  for (const who of mentioned) { run('INSERT INTO mentions (mentioned, by, slug, snippet, created_at) VALUES (?,?,?,?,?)', who, author, req.params.slug, body.slice(0, 100), now()); logActivity(`@${who} mentioned by ${author} on ${req.params.slug}`, 'idle'); }
   res.status(201).json({ ok: true });
 });
 app.delete('/api/routines/:slug/comments/:id', (req, res) => {

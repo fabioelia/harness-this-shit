@@ -184,6 +184,7 @@ export function getDb() {
   _db.exec('CREATE TABLE IF NOT EXISTS routine_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, summary TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)');
   _db.exec('CREATE TABLE IF NOT EXISTS comments (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, author TEXT NOT NULL DEFAULT \'\', body TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)');
   _db.exec('CREATE INDEX IF NOT EXISTS idx_comments_slug ON comments(slug, id)');
+  _db.exec('CREATE TABLE IF NOT EXISTS mentions (id INTEGER PRIMARY KEY AUTOINCREMENT, mentioned TEXT NOT NULL, by TEXT NOT NULL DEFAULT \'\', slug TEXT NOT NULL, snippet TEXT NOT NULL DEFAULT \'\', created_at INTEGER NOT NULL DEFAULT 0)');
   _db.exec('CREATE INDEX IF NOT EXISTS idx_routine_audit_slug ON routine_audit(slug, id)');
   _db.exec('CREATE INDEX IF NOT EXISTS idx_prompt_history_slug ON prompt_history(slug, id)');
   ensure('runs', 'assert_result', "assert_result TEXT NOT NULL DEFAULT ''");

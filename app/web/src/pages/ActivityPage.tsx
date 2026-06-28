@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { useActivity } from '@/lib/api';
+import { Link } from 'react-router-dom';
+import { useActivity, useMentions } from '@/lib/api';
 import { Dot, Empty } from '@/components/sb';
 import { cn } from '@/lib/utils';
 
@@ -7,6 +8,7 @@ const STATE_GROUPS: Record<string, string[]> = { success: ['success'], failing: 
 
 export function ActivityPage() {
   const { data: activity } = useActivity();
+  const { data: mentions } = useMentions();
   const [q, setQ] = useState('');
   const [state, setState] = useState('all');
   const filtered = (activity ?? []).filter((a) => {
@@ -22,6 +24,19 @@ export function ActivityPage() {
         <div className="mt-1 text-[13px] text-muted-2">The live event log — runs that fired, and dispatch decisions (skips, kill-switch drops).</div>
       </div>
       <div className="mx-auto max-w-[860px] px-[26px] py-6">
+        {mentions && mentions.mentions.length > 0 && (
+          <div className="mb-5 overflow-hidden rounded-xl border border-brand/30 bg-brand/[0.04]">
+            <div className="border-b border-line-soft px-4 py-2 font-display text-[11px] font-semibold uppercase tracking-[0.07em] text-brand-soft">@ Mentions</div>
+            {mentions.mentions.slice(0, 6).map((mn, i) => (
+              <Link key={i} to={`/routines/${mn.slug}`} className="flex items-start gap-2 border-b border-line-soft px-4 py-2 last:border-0 font-mono text-[11.5px] hover:bg-white/[0.015]">
+                <span className="shrink-0 font-semibold text-brand-soft">@{mn.mentioned}</span>
+                <span className="text-dim">by {mn.by} on {mn.slug}</span>
+                <span className="flex-1 truncate text-dim-2">“{mn.snippet}”</span>
+                <span className="shrink-0 text-dim">{mn.ago}</span>
+              </Link>
+            ))}
+          </div>
+        )}
         <div className="mb-3 flex flex-wrap items-center gap-2.5">
           <Dot color="#5fbf86" size={8} pulse />
           <span className="font-display text-[11px] font-semibold uppercase tracking-[0.1em] text-t2">Live activity</span>
