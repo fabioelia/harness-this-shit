@@ -79,6 +79,7 @@ dropdowns · Fleet inbox badge.
 | 58 | Saved Fleet views — named filter presets (apply/save/delete) | efficiency/UX | ✅ done |
 | 59 | "Why it fired" — per-condition trigger/repo/filter match explanation on a run | reproducibility/observability | ✅ done |
 | 60 | Loop-2 QA checkpoint — endpoints + all-page render sweep | quality | ✅ done — 0 bugs |
+| 61 | Cost attribution by tag (spend/runs per routine tag) | observability/efficiency | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.
