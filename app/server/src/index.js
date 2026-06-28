@@ -1837,6 +1837,7 @@ app.post('/api/routines/bulk', (req, res) => {
     else if (action === 'snooze') run('UPDATE routines SET snooze_until=? WHERE slug=?', now() + (Number(hours) || 4) * 3_600_000, slug);
     else if (action === 'unsnooze') run('UPDATE routines SET snooze_until=0 WHERE slug=?', slug);
     else if (action === 'tag' && tag) { const cur = j(one('SELECT tags FROM routines WHERE slug=?', slug).tags); if (!cur.includes(tag)) run('UPDATE routines SET tags=? WHERE slug=?', JSON.stringify([...cur, String(tag).trim()]), slug); }
+    else if (action === 'owner') run('UPDATE routines SET owner=? WHERE slug=?', String(req.body?.owner || '').trim() || 'unassigned', slug);
     else if (action === 'delete') run('DELETE FROM routines WHERE slug=?', slug);
     else continue;
     n++;

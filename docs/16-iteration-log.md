@@ -151,6 +151,7 @@ dropdowns · Fleet inbox badge.
 | 126 | Quick triage actions (→me / resolve inline from the triage queue) | collaboration/efficiency | ✅ done |
 | 127 | Unowned-routine governance (lint warning + attention rollup) | collaboration/governance | ✅ done |
 | 128 | Two-person rule — critical routines always gate + approver must differ from editor | collaboration/governance | ✅ done |
+| 129 | Bulk owner reassignment (Fleet bulk op — offboarding) | collaboration/efficiency | ✅ done |
 
 ### Loop-3 QA backlog (test at iteration 110)
 - [x] (iter 107) substantive edit (prompt/triggers/etc) flags needs_review; approve records reviewer + clears it; non-substantive edits (name) do not flag; Fleet badge.

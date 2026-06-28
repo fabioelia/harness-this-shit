@@ -158,7 +158,7 @@ export function useDeleteView() {
 }
 export function useBulkRoutines() {
   const qc = useQueryClient();
-  return useMutation({ mutationFn: (b: { slugs: string[]; action: string; hours?: number; tag?: string }) => post<{ ok: boolean; affected: number }>('/api/routines/bulk', b), onSuccess: () => { qc.invalidateQueries({ queryKey: ['routines'] }); qc.invalidateQueries({ queryKey: ['stats'] }); } });
+  return useMutation({ mutationFn: (b: { slugs: string[]; action: string; hours?: number; tag?: string; owner?: string }) => post<{ ok: boolean; affected: number }>('/api/routines/bulk', b), onSuccess: () => { qc.invalidateQueries({ queryKey: ['routines'] }); qc.invalidateQueries({ queryKey: ['stats'] }); } });
 }
 export const useRoutines = (archived = false) => useQuery({ queryKey: ['routines', archived], queryFn: () => get<Routine[]>(`/api/routines${archived ? '?archived=1' : ''}`), refetchInterval: 10000 });
 export function useApproveRoutine() {
