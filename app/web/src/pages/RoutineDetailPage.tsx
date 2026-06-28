@@ -362,8 +362,9 @@ export function RoutineDetailPage() {
 
   const killed = !!stats?.killSwitch;
   const runNow = () => { setMsg(null); dispatch.mutate(d.slug, { onSuccess: (res) => navigate(`/runs/${res.runId}`), onError: (e) => setMsg({ text: (e as Error).message, tone: 'bad' }) }); };
-  const onKill = () => { if (confirm(`Disable “${d.name}”? It will stop firing on its triggers.`)) toggle.mutate({ slug: d.slug, enabled: false }); };
-  const onDelete = () => { if (confirm(`Delete “${d.name}” and its run history? This cannot be undone.`)) del.mutate(d.slug, { onSuccess: () => navigate('/') }); };
+  const blast = () => { const deps = (d.dependents || []).filter((x) => x.enabled); return deps.length ? `\n\n⚠ Blast radius — this breaks ${deps.length} downstream flow(s):\n${deps.map((x) => `• ${x.name} (via ${x.via})`).join('\n')}` : ''; };
+  const onKill = () => { if (confirm(`Disable “${d.name}”? It will stop firing on its triggers.${blast()}`)) toggle.mutate({ slug: d.slug, enabled: false }); };
+  const onDelete = () => { if (confirm(`Delete “${d.name}” and its run history? This cannot be undone.${blast()}`)) del.mutate(d.slug, { onSuccess: () => navigate('/') }); };
   const simulatePush = () => {
     setMsg(null);
     const repo = (d.repo || '').split(',').map((s) => s.trim()).filter(Boolean)[0];
