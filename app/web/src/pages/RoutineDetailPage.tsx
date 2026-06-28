@@ -89,6 +89,29 @@ function ReactiveFlowCard({ d }: { d: RoutineDetail }) {
   );
 }
 
+function CostTrendCard({ trend }: { trend: number[] }) {
+  if (!trend || trend.length < 3) return null;
+  const last = trend[trend.length - 1];
+  const avg = trend.reduce((a, b) => a + b, 0) / trend.length;
+  const min = Math.min(...trend), max = Math.max(...trend), span = max - min || 1;
+  const W = 320, H = 40;
+  const pts = trend.map((v, i) => `${(i / Math.max(1, trend.length - 1)) * W},${H - ((v - min) / span) * (H - 6) - 3}`).join(' ');
+  return (
+    <div className={CARD}>
+      <div className={`${LABEL} mb-3`}>Cost per run · last {trend.length}</div>
+      <div className="flex items-end gap-3">
+        <div>
+          <div className="font-display text-[24px] font-bold leading-none tracking-tight text-fg">${last.toFixed(4)}</div>
+          <div className={`mt-1 font-mono text-[11px] ${last > avg * 1.3 ? 'text-bad' : 'text-dim-2'}`}>avg ${avg.toFixed(4)}{last > avg * 1.3 ? ' · above avg' : ''}</div>
+        </div>
+        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="ml-auto" preserveAspectRatio="none">
+          <polyline points={pts} fill="none" stroke="#5fbf86" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
+          {trend.map((v, i) => <circle key={i} cx={(i / Math.max(1, trend.length - 1)) * W} cy={H - ((v - min) / span) * (H - 6) - 3} r={i === trend.length - 1 ? 2.5 : 1} fill="#5fbf86" />)}
+        </svg>
+      </div>
+    </div>
+  );
+}
 function AuditCard({ slug }: { slug: string }) {
   const { data } = useRoutineAudit(slug, true);
   if (!data || data.entries.length === 0) return null;
@@ -458,6 +481,7 @@ export function RoutineDetailPage() {
           <TestFireCard slug={d.slug} triggers={d.triggers} repo={d.repo} />
           <PromptHistoryCard slug={d.slug} />
           <AuditCard slug={d.slug} />
+          <CostTrendCard trend={d.costTrend} />
           <MetricCard slug={d.slug} />
           {d.scriptMode && <ScriptCard slug={d.slug} lang={d.scriptLang} compiled={d.compiled} stale={d.scriptStale} script={d.script} />}
           {d.memory && <MemoryCard slug={d.slug} />}

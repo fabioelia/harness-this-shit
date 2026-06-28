@@ -1253,7 +1253,8 @@ app.get('/api/routines/:slug', (req, res) => {
     .map((t) => ({ summary: t.summary, key: t.lease_key, ago: relTime(t.created_at) }));
   const lf = one("SELECT id, output, created_at FROM runs WHERE routine_slug=? AND status='failed' ORDER BY created_at DESC, ord DESC LIMIT 1", r.slug);
   const lastError = lf ? { runId: lf.id, output: String(lf.output || '').slice(0, 400), ago: relTime(lf.created_at) } : null;
-  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, script: r.script || '', lastError });
+  const costTrend = all("SELECT cost_usd FROM runs WHERE routine_slug=? AND status='succeeded' AND cost_usd IS NOT NULL AND cost_usd > 0 ORDER BY created_at DESC, ord DESC LIMIT 24", r.slug).reverse().map((x) => +x.cost_usd.toFixed(4));
+  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, script: r.script || '', lastError, costTrend });
 });
 
 function insertRoutine(b) {

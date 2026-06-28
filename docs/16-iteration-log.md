@@ -86,6 +86,7 @@ dropdowns · Fleet inbox badge.
 | 65 | Dependency cycle detection (chain/reaction loops) in the linter | eliminating-humans/safety | ✅ done |
 | 66 | Long-running run indicator on Fleet (run going >8m → ⏱ badge) | observability | ✅ done |
 | 67 | Prompt size estimate in dry-run preview (chars + ~tokens) | efficiency | ✅ done |
+| 68 | Per-routine cost-per-run trend sparkline (last 24, above-avg flag) | observability/efficiency | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.

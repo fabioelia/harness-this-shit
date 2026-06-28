@@ -79,6 +79,7 @@ export interface RoutineDetail extends Routine {
   inboxTasks: { summary: string; key: string; ago: string }[];
   script: string;
   lastError: { runId: string; output: string; ago: string } | null;
+  costTrend: number[];
 }
 
 export interface RegistryServer {
