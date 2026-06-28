@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useRuns, useRunSearch } from '@/lib/api';
+import { useRuns, useRunSearch, useRerunFailed } from '@/lib/api';
 import { Dot, Empty, stateMeta } from '@/components/sb';
 import { cn } from '@/lib/utils';
 
@@ -16,6 +16,8 @@ export function RunsPage() {
   const [status, setStatus] = useState('all');
   const [oq, setOq] = useState('');
   const { data: outHits } = useRunSearch(oq);
+  const rerunFailed = useRerunFailed();
+  const failedCount = (runs ?? []).filter((r) => r.status === 'failed').length;
   const filtered = (runs ?? []).filter((r) => {
     if (status !== 'all' && !STATUS_GROUPS[status]?.includes(r.status)) return false;
     if (q.trim() && !`${r.routineName} ${r.id} ${r.trigger}`.toLowerCase().includes(q.toLowerCase())) return false;
@@ -27,7 +29,10 @@ export function RunsPage() {
         <div className="mb-3 font-mono text-[12px] font-medium text-dim"><span className="text-brand">Switchboard</span> › Runs</div>
         <div className="flex items-center justify-between">
           <div className="font-display text-[23px] font-bold tracking-tight">Runs</div>
-          <a href="/api/runs.csv" download className="flex h-9 items-center gap-2 rounded-md border border-line bg-surface-2 px-3.5 font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Export CSV ↓</a>
+          <div className="flex items-center gap-2.5">
+            {failedCount > 0 && <button onClick={() => { if (confirm(`Re-run failed runs from the last 24h (up to 25)?`)) rerunFailed.mutate(24); }} disabled={rerunFailed.isPending} className="flex h-9 items-center gap-2 rounded-md border border-warn/40 bg-warn/10 px-3.5 font-display text-[12.5px] font-semibold text-warn hover:bg-warn/20 disabled:opacity-40">{rerunFailed.isPending ? 'Re-running…' : rerunFailed.data ? `Re-ran ${rerunFailed.data.rerun}` : '↻ Re-run failed'}</button>}
+            <a href="/api/runs.csv" download className="flex h-9 items-center gap-2 rounded-md border border-line bg-surface-2 px-3.5 font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Export CSV ↓</a>
+          </div>
         </div>
         <div className="mt-1 text-[13px] text-muted-2">Every execution across the fleet — status, trigger, and how long it took.</div>
       </div>

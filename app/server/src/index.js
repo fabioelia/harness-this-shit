@@ -1482,6 +1482,29 @@ app.get('/api/routines/:slug/export', (req, res) => {
   if (!r) return res.status(404).json({ error: 'not found' });
   res.json({ switchboard: 'routine', version: 1, slug: r.slug, routine: exportBody(r) });
 });
+// Bulk re-run recent failed runs (after a transient outage) — replays their stored events.
+app.post('/api/runs/rerun-failed', (req, res) => {
+  if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
+  if (overBudget()) return res.status(409).json({ error: 'daily budget reached' });
+  const slug = req.body?.slug ? String(req.body.slug) : '';
+  const hours = Math.min(168, Math.max(1, parseInt(req.body?.hours, 10) || 24));
+  const since = now() - hours * 3_600_000;
+  const rows = slug
+    ? all("SELECT * FROM runs WHERE status='failed' AND created_at > ? AND routine_slug=? ORDER BY created_at DESC LIMIT 25", since, slug)
+    : all("SELECT * FROM runs WHERE status='failed' AND created_at > ? ORDER BY created_at DESC LIMIT 25", since);
+  let n = 0; const seen = new Set();
+  for (const x of rows) {
+    if (seen.has(x.routine_slug + JSON.stringify(x.event))) continue; // de-dup identical retries
+    seen.add(x.routine_slug + JSON.stringify(x.event));
+    const r = one('SELECT * FROM routines WHERE slug=?', x.routine_slug);
+    if (!r || !r.enabled) continue;
+    const ev = jObj(x.event) || {}; delete ev._attempt;
+    executeRoutine(r, { ...ev, _replay: true, upstream: { routine: r.slug, run: x.id } }, `bulk rerun · ${x.id}`);
+    n++;
+  }
+  if (n) logActivity(`bulk re-ran ${n} failed run${n === 1 ? '' : 's'}`, 'idle');
+  res.json({ rerun: n });
+});
 // Full single-run bundle (event + output + trace + metrics) as JSON.
 app.get('/api/runs/:id/bundle', (req, res) => {
   const x = one('SELECT * FROM runs WHERE id=?', req.params.id);

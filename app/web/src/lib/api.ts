@@ -144,6 +144,10 @@ export const useRoutines = () => useQuery({ queryKey: ['routines'], queryFn: () 
 export const useRoutine = (slug?: string) =>
   useQuery({ queryKey: ['routine', slug], queryFn: () => get<RoutineDetail>(`/api/routines/${slug}`), enabled: !!slug, retry: false });
 export const useRuns = () => useQuery({ queryKey: ['runs'], queryFn: () => get<RunLite[]>('/api/runs'), refetchInterval: 8000 });
+export function useRerunFailed() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (hours: number) => post<{ rerun: number }>('/api/runs/rerun-failed', { hours }), onSuccess: () => qc.invalidateQueries({ queryKey: ['runs'] }) });
+}
 export interface RunSearch { q: string; results: { id: string; slug: string; status: string; ago: string; snippet: string }[] }
 export const useRunSearch = (q: string) => useQuery({ queryKey: ['runsearch', q], enabled: q.trim().length >= 2, queryFn: () => get<RunSearch>(`/api/runs/search?q=${encodeURIComponent(q)}`) });
 export interface RunDiff { current: { id: string; output: string; cost: number | null; turns: number | null; status: string; ago: string } | null; previous: { id: string; output: string; cost: number | null; turns: number | null; status: string; ago: string } | null }

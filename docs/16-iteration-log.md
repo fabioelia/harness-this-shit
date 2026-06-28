@@ -91,6 +91,7 @@ dropdowns · Fleet inbox badge.
 | 70 | Golden-output baseline + drift detection (line-Jaccard divergence per run) | reproducibility/eliminating-humans | ✅ done |
 | 71 | Dependency impact — "depended on by" (chain/reaction dependents) per routine | observability/eliminating-humans | ✅ done |
 | 72 | Alert throttling — at most one fail-alert per routine per 30m | eliminating-humans | ✅ done |
+| 73 | Bulk re-run failed runs (replay recent failures, deduped, capped 25) | efficiency/eliminating-humans | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.
