@@ -177,6 +177,25 @@ export function InsightsPage() {
               </div>
             )}
 
+            {d.byModel && d.byModel.length > 0 && (
+              <div className={`${CARD} mb-[18px]`}>
+                <div className={`${LABEL} mb-3`}>Spend by model</div>
+                <div className="flex flex-col gap-2">
+                  {d.byModel.map((m) => {
+                    const share = d.totals.cost > 0 ? (m.cost / d.totals.cost) * 100 : 0;
+                    return (
+                      <div key={m.model} className="flex items-center gap-3 font-mono text-[12px]">
+                        <span className="w-[150px] shrink-0 truncate text-t2">{m.model.replace(/^claude-/, '')}</span>
+                        <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-2"><div className="h-full rounded-full bg-brand/70" style={{ width: `${Math.max(2, share)}%` }} /></div>
+                        <span className="w-[64px] shrink-0 text-right text-t2">${m.cost.toFixed(2)}</span>
+                        <span className="w-[44px] shrink-0 text-right text-dim">{m.runs}r</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className={CARD}>
               <div className={`${LABEL} mb-3`}>By routine · {d.perRoutine.length} active</div>
               {d.perRoutine.length === 0 ? (

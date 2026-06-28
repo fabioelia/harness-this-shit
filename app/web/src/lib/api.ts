@@ -41,6 +41,7 @@ export interface Insights {
   days: number;
   daily: { date: string; runs: number; cost: number; fails: number }[];
   perRoutine: { slug: string; name: string; runs: number; cost: number; turns: number; avgMs: number; fails: number; failRate: number }[];
+  byModel: { model: string; runs: number; cost: number }[];
   totals: { runs: number; cost: number; turns: number; avgMs: number; fails: number; failRate: number };
   budget: { cap: number; today: number; over: boolean };
   digest: { channel: string; hour: number };

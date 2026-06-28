@@ -56,6 +56,7 @@ dropdowns · Fleet inbox badge.
 | 36 | Export runs as CSV (all or per routine) | reproducibility/portability | ✅ done |
 | 37 | Trace step timing bars (per-step duration from t_offset deltas) | observability | ✅ done |
 | 38 | Routine notes / runbook (free-text ops context) | reproducibility/ops | ✅ done |
+| 39 | Spend-by-model breakdown on Insights (cost/runs per model + share bars) | observability/efficiency | ✅ done |
 
 ## QA backlog (test at iteration 10)
 - [x] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.
