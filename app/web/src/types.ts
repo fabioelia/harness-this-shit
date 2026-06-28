@@ -93,6 +93,7 @@ export interface RoutineDetail extends Routine {
   mttr: { value: string; incidents: number; openIncident: boolean; downSince: string | null } | null;
   runsByDay: { date: string; runs: number; fails: number }[];
   commentCount: number;
+  lastTouched: { summary: string; ago: string } | null;
 }
 
 export interface RegistryServer {

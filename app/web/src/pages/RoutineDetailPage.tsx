@@ -466,7 +466,8 @@ export function RoutineDetailPage() {
             <button onClick={() => { setOwnerDraft(d.owner); setTeamDraft(d.team); setReassign(true); }} title="reassign owner / team" className="inline-flex items-center gap-[7px] rounded-md px-1 hover:bg-white/[0.04]"><Avatar color={d.ownerColor} initials={d.initials} size={20} /><span className="font-sans text-[12px] font-medium text-t2">{d.owner}</span><span className="text-faint">·</span><span className="font-mono text-[11px] font-medium text-dim">{d.team}</span><span className="ml-0.5 font-mono text-[10px] text-faint">✎</span></button>
           )}
           {d.connectors.slice(0, 2).map((c) => <Chip key={c}>{c}</Chip>)}
-          {d.lastSuccessAgo && <span className={`ml-auto font-mono text-[11.5px] ${d.staleSuccess ? 'text-warn' : 'text-dim'}`} title="when this routine last produced a successful run">last ✓ {d.lastSuccessAgo}</span>}
+          {d.lastTouched && <span className="ml-auto font-mono text-[11px] text-dim-2" title="most recent config change / approval">✎ {d.lastTouched.summary} · {d.lastTouched.ago}</span>}
+          {d.lastSuccessAgo && <span className={`${d.lastTouched ? '' : 'ml-auto'} font-mono text-[11.5px] ${d.staleSuccess ? 'text-warn' : 'text-dim'}`} title="when this routine last produced a successful run">last ✓ {d.lastSuccessAgo}</span>}
           <button onClick={() => preview.mutate(d.slug)} className={`font-mono text-[12px] font-medium text-dim hover:text-brand ${d.lastSuccessAgo ? '' : 'ml-auto'}`}>Preview prompt ▸</button>
           <a href={`/api/routines/${d.slug}/export`} download={`${d.slug}.routine.json`} className="font-mono text-[12px] font-medium text-dim hover:text-brand">Export JSON ↓</a>
           <button onClick={() => setShowRaw(true)} className="font-mono text-[12px] font-medium text-brand hover:underline">View raw {d.file} ›</button>

@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useCreateRoutine, useUpdateRoutine, useRoutine, useRoutines, useGithubRepos, useGithubOrgs, useGithubChecks, useGithubLabels, useModels, useMcp, useTemplates } from '@/lib/api';
 import type { RoutineTemplate } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { useOperator } from '@/lib/operator';
 
 // Dropdown of known values that also accepts free text — selected items become chips.
 function TokenPicker({ value, onChange, suggestions, placeholder }: { value: string; onChange: (v: string) => void; suggestions: string[]; placeholder: string }) {
@@ -387,6 +388,7 @@ export function NewRoutinePage() {
   const { slug: editSlug } = useParams();
   const isEdit = !!editSlug;
   const { data: templates } = useTemplates();
+  const [operator] = useOperator();
   const existing = useRoutine(editSlug);
   const create = useCreateRoutine();
   const update = useUpdateRoutine();
@@ -541,7 +543,7 @@ export function NewRoutinePage() {
   }
   function submit() {
     if (!valid) return;
-    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, scriptMode, scriptLang, retries, assertions: assertions.filter((a) => a.type === 'no_tool_errors' || a.value.trim()), alertOnFail, alertTarget, timeout: timeoutS, env: Object.fromEntries(envPairs.filter((p) => p.k.trim()).map((p) => [p.k.trim(), p.v])), tags: tags.split(',').map((t) => t.trim()).filter(Boolean), rateLimit, maxFails, notes, sla, lifecycle, gateReview, tier, activeWindow: (winStart || winEnd || winDays.length) ? { start: winStart === '' ? null : +winStart, end: winEnd === '' ? null : +winEnd, days: winDays } : null };
+    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, scriptMode, scriptLang, retries, assertions: assertions.filter((a) => a.type === 'no_tool_errors' || a.value.trim()), alertOnFail, alertTarget, escalation, timeout: timeoutS, env: Object.fromEntries(envPairs.filter((p) => p.k.trim()).map((p) => [p.k.trim(), p.v])), tags: tags.split(',').map((t) => t.trim()).filter(Boolean), rateLimit, maxFails, notes, sla, lifecycle, gateReview, tier, editor: operator, activeWindow: (winStart || winEnd || winDays.length) ? { start: winStart === '' ? null : +winStart, end: winEnd === '' ? null : +winEnd, days: winDays } : null };
     if (isEdit) update.mutate({ slug: editSlug!, body }, { onSuccess: () => navigate(`/routines/${editSlug}`) });
     else create.mutate(body, { onSuccess: (r) => navigate(`/routines/${r.slug}`) });
   }

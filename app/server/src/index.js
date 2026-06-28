@@ -1428,7 +1428,8 @@ app.get('/api/routines/:slug', (req, res) => {
     .map((x) => ({ slug: x.slug, name: x.name, enabled: !!x.enabled, viaChain: j(x.chain).includes(r.slug), viaReaction: j(x.reactions).some((rx) => rx.run === r.slug) }))
     .filter((x) => x.viaChain || x.viaReaction)
     .map((x) => ({ slug: x.slug, name: x.name, enabled: x.enabled, via: x.viaChain && x.viaReaction ? 'chain + reaction' : x.viaChain ? 'chain' : 'reaction' }));
-  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, script: r.script || '', lastError, costTrend, dependents, mttr, runsByDay, commentCount: one('SELECT COUNT(*) AS n FROM comments WHERE slug=?', r.slug).n });
+  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, script: r.script || '', lastError, costTrend, dependents, mttr, runsByDay, commentCount: one('SELECT COUNT(*) AS n FROM comments WHERE slug=?', r.slug).n,
+    lastTouched: (() => { const a = one('SELECT summary, created_at FROM routine_audit WHERE slug=? ORDER BY id DESC LIMIT 1', r.slug); return a ? { summary: a.summary, ago: relTime(a.created_at) } : null; })() });
 });
 
 function insertRoutine(b) {
@@ -1573,7 +1574,8 @@ app.put('/api/routines/:slug', (req, res) => {
   if (b.filters != null && JSON.stringify(cleanFilters(b.filters)) !== r.filters) changed.push('filters');
   if (promptChanged) changed.push('prompt');
   if (changed.length) {
-    run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', r.slug, `edited: ${changed.join(', ')}`, now());
+    const editor = String(b.editor || '').trim().slice(0, 40);
+    run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', r.slug, `${editor ? editor + ' edited' : 'edited'}: ${changed.join(', ')}`, now());
     // Substantive change → flag for review (was previously approved or has a reviewer).
     if (changed.some((f) => ['prompt', 'triggers', 'connectors', 'filters', 'reactions', 'chain', 'model'].includes(f))) run("UPDATE routines SET review_status='needs_review' WHERE slug=?", r.slug);
   }

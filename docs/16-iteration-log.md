@@ -145,6 +145,7 @@ dropdowns · Fleet inbox badge.
 | 120 | Team standup digest (edits/approvals/comments/sign-offs/resolved over 24h) | collaboration | ✅ done |
 | 121 | Blast-radius confirm — disable/delete lists the dependents it would break | collaboration/safety | ✅ done |
 | 122 | Shared run bookmarks — save notable runs (label + author) for the team | collaboration | ✅ done |
+| 123 | Change provenance — capture editor + show "last touched by" on the routine (also fixed escalation not being submitted) | collaboration | ✅ done |
 
 ### Loop-3 QA backlog (test at iteration 110)
 - [x] (iter 107) substantive edit (prompt/triggers/etc) flags needs_review; approve records reviewer + clears it; non-substantive edits (name) do not flag; Fleet badge.
