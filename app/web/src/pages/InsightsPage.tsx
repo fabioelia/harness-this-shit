@@ -340,6 +340,17 @@ export function InsightsPage() {
               </div>
             )}
 
+            {d.byEffort && d.byEffort.length > 1 && (
+              <div className={`${CARD} mb-[18px]`}>
+                <div className={`${LABEL} mb-3`}>Spend by effort</div>
+                <div className="flex flex-wrap gap-2">
+                  {d.byEffort.map((e) => (
+                    <span key={e.effort} className="rounded-md border border-line bg-surface-2 px-2.5 py-1 font-mono text-[12px]"><span className="text-t2">{e.effort}</span> <span className="text-dim-2">${e.cost.toFixed(2)}</span> <span className="text-dim">· {e.runs}r</span></span>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className={CARD}>
               <div className={`${LABEL} mb-3`}>By routine · {d.perRoutine.length} active</div>
               {d.perRoutine.length === 0 ? (

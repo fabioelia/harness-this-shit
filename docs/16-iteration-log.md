@@ -103,6 +103,7 @@ dropdowns · Fleet inbox badge.
 | 82 | Fleet group-by-team view (collapsible team sections + counts) | UX | ✅ done |
 | 83 | Per-routine throughput chart (runs/day, 14d, fails stacked) | observability | ✅ done |
 | 84 | Run output copy + permalink + byte-size indicator | UX | ✅ done |
+| 85 | Spend by reasoning-effort level on Insights | efficiency/observability | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.

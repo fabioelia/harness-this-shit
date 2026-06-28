@@ -43,6 +43,7 @@ export interface Insights {
   perRoutine: { slug: string; name: string; runs: number; cost: number; turns: number; avgMs: number; fails: number; failRate: number; costPerSuccess: number }[];
   byModel: { model: string; runs: number; cost: number; avgMs: number; tokens: number; costPer1k: number }[];
   byTag: { tag: string; runs: number; cost: number }[];
+  byEffort: { effort: string; runs: number; cost: number }[];
   dispatch: Record<string, number>;
   totals: { runs: number; cost: number; turns: number; avgMs: number; fails: number; failRate: number; inTok: number; outTok: number };
   projection: { perDay: number; monthly: number; runsPerDay: number };

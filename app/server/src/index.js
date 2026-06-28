@@ -1204,6 +1204,10 @@ app.get('/api/insights', (req, res) => {
   }
   const dispatch = {};
   for (const d of all('SELECT status, COUNT(*) AS n FROM runs WHERE created_at > ? GROUP BY status', since)) dispatch[d.status] = d.n;
+  const effortOf = Object.fromEntries(all('SELECT slug,effort FROM routines').map((x) => [x.slug, x.effort || 'default']));
+  const byE = {};
+  for (const r of rows) { const e = effortOf[r.routine_slug] || 'default'; const o = (byE[e] ||= { effort: e, runs: 0, cost: 0 }); o.runs++; o.cost += r.cost_usd || 0; }
+  const byEffort = Object.values(byE).map((e) => ({ ...e, cost: +e.cost.toFixed(4) })).sort((a, b) => b.cost - a.cost);
   const tagsOf = Object.fromEntries(all('SELECT slug,tags FROM routines').map((x) => [x.slug, j(x.tags)]));
   const byT = {};
   for (const r of rows) for (const t of (tagsOf[r.routine_slug] || [])) { const e = (byT[t] ||= { tag: t, runs: 0, cost: 0 }); e.runs++; e.cost += r.cost_usd || 0; }
@@ -1225,7 +1229,7 @@ app.get('/api/insights', (req, res) => {
   res.json({
     days,
     daily: Object.values(daily).map((d) => ({ ...d, cost: +d.cost.toFixed(4) })),
-    perRoutine, byModel, byTag, dispatch,
+    perRoutine, byModel, byTag, byEffort, dispatch,
     totals: { runs: T.runs, cost: +T.cost.toFixed(2), turns: T.turns, avgMs: T.nMs ? Math.round(T.ms / T.nMs) : 0, fails: T.fails, failRate: T.runs ? Math.round((100 * T.fails) / T.runs) : 0, inTok: T.inTok, outTok: T.outTok },
     projection: { perDay: +(T.cost / days).toFixed(2), monthly: +((T.cost / days) * 30).toFixed(2), runsPerDay: +(T.runs / days).toFixed(1) },
     budget: { cap: budgetCap(), today: +todaySpend().toFixed(2), over: overBudget() },
