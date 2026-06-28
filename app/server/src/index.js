@@ -1875,6 +1875,19 @@ app.post('/api/runs/:id/cancel', (req, res) => {
   logActivity(`${x.routine_slug} run ${x.id} canceled`, 'failing');
   res.json({ ok: true, killed: !!child });
 });
+// Replay a run on a different model — A/B cost/quality on the exact same event.
+app.post('/api/runs/:id/replay-model', (req, res) => {
+  const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
+  if (!x) return res.status(404).json({ error: 'not found' });
+  const r = one('SELECT * FROM routines WHERE slug=?', x.routine_slug);
+  if (!r) return res.status(404).json({ error: 'routine no longer exists' });
+  if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
+  if (overBudget()) return res.status(409).json({ error: 'daily budget reached' });
+  const model = String(req.body?.model || '').trim() || r.model;
+  const ev = jObj(x.event) || {}; delete ev._attempt; delete ev._recompile;
+  const runId = executeRoutine({ ...r, model }, { ...ev, _replay: true, upstream: { routine: r.slug, run: x.id } }, `replay@${model.replace(/^claude-/, '')} · ${x.id}`);
+  res.json({ ok: true, runId });
+});
 app.post('/api/runs/:id/inbox', (req, res) => {
   const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
   if (!x) return res.status(404).json({ error: 'not found' });

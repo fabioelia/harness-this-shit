@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRun, useDispatchRoutine, useReplayRun, useRunDiff, useRerunRun, useCancelRun, useSetBaseline } from '@/lib/api';
+import { useRun, useDispatchRoutine, useReplayRun, useRunDiff, useRerunRun, useCancelRun, useSetBaseline, useReplayModel, useModels } from '@/lib/api';
 import { Pill, Dot, Empty, stateMeta } from '@/components/sb';
 import { cn } from '@/lib/utils';
 
@@ -77,6 +77,8 @@ export function RunDetailPage() {
   const rerun = useRerunRun();
   const cancel = useCancelRun();
   const setBaseline = useSetBaseline();
+  const replayModel = useReplayModel();
+  const { data: models } = useModels();
   const [editEvent, setEditEvent] = useState<string | null>(null);
   const qc = useQueryClient();
   // Live trace over SSE — fills in with no polling lag, then refetches on done.
@@ -148,6 +150,12 @@ export function RunDetailPage() {
               <svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M3 9a6 6 0 1 1 1.8 4.3" /><path d="M3 13v-3h3" /></svg>
               {replay.isPending ? 'Replaying…' : 'Replay'}
             </button>
+            {models && models.models.length > 1 && (
+              <select defaultValue="" onChange={(e) => { const model = e.target.value; e.target.value = ''; if (model) replayModel.mutate({ id: r.id, model }, { onSuccess: (res) => navigate(`/runs/${res.runId}`) }); }} title="Replay this exact event on a different model (A/B cost & quality)" className="h-[34px] rounded-md border border-line bg-surface-2 px-2 font-display text-[12px] font-semibold text-dim hover:border-hair focus:outline-none" style={{ colorScheme: 'dark' }}>
+                <option value="">replay on…</option>
+                {models.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+              </select>
+            )}
             {r.event && (
               <button onClick={() => setEditEvent(JSON.stringify(r.event, null, 2))} title="Edit this run's event payload and re-run with the tweaks" className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Edit &amp; re-run</button>
             )}
