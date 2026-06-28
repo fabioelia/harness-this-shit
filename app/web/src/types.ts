@@ -62,6 +62,7 @@ export interface Routine {
   links: { label: string; url: string }[];
   sunsetAt: number;
   sunsetOverdue: boolean;
+  commentCount: number;
 }
 
 export interface FrontMatter {
@@ -95,7 +96,6 @@ export interface RoutineDetail extends Routine {
   dependents: { slug: string; name: string; enabled: boolean; via: string }[];
   mttr: { value: string; incidents: number; openIncident: boolean; downSince: string | null } | null;
   runsByDay: { date: string; runs: number; fails: number }[];
-  commentCount: number;
   lastTouched: { summary: string; ago: string } | null;
   watchers: string[];
 }

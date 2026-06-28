@@ -81,6 +81,7 @@ function FleetRow({ r, i, selected, onSelect }: { r: Routine; i: number; selecte
           {r.longRunning && <span title="a run has been going over 8 minutes — possibly stuck" className="shrink-0 animate-sbpulse rounded-full border border-bad/40 bg-bad/10 px-1.5 py-px font-mono text-[10px] font-semibold text-bad">⏱ long-run</span>}
           {r.staleSuccess && <span title={`last success was ${r.lastSuccessAgo} — over a week ago`} className="shrink-0 rounded-full border border-warn/40 bg-warn/10 px-1.5 py-px font-mono text-[10px] font-semibold text-warn">stale</span>}
           {r.snoozedUntil > 0 && <span title={`snoozed until ${new Date(r.snoozedUntil).toLocaleString()}`} className="shrink-0 rounded-full border border-lease/40 bg-lease/10 px-1.5 py-px font-mono text-[10px] font-semibold text-lease">💤</span>}
+          {r.commentCount > 0 && <Link to={`/routines/${r.slug}`} title={`${r.commentCount} comment${r.commentCount>1?"s":""}`} className="shrink-0 rounded-full border border-line bg-surface-2 px-1.5 py-px font-mono text-[10px] font-medium text-dim-2 hover:text-brand">💬 {r.commentCount}</Link>}
           {r.inbox > 0 && <Link to={`/routines/${r.slug}`} title={`${r.inbox} task${r.inbox > 1 ? 's' : ''} handed off, waiting to be picked up`} className="shrink-0 rounded-full border border-lease/40 bg-lease/10 px-1.5 py-px font-mono text-[10px] font-semibold text-lease">📥 {r.inbox}</Link>}
         </div>
         <div className="mt-0.5 truncate font-sans text-[12px] text-muted-2">{r.summary}</div>
