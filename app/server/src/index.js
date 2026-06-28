@@ -2532,6 +2532,17 @@ app.delete('/api/routines/:slug/comments/:id', (req, res) => {
   run('DELETE FROM comments WHERE id=? AND slug=?', req.params.id, req.params.slug);
   res.json({ ok: true });
 });
+// Request review — ask a specific teammate to review (mention + audit).
+app.post('/api/routines/:slug/request-review', (req, res) => {
+  if (!one('SELECT 1 FROM routines WHERE slug=?', req.params.slug)) return res.status(404).json({ error: 'not found' });
+  const reviewer = String(req.body?.reviewer || '').trim().slice(0, 40);
+  if (!reviewer) return res.status(400).json({ error: 'reviewer required' });
+  const by = String(req.body?.by || '').trim().slice(0, 40) || 'anon';
+  run('INSERT INTO mentions (mentioned, by, slug, snippet, created_at) VALUES (?,?,?,?,?)', reviewer, by, req.params.slug, `review requested by ${by}`, now());
+  run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', req.params.slug, `review requested from ${reviewer} by ${by}`, now());
+  logActivity(`review of ${req.params.slug} requested from ${reviewer}`, 'idle');
+  res.json({ ok: true });
+});
 // Approve a routine's current config — clears the needs-review flag, records the reviewer.
 app.post('/api/routines/:slug/approve', (req, res) => {
   const r = one('SELECT slug, tier FROM routines WHERE slug=?', req.params.slug);

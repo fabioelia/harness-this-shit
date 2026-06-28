@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt, useRoutineAudit, useArchiveRoutine, useUpdateRoutine, useApproveRoutine, useComments, useAddComment, useDeleteComment, useEditComment, usePinComment, useWatch, useToggleWatch, useTimeline, useHandover } from '@/lib/api';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt, useRoutineAudit, useArchiveRoutine, useUpdateRoutine, useApproveRoutine, useComments, useAddComment, useDeleteComment, useEditComment, usePinComment, useWatch, useToggleWatch, useTimeline, useHandover, useRequestReview } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import { useOperator } from '@/lib/operator';
@@ -400,6 +400,7 @@ export function RoutineDetailPage() {
   const watch = useWatch(slug || '', op2);
   const toggleWatch = useToggleWatch();
   const handover = useHandover();
+  const reqReview = useRequestReview();
   const [reassign, setReassign] = useState(false);
   const [ownerDraft, setOwnerDraft] = useState("");
   const [teamDraft, setTeamDraft] = useState("");
@@ -479,6 +480,7 @@ export function RoutineDetailPage() {
             <span className="font-display text-[11px] font-semibold uppercase tracking-[0.06em] text-warn">⚑ Needs review</span>
             <span className="font-mono text-[11.5px] text-dim-2">config changed since last approval</span>
             {approve.isError && <span className="font-mono text-[11px] text-bad">{(approve.error as Error).message}</span>}
+            <button onClick={() => { const rv = prompt('Request review from which teammate?'); if (rv && rv.trim()) reqReview.mutate({ slug: d.slug, reviewer: rv.trim(), by: op2 || 'anon' }); }} className="h-7 rounded-md border border-line bg-surface-2 px-3 font-display text-[12px] font-semibold text-dim hover:text-brand-soft">Request review</button>
             <button onClick={() => { let rv = ''; try { rv = localStorage.getItem('sb-author') || ''; } catch { /**/ } approve.mutate({ slug: d.slug, reviewer: rv || 'anon' }); }} disabled={approve.isPending} className="ml-auto h-7 rounded-md border border-ok/50 bg-ok/10 px-3 font-display text-[12px] font-semibold text-ok hover:bg-ok/20 disabled:opacity-40">{approve.isPending ? 'Approving…' : '✓ Approve'}</button>
           </div>
         )}
