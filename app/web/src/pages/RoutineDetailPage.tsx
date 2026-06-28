@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine } from '@/lib/api';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle, SIGNAL } from '@/components/sb';
+import { cn } from '@/lib/utils';
 import type { FrontMatter, RoutineDetail } from '@/types';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
@@ -88,6 +89,38 @@ function ReactiveFlowCard({ d }: { d: RoutineDetail }) {
   );
 }
 
+function TestFireCard({ slug, triggers, repo }: { slug: string; triggers: string[]; repo: string }) {
+  const fire = useFireEvent();
+  const navigate = useNavigate();
+  const evTriggers = triggers.filter((t) => !['schedule', 'manual', 'api', 'webhook'].includes(t));
+  const [type, setType] = useState(evTriggers[0] || 'pull_request');
+  const [action, setAction] = useState('opened');
+  const [label, setLabel] = useState('');
+  const [branch, setBranch] = useState('main');
+  if (!evTriggers.length) return null;
+  const repo0 = repo.split(',')[0]?.trim() || 'owner/repo';
+  const go = () => {
+    const payload: Record<string, unknown> = { repository: repo0, action };
+    if (label) payload.label = { name: label };
+    payload.pull_request = { number: 1, head: { ref: branch, sha: 'testsha0000000' }, labels: label ? [{ name: label }] : [], user: { login: 'tester' }, title: 'test PR', html_url: `https://github.com/${repo0}/pull/1`, base: { ref: 'main' } };
+    fire.mutate({ type, payload }, { onSuccess: (r) => { if (r.matched.includes(slug) && r.runs[0]) navigate(`/runs/${r.runs[0].runId}`); } });
+  };
+  const fld = 'h-8 rounded-md border border-line bg-surface-2 px-2 font-mono text-[11px] text-fg focus:border-brand/60 focus:outline-none';
+  return (
+    <div className={CARD}>
+      <div className={`${LABEL} mb-3`}>Test fire · synthetic event ($0 dispatch)</div>
+      <div className="grid grid-cols-2 gap-2">
+        <div><div className="mb-1 font-mono text-[10px] text-dim-2">event</div><select value={type} onChange={(e) => setType(e.target.value)} className={cn(fld, 'w-full')}>{evTriggers.map((t) => <option key={t} value={t}>{t}</option>)}</select></div>
+        <div><div className="mb-1 font-mono text-[10px] text-dim-2">action</div><input value={action} onChange={(e) => setAction(e.target.value)} placeholder="opened" className={cn(fld, 'w-full')} /></div>
+        <div><div className="mb-1 font-mono text-[10px] text-dim-2">label (optional)</div><input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="jira-ticket" className={cn(fld, 'w-full')} /></div>
+        <div><div className="mb-1 font-mono text-[10px] text-dim-2">branch</div><input value={branch} onChange={(e) => setBranch(e.target.value)} className={cn(fld, 'w-full')} /></div>
+      </div>
+      <button onClick={go} disabled={fire.isPending} className="mt-2.5 h-8 rounded-md border border-brand/50 bg-brand/10 px-3 font-display text-[12px] font-semibold text-brand-soft hover:bg-brand/20 disabled:opacity-40">{fire.isPending ? 'Firing…' : 'Fire event'}</button>
+      {fire.data && !fire.data.matched.includes(slug) && <div className="mt-2 font-mono text-[11px] text-warn">didn't match — check the triggers, filters, or repo scope.</div>}
+      <div className="mt-2 text-[11px] text-dim-2">Dispatches a real event through the matcher — tests your trigger + filter logic without GitHub.</div>
+    </div>
+  );
+}
 function MetricCard({ slug }: { slug: string }) {
   const { data } = useRoutineMetric(slug, true);
   if (!data || !data.numeric) return null;
@@ -376,6 +409,7 @@ export function RoutineDetailPage() {
               )}
             </div>
           )}
+          <TestFireCard slug={d.slug} triggers={d.triggers} repo={d.repo} />
           <MetricCard slug={d.slug} />
           {d.scriptMode && <ScriptCard slug={d.slug} lang={d.scriptLang} compiled={d.compiled} stale={d.scriptStale} script={d.script} />}
           {d.memory && <MemoryCard slug={d.slug} />}

@@ -192,6 +192,10 @@ export function useSnooze() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: ({ slug, hours }: { slug: string; hours: number }) => post<{ ok: boolean; snoozedUntil: number }>(`/api/routines/${slug}/snooze`, { hours }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['routine', v.slug] }); qc.invalidateQueries({ queryKey: ['routines'] }); } });
 }
+export function useFireEvent() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ type, payload }: { type: string; payload: unknown }) => post<{ matched: string[]; runs: { slug: string; runId: string }[] }>(`/api/events/${type}`, payload), onSuccess: () => { qc.invalidateQueries({ queryKey: ['runs'] }); qc.invalidateQueries({ queryKey: ['routines'] }); } });
+}
 export function usePreviewRoutine() {
   return useMutation({ mutationFn: (slug: string) => post<RoutinePreview>(`/api/routines/${slug}/preview`, {}) });
 }
