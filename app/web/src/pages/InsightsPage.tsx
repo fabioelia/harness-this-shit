@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest } from '@/lib/api';
+import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint } from '@/lib/api';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -14,6 +14,7 @@ export function InsightsPage() {
   const setBudget = useSetBudget();
   const { data: graph } = useGraph();
   const { data: conc } = useLeases();
+  const { data: lint } = useLint();
   const setDigest = useSetDigest();
   const sendDigest = useSendDigest();
   const [capDraft, setCapDraft] = useState('');
@@ -87,6 +88,20 @@ export function InsightsPage() {
               <Stat label="Avg latency" value={fmtMs(d.totals.avgMs)} />
               <Stat label="Failure rate" value={`${d.totals.failRate}%`} sub={`${d.totals.fails} failed`} />
             </div>
+
+            {lint && lint.count > 0 && (
+              <div className={`${CARD} mb-[18px]`} style={{ borderColor: 'rgba(230,176,82,.4)' }}>
+                <div className="mb-2 font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-warn">⚠ Config warnings · {lint.count}</div>
+                <div className="flex flex-col gap-1.5">
+                  {lint.issues.map((it) => (
+                    <div key={it.slug} className="font-mono text-[12px]">
+                      <Link to={`/routines/${it.slug}`} className="font-sans font-semibold text-t2 hover:text-brand">{it.name}</Link>
+                      <ul className="mt-0.5 ml-3 list-disc text-dim-2">{it.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {sched && sched.missed && sched.missed.length > 0 && (
               <div className={`${CARD} mb-[18px]`} style={{ borderColor: 'rgba(230,176,82,.4)' }}>

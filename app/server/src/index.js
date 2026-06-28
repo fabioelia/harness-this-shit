@@ -958,6 +958,25 @@ app.post('/api/digest', (req, res) => {
   res.json({ channel: metaGet('digest_channel', ''), hour: parseInt(metaGet('digest_hour', '-1'), 10) });
 });
 app.post('/api/digest/send', (_q, res) => res.json({ sent: sendDigest(), preview: buildDigest() }));
+// Config lint: flag routines that are misconfigured in ways that fail silently.
+function lintRoutine(r, slugSet) {
+  const w = [];
+  const trig = j(r.triggers);
+  if (r.enabled && trig.length === 0) w.push('enabled but has no triggers — it can never fire');
+  if (trig.includes('schedule') && !String(r.schedule || '').trim()) w.push('schedule trigger but no cron set');
+  for (const t of j(r.chain)) if (t && !slugSet.has(t)) w.push(`chains to "${t}" which no longer exists`);
+  for (const rx of j(r.reactions)) if (rx.run && !slugSet.has(rx.run)) w.push(`reacts to "${rx.run}" which no longer exists`);
+  if (r.script_mode && !(r.script && r.script.trim())) w.push('script mode but the extractor is not compiled yet');
+  if (r.alert_on_fail && !String(r.alert_target || '').trim() && (!r.owner || r.owner === 'unassigned')) w.push('alert-on-fail set but no target and no owner to notify');
+  if ((r.max_fails || 0) > 0 && (r.retries || 0) >= r.max_fails) w.push('auto-disable threshold ≤ retries — it may never trip');
+  return w;
+}
+app.get('/api/lint', (_q, res) => {
+  const rows = all('SELECT * FROM routines');
+  const slugSet = new Set(rows.map((r) => r.slug));
+  const issues = rows.map((r) => ({ slug: r.slug, name: r.name, warnings: lintRoutine(r, slugSet) })).filter((x) => x.warnings.length);
+  res.json({ count: issues.reduce((a, x) => a + x.warnings.length, 0), issues });
+});
 // Live concurrency: leases currently held + inbox tasks waiting to be picked up.
 app.get('/api/leases', (_q, res) => {
   const leases = all('SELECT * FROM leases ORDER BY acquired_at DESC').map((l) => ({
