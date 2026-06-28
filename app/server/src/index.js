@@ -1075,6 +1075,15 @@ app.get('/api/failures', (req, res) => {
   const clusters = Object.values(groups).map((g) => ({ signature: g.signature, count: g.count, routines: [...g.routines], sampleRun: g.sampleRun, ago: relTime(g.latest) })).sort((a, b) => b.count - a.count).slice(0, 12);
   res.json({ total: rows.length, clusters });
 });
+// Run activity heatmap: counts by day-of-week × hour-of-day (local time).
+app.get('/api/heatmap', (req, res) => {
+  const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 30));
+  const grid = Array.from({ length: 7 }, () => new Array(24).fill(0));
+  for (const r of all('SELECT created_at FROM runs WHERE created_at > ?', now() - days * 86_400_000)) {
+    const d = new Date(r.created_at); grid[d.getDay()][d.getHours()]++;
+  }
+  res.json({ grid, max: Math.max(1, ...grid.flat()), days });
+});
 // Cost anomalies: successful runs that cost far more than their routine's average.
 app.get('/api/anomalies', (req, res) => {
   const days = Math.min(60, Math.max(1, parseInt(req.query.days, 10) || 14));

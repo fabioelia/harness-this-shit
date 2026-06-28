@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures } from '@/lib/api';
+import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures, useHeatmap } from '@/lib/api';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -17,6 +17,7 @@ export function InsightsPage() {
   const { data: lint } = useLint();
   const { data: anom } = useAnomalies(days);
   const { data: failures } = useFailures(7);
+  const { data: heat } = useHeatmap(30);
   const setDigest = useSetDigest();
   const sendDigest = useSendDigest();
   const [capDraft, setCapDraft] = useState('');
@@ -243,6 +244,25 @@ export function InsightsPage() {
                   })}
                 </div>
                 <div className="mt-2 font-mono text-[10.5px] text-dim-2">every run outcome — admitted (succeeded/failed) vs stood-down (skipped/coalesced/waiting).</div>
+              </div>
+            )}
+
+            {heat && heat.max > 1 && (
+              <div className={`${CARD} mb-[18px]`}>
+                <div className={`${LABEL} mb-3`}>Activity heatmap · runs by hour · last {heat.days}d</div>
+                <div className="overflow-x-auto">
+                  <div className="inline-flex flex-col gap-[3px]">
+                    {heat.grid.map((row, dow) => (
+                      <div key={dow} className="flex items-center gap-[3px]">
+                        <span className="w-7 shrink-0 font-mono text-[9.5px] text-dim-2">{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dow]}</span>
+                        {row.map((n, h) => (
+                          <span key={h} title={`${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dow]} ${h}:00 — ${n} run${n === 1 ? '' : 's'}`} className="h-3 w-3 rounded-[2px]" style={{ background: n ? `rgba(91,158,230,${0.18 + 0.82 * (n / heat.max)})` : 'var(--surface-2)' }} />
+                        ))}
+                      </div>
+                    ))}
+                    <div className="flex items-center gap-[3px]"><span className="w-7 shrink-0" />{Array.from({ length: 24 }, (_, h) => <span key={h} className="w-3 text-center font-mono text-[8px] text-dim-3">{h % 6 === 0 ? h : ''}</span>)}</div>
+                  </div>
+                </div>
               </div>
             )}
 
