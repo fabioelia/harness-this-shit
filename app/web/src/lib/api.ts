@@ -199,6 +199,12 @@ export function useFireEvent() {
 export function usePreviewRoutine() {
   return useMutation({ mutationFn: (slug: string) => post<RoutinePreview>(`/api/routines/${slug}/preview`, {}) });
 }
+export interface PromptHistory { current: string; versions: { id: number; ago: string; chars: number; prompt: string }[] }
+export const useRoutineHistory = (slug: string, enabled = true) => useQuery({ queryKey: ['history', slug], enabled, queryFn: () => get<PromptHistory>(`/api/routines/${slug}/history`) });
+export function useRestorePrompt() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ slug, id }: { slug: string; id: number }) => post(`/api/routines/${slug}/restore/${id}`), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['routine', v.slug] }); qc.invalidateQueries({ queryKey: ['history', v.slug] }); } });
+}
 export function useCloneRoutine() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (slug: string) => post<Routine>(`/api/routines/${slug}/clone`), onSuccess: () => qc.invalidateQueries({ queryKey: ['routines'] }) });

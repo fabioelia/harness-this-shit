@@ -1122,6 +1122,8 @@ app.put('/api/routines/:slug', (req, res) => {
   // Editing what to extract on a script routine doesn't throw the script away — it keeps it
   // as the basis and marks it stale so the LLM regenerates from the current script next.
   const staleAfter = (scriptModeAfter && promptChanged) ? 1 : r.script_stale;
+  // Snapshot the prior prompt before overwriting it, so edits are reversible + auditable.
+  if (promptChanged && r.prompt && r.prompt.trim()) run('INSERT INTO prompt_history (slug, prompt, created_at) VALUES (?,?,?)', r.slug, r.prompt, now());
   run(
     `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=?,retries=?,assertions=?,alert_on_fail=?,alert_target=?,timeout_s=?,env=?,tags=?,rate_limit=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
@@ -1197,6 +1199,24 @@ app.get('/api/routines/:slug/export', (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
   if (!r) return res.status(404).json({ error: 'not found' });
   res.json({ switchboard: 'routine', version: 1, slug: r.slug, routine: exportBody(r) });
+});
+// Prompt history — past versions of a routine's prompt, with restore.
+app.get('/api/routines/:slug/history', (req, res) => {
+  const r = one('SELECT prompt FROM routines WHERE slug=?', req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const rows = all('SELECT id, prompt, created_at FROM prompt_history WHERE slug=? ORDER BY id DESC LIMIT 30', req.params.slug);
+  res.json({ current: r.prompt || '', versions: rows.map((x) => ({ id: x.id, ago: relTime(x.created_at), chars: (x.prompt || '').length, prompt: x.prompt || '' })) });
+});
+app.post('/api/routines/:slug/restore/:id', (req, res) => {
+  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const v = one('SELECT prompt FROM prompt_history WHERE id=? AND slug=?', req.params.id, req.params.slug);
+  if (!v) return res.status(404).json({ error: 'version not found' });
+  if (r.prompt && r.prompt.trim() && r.prompt !== v.prompt) run('INSERT INTO prompt_history (slug, prompt, created_at) VALUES (?,?,?)', r.slug, r.prompt, now());
+  const stale = r.script_mode ? 1 : r.script_stale;
+  run('UPDATE routines SET prompt=?, script_stale=? WHERE slug=?', v.prompt, stale, r.slug);
+  logActivity(`${r.slug} prompt restored from a prior version`, 'idle');
+  res.json({ ok: true });
 });
 app.post('/api/routines/:slug/clone', (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);

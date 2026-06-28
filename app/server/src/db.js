@@ -167,6 +167,8 @@ export function getDb() {
   ensure('routines', 'env', "env TEXT NOT NULL DEFAULT '{}'");
   ensure('routines', 'tags', "tags TEXT NOT NULL DEFAULT '[]'");
   ensure('routines', 'rate_limit', 'rate_limit INTEGER NOT NULL DEFAULT 0');
+  _db.exec('CREATE TABLE IF NOT EXISTS prompt_history (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, prompt TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)');
+  _db.exec('CREATE INDEX IF NOT EXISTS idx_prompt_history_slug ON prompt_history(slug, id)');
   ensure('runs', 'assert_result', "assert_result TEXT NOT NULL DEFAULT ''");
   ensure('runs', 'dur_ms', 'dur_ms INTEGER');
   const n = _db.prepare('SELECT COUNT(*) AS n FROM routines').get();

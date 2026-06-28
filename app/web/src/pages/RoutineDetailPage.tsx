@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent } from '@/lib/api';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { FrontMatter, RoutineDetail } from '@/types';
@@ -89,6 +89,28 @@ function ReactiveFlowCard({ d }: { d: RoutineDetail }) {
   );
 }
 
+function PromptHistoryCard({ slug }: { slug: string }) {
+  const { data } = useRoutineHistory(slug, true);
+  const restore = useRestorePrompt();
+  const [open, setOpen] = useState<number | null>(null);
+  if (!data || data.versions.length === 0) return null;
+  return (
+    <div className={CARD}>
+      <div className={`${LABEL} mb-3`}>Prompt history · {data.versions.length} prior version{data.versions.length > 1 ? 's' : ''}</div>
+      <div className="flex flex-col gap-1.5">
+        {data.versions.map((v) => (
+          <div key={v.id} className="rounded-md border border-line-soft">
+            <div className="flex items-center gap-2 px-2.5 py-1.5">
+              <button onClick={() => setOpen(open === v.id ? null : v.id)} className="font-mono text-[11.5px] text-t2 hover:text-brand">{open === v.id ? '▾' : '▸'} {v.ago} · {v.chars} chars</button>
+              <button onClick={() => restore.mutate({ slug, id: v.id })} disabled={restore.isPending} className="ml-auto font-mono text-[11px] text-dim hover:text-brand disabled:opacity-40">restore</button>
+            </div>
+            {open === v.id && <pre className="max-h-[240px] overflow-auto whitespace-pre-wrap break-words border-t border-line-soft bg-code px-2.5 py-2 font-mono text-[11px] leading-[1.5] text-muted">{v.prompt}</pre>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 function TestFireCard({ slug, triggers, repo }: { slug: string; triggers: string[]; repo: string }) {
   const fire = useFireEvent();
   const navigate = useNavigate();
@@ -410,6 +432,7 @@ export function RoutineDetailPage() {
             </div>
           )}
           <TestFireCard slug={d.slug} triggers={d.triggers} repo={d.repo} />
+          <PromptHistoryCard slug={d.slug} />
           <MetricCard slug={d.slug} />
           {d.scriptMode && <ScriptCard slug={d.slug} lang={d.scriptLang} compiled={d.compiled} stale={d.scriptStale} script={d.script} />}
           {d.memory && <MemoryCard slug={d.slug} />}
