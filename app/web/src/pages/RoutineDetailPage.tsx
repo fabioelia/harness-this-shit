@@ -481,6 +481,21 @@ export function RoutineDetailPage() {
           <TestFireCard slug={d.slug} triggers={d.triggers} repo={d.repo} />
           <PromptHistoryCard slug={d.slug} />
           <AuditCard slug={d.slug} />
+          {d.dependents && d.dependents.length > 0 && (
+            <div className={CARD}>
+              <div className={`${LABEL} mb-3`}>Depended on by · {d.dependents.length}</div>
+              <div className="flex flex-col gap-1.5">
+                {d.dependents.map((dep) => (
+                  <div key={dep.slug} className="flex items-center gap-2 font-mono text-[12px]">
+                    <Link to={`/routines/${dep.slug}`} className="flex-1 truncate font-sans font-semibold text-t2 hover:text-brand">{dep.name}</Link>
+                    <span className="text-dim-2">via {dep.via}</span>
+                    {!dep.enabled && <span className="text-dim">(off)</span>}
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 font-mono text-[10.5px] text-dim-2">disabling or deleting this routine breaks these downstream flows.</div>
+            </div>
+          )}
           <CostTrendCard trend={d.costTrend} />
           <MetricCard slug={d.slug} />
           {d.scriptMode && <ScriptCard slug={d.slug} lang={d.scriptLang} compiled={d.compiled} stale={d.scriptStale} script={d.script} />}

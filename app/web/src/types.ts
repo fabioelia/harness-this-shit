@@ -80,6 +80,7 @@ export interface RoutineDetail extends Routine {
   script: string;
   lastError: { runId: string; output: string; ago: string } | null;
   costTrend: number[];
+  dependents: { slug: string; name: string; enabled: boolean; via: string }[];
 }
 
 export interface RegistryServer {
