@@ -89,7 +89,12 @@ export function AppShell() {
                 )
               }
             >
-              {n.icon}
+              <span className="relative">
+                {n.icon}
+                {n.to === '/' && (stats?.failing ?? 0) > 0 && (
+                  <span className="absolute -right-2.5 -top-1.5 grid h-[15px] min-w-[15px] place-items-center rounded-full bg-bad px-1 font-mono text-[9px] font-bold text-white" title={`${stats?.failing} routine(s) failing`}>{stats?.failing}</span>
+                )}
+              </span>
               <span className="font-display text-[8.5px] font-semibold tracking-[0.04em]">{n.label}</span>
             </NavLink>
           ))}
