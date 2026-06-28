@@ -958,6 +958,33 @@ app.post('/api/digest', (req, res) => {
   res.json({ channel: metaGet('digest_channel', ''), hour: parseInt(metaGet('digest_hour', '-1'), 10) });
 });
 app.post('/api/digest/send', (_q, res) => res.json({ sent: sendDigest(), preview: buildDigest() }));
+// Auto-generated ops report (markdown) — spend, top routines, failures, warnings.
+app.get('/api/report.md', (req, res) => {
+  const days = Math.min(60, Math.max(1, parseInt(req.query.days, 10) || 7));
+  const since = now() - days * 86_400_000;
+  const rows = all("SELECT routine_slug, status, cost_usd, num_turns FROM runs WHERE created_at > ? AND status IN ('succeeded','failed')", since);
+  const totalCost = rows.reduce((a, r) => a + (r.cost_usd || 0), 0);
+  const fails = rows.filter((r) => r.status === 'failed').length;
+  const perR = {};
+  for (const r of rows) { const p = (perR[r.routine_slug] ||= { runs: 0, cost: 0, fails: 0 }); p.runs++; p.cost += r.cost_usd || 0; if (r.status === 'failed') p.fails++; }
+  const top = Object.entries(perR).sort((a, b) => b[1].cost - a[1].cost).slice(0, 5);
+  const slugSet = new Set(all('SELECT slug FROM routines').map((x) => x.slug));
+  const warnings = all('SELECT * FROM routines').flatMap((r) => lintRoutine(r, slugSet).map((w) => `${r.slug}: ${w}`));
+  const stats = one('SELECT COUNT(*) AS total, SUM(enabled) AS enabledN FROM routines');
+  const lines = [
+    `# Switchboard report — last ${days}d`,
+    `_generated ${new Date(now()).toISOString()}_`, '',
+    `- **Routines**: ${stats.total} (${stats.enabledN || 0} enabled)`,
+    `- **Runs**: ${rows.length} · **Spend**: $${totalCost.toFixed(2)} · **Failures**: ${fails} (${rows.length ? Math.round((100 * fails) / rows.length) : 0}%)`,
+    '', '## Top routines by spend',
+    ...(top.length ? top.map(([slug, p]) => `- **${slug}** — ${p.runs} runs, $${p.cost.toFixed(2)}${p.fails ? `, ${p.fails} failed` : ''}`) : ['- _no runs in window_']),
+    '', `## Config warnings (${warnings.length})`,
+    ...(warnings.length ? warnings.map((w) => `- ⚠ ${w}`) : ['- none 🎉']),
+  ];
+  res.setHeader('Content-Type', 'text/markdown');
+  res.setHeader('Content-Disposition', 'attachment; filename="switchboard-report.md"');
+  res.send(lines.join('\n'));
+});
 // Config lint: flag routines that are misconfigured in ways that fail silently.
 function lintRoutine(r, slugSet) {
   const w = [];

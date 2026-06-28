@@ -40,8 +40,11 @@ export function InsightsPage() {
             <div className="font-display text-[23px] font-bold tracking-tight">Insights</div>
             <div className="mt-1 text-[13px] text-muted-2">Real spend, run volume, latency and failures — from captured run cost/turns/duration.</div>
           </div>
-          <div className="inline-flex overflow-hidden rounded-md border border-line text-[12px] font-semibold">
-            {[7, 14, 30].map((n) => <button key={n} onClick={() => setDays(n)} className={`px-3 py-1.5 font-mono ${days === n ? 'bg-brand/15 text-brand-soft' : 'text-dim hover:text-t2'}`}>{n}d</button>)}
+          <div className="flex items-center gap-2.5">
+            <a href={`/api/report.md?days=${days}`} download className="h-[30px] rounded-md border border-line bg-surface-2 px-3 font-display text-[12px] font-semibold leading-[30px] text-t2 hover:border-hair">Report ↓</a>
+            <div className="inline-flex overflow-hidden rounded-md border border-line text-[12px] font-semibold">
+              {[7, 14, 30].map((n) => <button key={n} onClick={() => setDays(n)} className={`px-3 py-1.5 font-mono ${days === n ? 'bg-brand/15 text-brand-soft' : 'text-dim hover:text-t2'}`}>{n}d</button>)}
+            </div>
           </div>
         </div>
       </div>
