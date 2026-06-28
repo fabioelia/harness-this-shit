@@ -50,7 +50,7 @@ function ConnectorRow({ c, GRID }: { c: Connector; GRID: React.CSSProperties }) 
       </div>
       {(result || showCfg || showAuth || oauth.data || oauth.isPending) && (
         <div className="px-[18px] pb-3.5" style={{ paddingLeft: 72 }}>
-          {result && <div className={cn('font-mono text-[11.5px]', result.ok ? 'text-ok' : 'text-warn')}>{result.ok ? '✓' : '✗'} {result.detail}</div>}
+          {result && <div className={cn('font-mono text-[11.5px]', result.ok ? 'text-ok' : 'text-warn')}>{result.ok ? '✓' : '✗'} {result.detail}{result.latencyMs != null ? <span className={cn('ml-1.5', result.latencyMs > 2000 ? 'text-warn' : 'text-dim')}>· {result.latencyMs}ms</span> : ''}</div>}
           {oauth.data && (
             oauth.data.authUrl
               ? <div className="font-mono text-[11.5px] text-lease">🔓 <a href={oauth.data.authUrl} target="_blank" rel="noreferrer" className="text-brand underline">Authorize {c.name} →</a> <span className="text-dim-2">{oauth.data.detail}</span></div>

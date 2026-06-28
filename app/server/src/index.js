@@ -2060,8 +2060,9 @@ app.get('/api/connectors', async (_q, res) => {
 
 // Live connectivity test for a connector (gh user / slack / web / atlassian / MCP server).
 app.post('/api/connectors/:code/test', async (req, res) => {
-  if (mcpNameSet().has(req.params.code)) return res.json(await testMcp(req.params.code));
-  res.json(await testConnector(req.params.code, req.body || {}));
+  const t0 = now();
+  const result = mcpNameSet().has(req.params.code) ? await testMcp(req.params.code) : await testConnector(req.params.code, req.body || {});
+  res.json({ ...result, latencyMs: now() - t0 });
 });
 // Custom MCP servers — drop in a config + auth (env/headers); routines grant them by name.
 app.get('/api/mcp', (_q, res) => res.json(all('SELECT * FROM mcp_servers ORDER BY name').map((s) => {

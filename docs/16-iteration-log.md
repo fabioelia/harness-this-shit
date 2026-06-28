@@ -110,6 +110,7 @@ dropdowns · Fleet inbox badge.
 | 89 | Compare any two runs (arbitrary run-vs-run LCS diff) | reproducibility | ✅ done |
 | 90 | Bulk export/import routines as one bundle (multi-select) | portability | ✅ done |
 | 91 | Optimization recommendations (lower effort / add retries / switch model) | efficiency/eliminating-humans | ✅ done |
+| 92 | Connector test latency (response time on test, slow=warn) | observability | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.

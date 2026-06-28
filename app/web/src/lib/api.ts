@@ -197,7 +197,7 @@ export function useDeleteAgent() {
   return useMutation({ mutationFn: (name: string) => del(`/api/agents/${name}`), onSuccess: () => qc.invalidateQueries({ queryKey: ['agents'] }) });
 }
 export function useTestConnector() {
-  return useMutation({ mutationFn: ({ code, body }: { code: string; body?: unknown }) => post<{ ok: boolean; detail: string }>(`/api/connectors/${code}/test`, body ?? {}) });
+  return useMutation({ mutationFn: ({ code, body }: { code: string; body?: unknown }) => post<{ ok: boolean; detail: string; latencyMs?: number }>(`/api/connectors/${code}/test`, body ?? {}) });
 }
 export function useConfigConnector() {
   const qc = useQueryClient();
