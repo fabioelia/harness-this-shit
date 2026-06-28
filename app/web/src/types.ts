@@ -37,6 +37,7 @@ export interface Routine {
   assertions: { type: string; value: string }[];
   alertOnFail: boolean;
   alertTarget: string;
+  timeout: number;
 }
 
 export interface FrontMatter {

@@ -290,7 +290,7 @@ const shapeRoutine = (r) => {
     inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
     scriptMode: !!r.script_mode, scriptLang: r.script_lang || 'bash', compiled: !!(r.script && r.script.trim()), scriptStale: !!r.script_stale,
     retries: r.retries || 0, assertions: j(r.assertions),
-    alertOnFail: !!r.alert_on_fail, alertTarget: r.alert_target || '',
+    alertOnFail: !!r.alert_on_fail, alertTarget: r.alert_target || '', timeout: r.timeout_s || 0,
   };
 };
 
@@ -515,7 +515,7 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       } catch { /* one malformed event must not kill the run */ }
     };
 
-    const res = await runClaude(prompt, { tools, onEvent, model: normModel(r.model), effort: normEffort(r.effort), memoryDir, mcpConfig, runId: id, coalesce, scriptPath, compile });
+    const res = await runClaude(prompt, { tools, onEvent, model: normModel(r.model), effort: normEffort(r.effort), memoryDir, mcpConfig, runId: id, coalesce, scriptPath, compile, timeoutMs: (r.timeout_s || 0) > 0 ? r.timeout_s * 1000 : undefined });
     if (mcpConfig) try { unlinkSync(mcpConfig); } catch { /* ignore */ }
     // Compile: capture the extractor the agent just wrote so future runs are deterministic.
     if (compile && scriptPath) {
@@ -1000,8 +1000,8 @@ function insertRoutine(b) {
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
   run(
     `INSERT INTO routines
-      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,script_mode,script_lang,retries,assertions,alert_on_fail,alert_target)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,script_mode,script_lang,retries,assertions,alert_on_fail,alert_target,timeout_s)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     slug, (b.name || '').trim(), (b.summary || '').trim(), owner, team,
     JSON.stringify(triggers), JSON.stringify(connectors),
     'idle', 'never', 'idle', next, null, '$0.00', enabled, '', '', '—',
@@ -1009,7 +1009,7 @@ function insertRoutine(b) {
     (b.prompt || '').trim(), normModel(b.model), (b.repo || '').trim(), (b.branch || 'main').trim(),
     JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions), normEffort(b.effort), b.memory ? 1 : 0, JSON.stringify(cleanConcurrency(b.concurrency)),
     b.scriptMode ? 1 : 0, b.scriptLang === 'node' ? 'node' : 'bash', normRetries(b.retries), JSON.stringify(cleanAssertions(b.assertions)),
-    b.alertOnFail ? 1 : 0, (b.alertTarget || '').trim()
+    b.alertOnFail ? 1 : 0, (b.alertTarget || '').trim(), Math.max(0, Math.min(1800, parseInt(b.timeout, 10) || 0))
   );
   return slug;
 }
@@ -1109,7 +1109,7 @@ app.put('/api/routines/:slug', (req, res) => {
   // as the basis and marks it stale so the LLM regenerates from the current script next.
   const staleAfter = (scriptModeAfter && promptChanged) ? 1 : r.script_stale;
   run(
-    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=?,retries=?,assertions=?,alert_on_fail=?,alert_target=? WHERE slug=?`,
+    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=?,retries=?,assertions=?,alert_on_fail=?,alert_target=?,timeout_s=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
     JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
     JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
@@ -1125,6 +1125,7 @@ app.put('/api/routines/:slug', (req, res) => {
     JSON.stringify(b.assertions != null ? cleanAssertions(b.assertions) : j(r.assertions)),
     b.alertOnFail != null ? (b.alertOnFail ? 1 : 0) : r.alert_on_fail,
     b.alertTarget != null ? String(b.alertTarget).trim() : r.alert_target,
+    b.timeout != null ? Math.max(0, Math.min(1800, parseInt(b.timeout, 10) || 0)) : r.timeout_s,
     r.slug
   );
   const updated = one('SELECT * FROM routines WHERE slug=?', r.slug);

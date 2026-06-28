@@ -412,6 +412,7 @@ export function NewRoutinePage() {
   const [assertions, setAssertions] = useState<{ type: string; value: string }[]>([]);
   const [alertOnFail, setAlertOnFail] = useState(false);
   const [alertTarget, setAlertTarget] = useState('');
+  const [timeoutS, setTimeoutS] = useState(0);
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('main');
   const [prompt, setPrompt] = useState('');
@@ -455,7 +456,7 @@ export function NewRoutinePage() {
     setSummary(d.summary); setOwner(d.owner); setTeam(d.team);
     setTriggers(d.triggers); setConnectors(d.connectors);
     setModel(d.model || 'claude-opus-4-8'); setEffort(d.effort || ''); setMemory(!!d.memory); setRepo(d.repo || ''); setBranch(d.branch || 'main');
-    setScriptMode(!!d.scriptMode); setScriptLang(d.scriptLang === 'node' ? 'node' : 'bash'); setRetries(d.retries || 0); setAssertions(d.assertions ?? []); setAlertOnFail(!!d.alertOnFail); setAlertTarget(d.alertTarget || '');
+    setScriptMode(!!d.scriptMode); setScriptLang(d.scriptLang === 'node' ? 'node' : 'bash'); setRetries(d.retries || 0); setAssertions(d.assertions ?? []); setAlertOnFail(!!d.alertOnFail); setAlertTarget(d.alertTarget || ''); setTimeoutS(d.timeout || 0);
     setPrompt(d.prompt || '');
     setChain(d.chain.join(', '));
     if (d.schedule) setSchedule(d.schedule);
@@ -514,7 +515,7 @@ export function NewRoutinePage() {
   const valid = name.trim().length > 0 && slug.length > 0;
   function submit() {
     if (!valid) return;
-    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, scriptMode, scriptLang, retries, assertions: assertions.filter((a) => a.type === 'no_tool_errors' || a.value.trim()), alertOnFail, alertTarget };
+    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, scriptMode, scriptLang, retries, assertions: assertions.filter((a) => a.type === 'no_tool_errors' || a.value.trim()), alertOnFail, alertTarget, timeout: timeoutS };
     if (isEdit) update.mutate({ slug: editSlug!, body }, { onSuccess: () => navigate(`/routines/${editSlug}`) });
     else create.mutate(body, { onSuccess: (r) => navigate(`/routines/${r.slug}`) });
   }
@@ -644,6 +645,7 @@ export function NewRoutinePage() {
                     </select>
                     <div className="mt-1 text-[11px] text-dim-2">A failed run (claude/gh/timeout) re-fires automatically with backoff — no human needed to notice and re-run.</div>
                   </div>
+                  <div><div className={LABEL}>Max duration (s)</div><input type="number" min={0} max={1800} value={timeoutS || ''} onChange={(e) => setTimeoutS(+e.target.value)} placeholder="240 (default)" className={cn(inputCls, 'font-mono text-[12px]')} /></div>
                   <div className="col-span-2">
                     <label className="flex cursor-pointer items-center gap-2 text-[12px] text-t2"><input type="checkbox" checked={alertOnFail} onChange={(e) => setAlertOnFail(e.target.checked)} className="h-4 w-4 accent-[#e5736b]" />Alert on failure</label>
                     {alertOnFail && <input value={alertTarget} onChange={(e) => setAlertTarget(e.target.value)} placeholder="@fabio or #alerts · blank = the owner" className={cn(inputCls, 'mt-1.5 font-mono text-[12px]')} />}
