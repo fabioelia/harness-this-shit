@@ -39,6 +39,7 @@ export interface Routine {
   alertTarget: string;
   timeout: number;
   snoozedUntil: number;
+  env: Record<string, string>;
 }
 
 export interface FrontMatter {

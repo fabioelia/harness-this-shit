@@ -24,7 +24,7 @@ export function allowedToolsFor(connectors = []) {
   return allow;
 }
 
-export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, model, effort, memoryDir, mcpConfig, runId, coalesce, scriptPath, compile } = {}) {
+export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, model, effort, memoryDir, mcpConfig, runId, coalesce, scriptPath, compile, extraEnv = {} } = {}) {
   return new Promise((resolve) => {
     const start = Date.now();
     const allow = allowedToolsFor(coalesce ? [...tools, '__inbox'] : tools);
@@ -45,7 +45,7 @@ export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, mo
     // tools dir on PATH so `slack-post` (and future tool scripts) resolve by name;
     // SB_RUN_ID lets the `inbox` tool fetch tasks coalesced onto this very run;
     // SB_SCRIPT_PATH is where a compile run writes its reusable extractor.
-    const env = { ...process.env, PATH: `${TOOLS_DIR}:${process.env.PATH}`, ...(runId ? { SB_RUN_ID: runId } : {}), ...(scriptPath ? { SB_SCRIPT_PATH: scriptPath } : {}) };
+    const env = { ...process.env, ...extraEnv, PATH: `${TOOLS_DIR}:${process.env.PATH}`, ...(runId ? { SB_RUN_ID: runId } : {}), ...(scriptPath ? { SB_SCRIPT_PATH: scriptPath } : {}) };
     const fail = (msg) => resolve({ finalText: '', output: '', stderr: msg, code: -1, ms: Date.now() - start, isError: true, costUsd: null, numTurns: null, sessionId: '', events: 0 });
     let child;
     try {
@@ -94,7 +94,7 @@ export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, mo
 /** Assemble the session input: the routine's natural instruction + the live
  *  trigger context + the tools it may use. No output-format contract — the
  *  session does whatever the instruction needs and takes the actions itself. */
-export function buildPrompt(routine, event, constraints = [], { memoryDir, agents = [], coalesce = false, seedTasks = [], compile = false, scriptLang = 'bash', scriptPath = '', priorScript = '' } = {}) {
+export function buildPrompt(routine, event, constraints = [], { memoryDir, agents = [], coalesce = false, seedTasks = [], compile = false, scriptLang = 'bash', scriptPath = '', priorScript = '', env = {} } = {}) {
   const tools = Array.isArray(routine.connectors)
     ? routine.connectors
     : (() => { try { return JSON.parse(routine.connectors || '[]'); } catch { return []; } })();
@@ -119,6 +119,8 @@ export function buildPrompt(routine, event, constraints = [], { memoryDir, agent
       'You have a persistent memory in your current working directory that survives across runs. `memory.md` is the index — **read it first**. It links any supporting files (e.g. `patterns.md`, `decisions.md`); read the ones it references that are relevant.',
       'As you learn things worth remembering for next time — recurring facts, decisions, what worked or failed — **update `memory.md`** (and add or refresh supporting files, always linking them from `memory.md`). Keep it concise, current, and de-duplicated. Do not record secrets.');
   }
+  const envKeys = Object.keys(env || {});
+  if (envKeys.length) lines.push('', '## Config', `These environment variables are set for your shell — read them with \`echo $NAME\` (or process.env in node): ${envKeys.join(', ')}.`);
   if (tools.length) {
     const how = [];
     if (tools.includes('github')) how.push('- GitHub: use the `gh` CLI, always with `--repo OWNER/REPO`. e.g. `gh pr list --repo acme/x --head my-branch --state open --json number,title,url` or `gh pr view N --repo acme/x --json title`.');

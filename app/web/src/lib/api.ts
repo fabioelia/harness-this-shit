@@ -260,6 +260,7 @@ export interface CreateRoutineInput {
   alertOnFail?: boolean;
   alertTarget?: string;
   timeout?: number;
+  env?: Record<string, string>;
   reactions?: { source: string; kind: string; when: string; run: string; check?: string }[];
   memory?: boolean;
 }

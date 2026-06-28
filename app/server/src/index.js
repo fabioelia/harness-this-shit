@@ -154,6 +154,7 @@ const cleanFilters = (f) => {
   return { actions: arr(o.actions), branches: arr(o.branches), labels: arr(o.labels), mode: o.mode === 'or' ? 'or' : 'and' };
 };
 const normRetries = (n) => Math.max(0, Math.min(3, parseInt(n, 10) || 0));
+const cleanEnv = (e) => { const o = e && typeof e === 'object' ? e : {}; const out = {}; for (const [k, v] of Object.entries(o)) { const K = String(k).trim().replace(/[^A-Z0-9_]/gi, '_').toUpperCase(); if (K && !K.startsWith('SB_')) out[K] = String(v); } return out; };
 // Output assertions: checked harness-side over the run result + trace (not self-reported).
 const ASSERT_TYPES = ['contains', 'not_contains', 'matches', 'max_cost', 'max_turns', 'min_length', 'no_tool_errors'];
 const cleanAssertions = (a) => (Array.isArray(a) ? a : [])
@@ -290,7 +291,7 @@ const shapeRoutine = (r) => {
     inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
     scriptMode: !!r.script_mode, scriptLang: r.script_lang || 'bash', compiled: !!(r.script && r.script.trim()), scriptStale: !!r.script_stale,
     retries: r.retries || 0, assertions: j(r.assertions),
-    alertOnFail: !!r.alert_on_fail, alertTarget: r.alert_target || '', timeout: r.timeout_s || 0, snoozedUntil: r.snooze_until && r.snooze_until > now() ? r.snooze_until : 0,
+    alertOnFail: !!r.alert_on_fail, alertTarget: r.alert_target || '', timeout: r.timeout_s || 0, env: jObj(r.env) || {}, snoozedUntil: r.snooze_until && r.snooze_until > now() ? r.snooze_until : 0,
   };
 };
 
@@ -350,7 +351,7 @@ async function runCompiledScript(r, event, id, t0) {
   const lang = r.script_lang === 'node' ? 'node' : 'bash';
   const file = join(tmpdir(), `sb-run-${id}.${lang === 'node' ? 'mjs' : 'sh'}`);
   writeFileSync(file, r.script);
-  const env = { ...process.env, PATH: `${SCRIPT_TOOLS_DIR}:${process.env.PATH}`, SB_REPO: repoTargets(r)[0] || eventRepo(event) || '', SB_EVENT: JSON.stringify(event || {}), SB_RUN_ID: id };
+  const env = { ...process.env, ...(jObj(r.env) || {}), PATH: `${SCRIPT_TOOLS_DIR}:${process.env.PATH}`, SB_REPO: repoTargets(r)[0] || eventRepo(event) || '', SB_EVENT: JSON.stringify(event || {}), SB_RUN_ID: id };
   const res = await execCapture(lang, [file], { env, cwd: tmpdir(), timeoutMs: 90_000 });
   try { unlinkSync(file); } catch { /* */ }
   const ms = now() - t0;
@@ -475,7 +476,7 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     const scriptLang = r.script_lang === 'node' ? 'node' : 'bash';
     const scriptPath = compile ? join(tmpdir(), `sb-build-${id}.${scriptLang === 'node' ? 'mjs' : 'sh'}`) : null;
     const priorScript = compile ? (r.script || '') : ''; // current extractor to revise (if any)
-    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints(), { memoryDir, agents, coalesce, seedTasks, compile, scriptLang, scriptPath, priorScript });
+    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints(), { memoryDir, agents, coalesce, seedTasks, compile, scriptLang, scriptPath, priorScript, env: jObj(r.env) || {} });
     run('UPDATE runs SET prompt=? WHERE id=?', prompt, id);
 
     // Step-level trace: normalize each stream-json event into a run_events row,
@@ -515,7 +516,7 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       } catch { /* one malformed event must not kill the run */ }
     };
 
-    const res = await runClaude(prompt, { tools, onEvent, model: normModel(r.model), effort: normEffort(r.effort), memoryDir, mcpConfig, runId: id, coalesce, scriptPath, compile, timeoutMs: (r.timeout_s || 0) > 0 ? r.timeout_s * 1000 : undefined });
+    const res = await runClaude(prompt, { tools, onEvent, model: normModel(r.model), effort: normEffort(r.effort), memoryDir, mcpConfig, runId: id, coalesce, scriptPath, compile, timeoutMs: (r.timeout_s || 0) > 0 ? r.timeout_s * 1000 : undefined, extraEnv: jObj(r.env) || {} });
     if (mcpConfig) try { unlinkSync(mcpConfig); } catch { /* ignore */ }
     // Compile: capture the extractor the agent just wrote so future runs are deterministic.
     if (compile && scriptPath) {
@@ -1003,8 +1004,8 @@ function insertRoutine(b) {
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
   run(
     `INSERT INTO routines
-      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,script_mode,script_lang,retries,assertions,alert_on_fail,alert_target,timeout_s)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,script_mode,script_lang,retries,assertions,alert_on_fail,alert_target,timeout_s,env)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     slug, (b.name || '').trim(), (b.summary || '').trim(), owner, team,
     JSON.stringify(triggers), JSON.stringify(connectors),
     'idle', 'never', 'idle', next, null, '$0.00', enabled, '', '', '—',
@@ -1012,7 +1013,7 @@ function insertRoutine(b) {
     (b.prompt || '').trim(), normModel(b.model), (b.repo || '').trim(), (b.branch || 'main').trim(),
     JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions), normEffort(b.effort), b.memory ? 1 : 0, JSON.stringify(cleanConcurrency(b.concurrency)),
     b.scriptMode ? 1 : 0, b.scriptLang === 'node' ? 'node' : 'bash', normRetries(b.retries), JSON.stringify(cleanAssertions(b.assertions)),
-    b.alertOnFail ? 1 : 0, (b.alertTarget || '').trim(), Math.max(0, Math.min(1800, parseInt(b.timeout, 10) || 0))
+    b.alertOnFail ? 1 : 0, (b.alertTarget || '').trim(), Math.max(0, Math.min(1800, parseInt(b.timeout, 10) || 0)), JSON.stringify(cleanEnv(b.env))
   );
   return slug;
 }
@@ -1112,7 +1113,7 @@ app.put('/api/routines/:slug', (req, res) => {
   // as the basis and marks it stale so the LLM regenerates from the current script next.
   const staleAfter = (scriptModeAfter && promptChanged) ? 1 : r.script_stale;
   run(
-    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=?,retries=?,assertions=?,alert_on_fail=?,alert_target=?,timeout_s=? WHERE slug=?`,
+    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=?,retries=?,assertions=?,alert_on_fail=?,alert_target=?,timeout_s=?,env=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
     JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
     JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
@@ -1129,6 +1130,7 @@ app.put('/api/routines/:slug', (req, res) => {
     b.alertOnFail != null ? (b.alertOnFail ? 1 : 0) : r.alert_on_fail,
     b.alertTarget != null ? String(b.alertTarget).trim() : r.alert_target,
     b.timeout != null ? Math.max(0, Math.min(1800, parseInt(b.timeout, 10) || 0)) : r.timeout_s,
+    JSON.stringify(b.env != null ? cleanEnv(b.env) : (jObj(r.env) || {})),
     r.slug
   );
   const updated = one('SELECT * FROM routines WHERE slug=?', r.slug);

@@ -40,6 +40,7 @@ dropdowns · Fleet inbox badge.
 | 20 | Last-failure banner on failing routines (error + link) | observability | ✅ done |
 | 21 | Test-fire a synthetic event (build action/label/branch → dispatch, shows match) | efficiency | ✅ done |
 | 22 | Trace filter within a run (search + type chips) | observability/UX | ✅ done |
+| 23 | Per-routine environment variables (injected into session + scripts) | efficiency/flexibility | ✅ done |
 
 ## QA backlog (test at iteration 10)
 - [x] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.
