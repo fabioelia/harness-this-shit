@@ -2498,6 +2498,12 @@ app.post('/api/routines/:slug/comments', (req, res) => {
   for (const who of mentioned) { run('INSERT INTO mentions (mentioned, by, slug, snippet, created_at) VALUES (?,?,?,?,?)', who, author, req.params.slug, body.slice(0, 100), now()); logActivity(`@${who} mentioned by ${author} on ${req.params.slug}`, 'idle'); }
   res.status(201).json({ ok: true });
 });
+app.put('/api/routines/:slug/comments/:id', (req, res) => {
+  const body = String(req.body?.body || '').trim().slice(0, 2000);
+  if (!body) return res.status(400).json({ error: 'empty comment' });
+  run('UPDATE comments SET body=? WHERE id=? AND slug=?', body, req.params.id, req.params.slug);
+  res.json({ ok: true });
+});
 app.delete('/api/routines/:slug/comments/:id', (req, res) => {
   run('DELETE FROM comments WHERE id=? AND slug=?', req.params.id, req.params.slug);
   res.json({ ok: true });

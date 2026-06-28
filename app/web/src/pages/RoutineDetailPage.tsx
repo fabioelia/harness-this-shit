@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt, useRoutineAudit, useArchiveRoutine, useUpdateRoutine, useApproveRoutine, useComments, useAddComment, useDeleteComment, usePinComment, useWatch, useToggleWatch, useTimeline, useHandover } from '@/lib/api';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt, useRoutineAudit, useArchiveRoutine, useUpdateRoutine, useApproveRoutine, useComments, useAddComment, useDeleteComment, useEditComment, usePinComment, useWatch, useToggleWatch, useTimeline, useHandover } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import { useOperator } from '@/lib/operator';
@@ -212,6 +212,7 @@ function CommentsCard({ slug }: { slug: string }) {
   const add = useAddComment();
   const delc = useDeleteComment();
   const pinc = usePinComment();
+  const editc = useEditComment();
   const [body, setBody] = useState('');
   const [author, setAuthor] = useState(() => { try { return localStorage.getItem('sb-author') || ''; } catch { return ''; } });
   const submit = () => { if (!body.trim()) return; try { localStorage.setItem('sb-author', author.trim()); } catch { /**/ } add.mutate({ slug, author: author.trim() || 'anon', body: body.trim() }, { onSuccess: () => setBody('') }); };
@@ -221,7 +222,7 @@ function CommentsCard({ slug }: { slug: string }) {
       <div className="flex flex-col gap-2.5">
         {data?.comments.map((c) => (
           <div key={c.id} className={`rounded-md border px-3 py-2 ${c.pinned ? 'border-brand/40 bg-brand/[0.05]' : 'border-line-soft bg-surface-2'}`}>
-            <div className="mb-0.5 flex items-center gap-2 font-mono text-[10.5px]">{c.pinned && <span className="text-brand-soft">📌</span>}<span className="font-semibold text-brand-soft">{c.author}</span><span className="text-dim">{c.ago}</span><button onClick={() => pinc.mutate({ slug, id: c.id, pinned: !c.pinned })} title={c.pinned ? 'unpin' : 'pin to top'} className={`ml-auto ${c.pinned ? 'text-brand-soft' : 'text-dim hover:text-brand-soft'}`}>{c.pinned ? 'unpin' : 'pin'}</button><button onClick={() => delc.mutate({ slug, id: c.id })} className="text-dim hover:text-bad">×</button></div>
+            <div className="mb-0.5 flex items-center gap-2 font-mono text-[10.5px]">{c.pinned && <span className="text-brand-soft">📌</span>}<span className="font-semibold text-brand-soft">{c.author}</span><span className="text-dim">{c.ago}</span><button onClick={() => pinc.mutate({ slug, id: c.id, pinned: !c.pinned })} title={c.pinned ? 'unpin' : 'pin to top'} className={`ml-auto ${c.pinned ? 'text-brand-soft' : 'text-dim hover:text-brand-soft'}`}>{c.pinned ? 'unpin' : 'pin'}</button><button onClick={() => { const nb = prompt('Edit comment:', c.body); if (nb != null && nb.trim()) editc.mutate({ slug, id: c.id, body: nb.trim() }); }} className="text-dim hover:text-brand-soft">edit</button><button onClick={() => delc.mutate({ slug, id: c.id })} className="text-dim hover:text-bad">×</button></div>
             <div className="whitespace-pre-wrap break-words font-sans text-[12.5px] leading-relaxed text-muted-2">{c.body}</div>
           </div>
         ))}

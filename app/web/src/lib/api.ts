@@ -318,6 +318,10 @@ export function useAddComment() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: ({ slug, author, body }: { slug: string; author: string; body: string }) => post(`/api/routines/${slug}/comments`, { author, body }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['comments', v.slug] }); qc.invalidateQueries({ queryKey: ['routine', v.slug] }); } });
 }
+export function useEditComment() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ slug, id, body }: { slug: string; id: number; body: string }) => put(`/api/routines/${slug}/comments/${id}`, { body }), onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['comments', v.slug] }) });
+}
 export function usePinComment() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: ({ slug, id, pinned }: { slug: string; id: number; pinned: boolean }) => post(`/api/routines/${slug}/comments/${id}/pin`, { pinned }), onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['comments', v.slug] }) });
