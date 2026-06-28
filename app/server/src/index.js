@@ -2349,6 +2349,11 @@ app.get('/api/inbox', (req, res) => {
     .map((m) => ({ by: m.by || 'anon', slug: m.slug, snippet: m.snippet, ago: relTime(m.created_at) }));
   res.json({ who, assigned, mentions, count: assigned.length + mentions.length });
 });
+// Global change log — every routine config change + approval across the fleet.
+app.get('/api/audit', (req, res) => {
+  const rows = all('SELECT slug, summary, created_at FROM routine_audit ORDER BY id DESC LIMIT 60');
+  res.json({ entries: rows.map((x) => ({ slug: x.slug, summary: x.summary, ago: relTime(x.created_at) })) });
+});
 // Mentions feed — recent @mentions from comments (directed asks).
 app.get('/api/mentions', (req, res) => {
   const rows = all('SELECT mentioned, by, slug, snippet, created_at FROM mentions ORDER BY id DESC LIMIT 30');
