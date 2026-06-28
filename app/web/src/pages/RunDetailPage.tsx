@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRun, useDispatchRoutine, useReplayRun, useRunDiff, useRunCompare, useRerunRun, useCancelRun, useSetBaseline, useReplayModel, useModels, useAssignRun } from '@/lib/api';
+import { useRun, useDispatchRoutine, useReplayRun, useRunDiff, useRunCompare, useRerunRun, useCancelRun, useSetBaseline, useReplayModel, useModels, useAssignRun, useVerdictRun } from '@/lib/api';
 import { Pill, Dot, Empty, stateMeta } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import { useOperator } from '@/lib/operator';
@@ -94,6 +94,7 @@ export function RunDetailPage() {
   const cancel = useCancelRun();
   const setBaseline = useSetBaseline();
   const assign = useAssignRun();
+  const verdict = useVerdictRun();
   const replayModel = useReplayModel();
   const { data: models } = useModels();
   const [editEvent, setEditEvent] = useState<string | null>(null);
@@ -366,6 +367,12 @@ export function RunDetailPage() {
               ))}
             </div>
             {r.assignee && <div className="mt-2 font-mono text-[11.5px] text-dim-2">assigned to <span className="text-brand-soft">{r.assignee}</span></div>}
+            <div className="mt-3 flex items-center gap-2 border-t border-line-soft pt-3">
+              <span className="font-mono text-[11px] text-dim">sign-off:</span>
+              <button onClick={() => verdict.mutate({ id: r.id, verdict: r.verdict === 'good' ? '' : 'good', by: op || 'anon' })} className={`h-7 rounded-md border px-2.5 font-mono text-[12px] ${r.verdict === 'good' ? 'border-ok/50 bg-ok/10 text-ok' : 'border-line text-dim hover:text-t2'}`}>👍 good</button>
+              <button onClick={() => verdict.mutate({ id: r.id, verdict: r.verdict === 'bad' ? '' : 'bad', by: op || 'anon' })} className={`h-7 rounded-md border px-2.5 font-mono text-[12px] ${r.verdict === 'bad' ? 'border-bad/50 bg-bad/10 text-bad' : 'border-line text-dim hover:text-t2'}`}>👎 bad</button>
+              {r.verdict && r.verdictBy && <span className="font-mono text-[11px] text-dim-2">by {r.verdictBy}</span>}
+            </div>
           </div>
           <DiffCard runId={r.id} />
           {(r.lineage.triggeredBy || r.lineage.downstream.length > 0 || r.lineage.watches.length > 0) && (

@@ -2051,6 +2051,16 @@ app.post('/api/runs/:id/rerun', (req, res) => {
   const runId = executeRoutine(r, { ...ev, _rerun: true, upstream: { routine: r.slug, run: x.id } }, `edited rerun · ${x.id}`);
   res.json({ ok: true, runId });
 });
+// Run sign-off: a teammate marks whether the agent's output was correct (QA on AI work).
+app.post('/api/runs/:id/verdict', (req, res) => {
+  const x = one('SELECT id FROM runs WHERE id=?', req.params.id);
+  if (!x) return res.status(404).json({ error: 'not found' });
+  const verdict = ['', 'good', 'bad'].includes(req.body?.verdict) ? req.body.verdict : '';
+  const by = String(req.body?.by || '').trim().slice(0, 40) || 'anon';
+  run('UPDATE runs SET verdict=?, verdict_by=? WHERE id=?', verdict, verdict ? by : '', req.params.id);
+  if (verdict) logActivity(`run ${req.params.id} signed off ${verdict} by ${by}`, verdict === 'good' ? 'success' : 'failing');
+  res.json({ ok: true, verdict });
+});
 // Run handoff: assign a run to a teammate to investigate, with a triage status.
 app.post('/api/runs/:id/assign', (req, res) => {
   const x = one('SELECT id FROM runs WHERE id=?', req.params.id);
@@ -2137,7 +2147,7 @@ app.get('/api/runs/:id', (req, res) => {
     matchExplain: r && ev ? explainMatch(r, ev) : null,
     baseline: r && r.baseline ? { drift: driftPct(r.baseline, x.output) } : null,
     slaBreach: r && r.sla_s > 0 && x.dur_ms && x.dur_ms > r.sla_s * 1000 ? { expected: r.sla_s, actual: Math.round(x.dur_ms / 1000) } : null,
-    assignee: x.assignee || '', triage: x.triage || '',
+    assignee: x.assignee || '', triage: x.triage || '', verdict: x.verdict || '', verdictBy: x.verdict_by || '',
     stdout: x.output, event: ev, trace, inbox, toolBreakdown,
     assertResult: jObj(x.assert_result) || null,
     lineage: { triggeredBy, downstream, watches },

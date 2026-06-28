@@ -125,6 +125,8 @@ export interface RunDetail {
   slaBreach: { expected: number; actual: number } | null;
   assignee: string;
   triage: string;
+  verdict: string;
+  verdictBy: string;
   inbox: { summary: string; ago: string; pending: boolean }[];
   assertResult: { passed: boolean; results: { type: string; value: string; ok: boolean; detail: string }[] } | null;
   lineage: RunLineage;

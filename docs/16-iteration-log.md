@@ -137,6 +137,7 @@ dropdowns · Fleet inbox badge.
 | 112 | @mentions in comments → mentions feed on Activity | collaboration | ✅ done |
 | 113 | Operator identity — set your name once (nav chip), default author/reviewer/assignee | collaboration | ✅ done |
 | 114 | Personal inbox "for you" — my mentions + assigned runs, nav badge | collaboration | ✅ done |
+| 115 | Run sign-off / verdict — 👍/👎 QA on agent output (reviewer recorded) | collaboration | ✅ done |
 
 ### Loop-3 QA backlog (test at iteration 110)
 - [x] (iter 107) substantive edit (prompt/triggers/etc) flags needs_review; approve records reviewer + clears it; non-substantive edits (name) do not flag; Fleet badge.
