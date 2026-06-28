@@ -58,6 +58,8 @@ export const useModels = () => useQuery({ queryKey: ['models'], queryFn: () => g
 export const useGithubOrgs = () => useQuery({ queryKey: ['gh-orgs'], queryFn: () => get<{ orgs: string[] }>('/api/github/orgs'), staleTime: 300_000 });
 export const useGithubChecks = (repo: string) =>
   useQuery({ queryKey: ['gh-checks', repo], enabled: !!repo, queryFn: () => get<{ checks: string[] }>(`/api/github/checks?repo=${encodeURIComponent(repo)}`), staleTime: 120_000 });
+export const useGithubLabels = (repo: string) =>
+  useQuery({ queryKey: ['gh-labels', repo], enabled: /^[\w.-]+\/[\w.-]+$/.test(repo), queryFn: () => get<{ labels: string[] }>(`/api/github/labels?repo=${encodeURIComponent(repo)}`), staleTime: 120_000 });
 export const useGithubRepos = (owner = '', q = '') =>
   useQuery({
     queryKey: ['gh-repos', owner, q],

@@ -1,7 +1,55 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useCreateRoutine, useUpdateRoutine, useRoutine, useRoutines, useGithubRepos, useGithubOrgs, useGithubChecks, useModels, useMcp } from '@/lib/api';
+import { useCreateRoutine, useUpdateRoutine, useRoutine, useRoutines, useGithubRepos, useGithubOrgs, useGithubChecks, useGithubLabels, useModels, useMcp } from '@/lib/api';
 import { cn } from '@/lib/utils';
+
+// Suggested GitHub actions/conclusions per trigger type — for the action pick-list.
+const ACTION_SUGGESTIONS: Record<string, string[]> = {
+  pull_request: ['opened', 'synchronize', 'reopened', 'closed', 'edited', 'ready_for_review', 'labeled', 'unlabeled', 'assigned', 'review_requested'],
+  pull_request_target: ['opened', 'synchronize', 'reopened', 'closed', 'labeled', 'unlabeled'],
+  pull_request_review: ['submitted', 'dismissed', 'edited'],
+  issues: ['opened', 'edited', 'closed', 'reopened', 'labeled', 'unlabeled', 'assigned'],
+  issue_comment: ['created', 'edited', 'deleted'],
+  label: ['labeled', 'unlabeled'],
+  release: ['published', 'released', 'prereleased', 'created', 'edited'],
+  check_run: ['completed', 'success', 'failure', 'neutral', 'cancelled', 'timed_out', 'action_required', 'skipped'],
+  check_suite: ['completed', 'success', 'failure', 'neutral', 'cancelled', 'timed_out'],
+  workflow_run: ['completed', 'requested', 'success', 'failure', 'cancelled'],
+  status: ['success', 'failure', 'error', 'pending'],
+  deployment_status: ['success', 'failure', 'error', 'pending', 'in_progress'],
+};
+
+// Dropdown of known values that also accepts free text — selected items become chips.
+function TokenPicker({ value, onChange, suggestions, placeholder }: { value: string; onChange: (v: string) => void; suggestions: string[]; placeholder: string }) {
+  const tokens = value.split(',').map((s) => s.trim()).filter(Boolean);
+  const [draft, setDraft] = useState('');
+  const listId = useId();
+  const add = (v: string) => { const t = v.trim(); if (t && !tokens.includes(t)) onChange([...tokens, t].join(', ')); setDraft(''); };
+  const remove = (t: string) => onChange(tokens.filter((x) => x !== t).join(', '));
+  const avail = suggestions.filter((s) => !tokens.includes(s));
+  return (
+    <div>
+      {tokens.length > 0 && (
+        <div className="mb-1.5 flex flex-wrap gap-1">
+          {tokens.map((t) => (
+            <span key={t} className="inline-flex items-center gap-1 rounded border border-brand/40 bg-brand/10 py-0.5 pl-2 pr-1 font-mono text-[11px] text-brand-soft">
+              {t}<button type="button" onClick={() => remove(t)} className="text-brand/60 hover:text-brand" aria-label={`remove ${t}`}>×</button>
+            </span>
+          ))}
+        </div>
+      )}
+      <input
+        list={listId}
+        value={draft}
+        onChange={(e) => { const v = e.target.value; if (suggestions.includes(v)) add(v); else setDraft(v); }}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(draft); } }}
+        placeholder={placeholder}
+        className={cn(inputCls, 'h-8 font-mono text-[12px]')}
+      />
+      <datalist id={listId}>{avail.map((s) => <option key={s} value={s} />)}</datalist>
+    </div>
+  );
+}
 
 const TRIGGER_GROUPS: { label: string; items: string[] }[] = [
   { label: 'Control', items: ['schedule', 'manual', 'api', 'webhook'] },
@@ -252,6 +300,8 @@ export function NewRoutinePage() {
   // CI / GitHub events that carry an `action` and can be filtered.
   const actionable = triggers.some((t) => ['pull_request', 'pull_request_review', 'issues', 'issue_comment', 'label', 'release', 'check_run', 'check_suite', 'workflow_run', 'deployment_status'].includes(t));
   const labelable = triggers.some((t) => ['label', 'pull_request', 'pull_request_target', 'issues'].includes(t));
+  const actionSuggestions = [...new Set(triggers.flatMap((t) => ACTION_SUGGESTIONS[t] || []))];
+  const { data: labelsData } = useGithubLabels(repo.split(',')[0]?.trim() || '');
   const filtersObj = {
     actions: filterActions.split(',').map((s) => s.trim()).filter(Boolean),
     branches: filterBranches.split(',').map((s) => s.trim()).filter(Boolean),
@@ -423,12 +473,12 @@ export function NewRoutinePage() {
                     <input value={filterBranches} onChange={(e) => setFilterBranches(e.target.value)} placeholder="main, develop  ·  blank = any branch" className={cn(inputCls, 'h-8 font-mono text-[12px]')} /></div>
                 )}
                 {actionable && (
-                  <div className="mb-2"><div className="mb-1 font-mono text-[10.5px] text-dim-2">action / conclusion is any of</div>
-                    <input value={filterActions} onChange={(e) => setFilterActions(e.target.value)} placeholder="opened, synchronize · success, failure  ·  blank = all" className={cn(inputCls, 'h-8 font-mono text-[12px]')} /></div>
+                  <div className="mb-2"><div className="mb-1 font-mono text-[10.5px] text-dim-2">action / conclusion is any of <span className="text-dim-3">· pick or type · blank = all</span></div>
+                    <TokenPicker value={filterActions} onChange={setFilterActions} suggestions={actionSuggestions} placeholder="opened, synchronize, success…" /></div>
                 )}
                 {labelable && (
-                  <div><div className="mb-1 font-mono text-[10.5px] text-dim-2">label is any of</div>
-                    <input value={filterLabels} onChange={(e) => setFilterLabels(e.target.value)} placeholder="jira-ticket, needs-review  ·  blank = any label" className={cn(inputCls, 'h-8 font-mono text-[12px]')} /></div>
+                  <div><div className="mb-1 font-mono text-[10.5px] text-dim-2">label is any of <span className="text-dim-3">· {labelsData?.labels?.length ? `${labelsData.labels.length} in repo` : 'pick or type'} · blank = any</span></div>
+                    <TokenPicker value={filterLabels} onChange={setFilterLabels} suggestions={labelsData?.labels ?? []} placeholder="jira-ticket, needs-review…" /></div>
                 )}
                 <div className="mt-1.5 text-[11px] text-dim-2">Values in a row are OR'd; multiple rows combine by <span className="font-semibold text-t2">{filterMode === 'and' ? 'all (AND)' : 'any (OR)'}</span>. The <span className="font-mono">label</span> trigger fires on a PR/issue being labeled.</div>
               </div>

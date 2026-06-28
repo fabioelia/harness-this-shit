@@ -630,6 +630,13 @@ app.get('/api/github/repos', async (req, res) => res.json({ repos: await listRep
 app.get('/api/github/orgs', async (_q, res) => res.json({ orgs: await listOrgs() }));
 // Possible check names for a repo — so a reaction can target a specific check.
 app.get('/api/github/checks', async (req, res) => res.json({ checks: await listChecks(String(req.query.repo || '')) }));
+// A repo's labels — so the label filter is a pick-list, not free typing.
+app.get('/api/github/labels', async (req, res) => {
+  const repo = String(req.query.repo || '').trim();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return res.json({ labels: [] });
+  const r = await gh(['api', `repos/${repo}/labels`, '--paginate', '--jq', '.[].name']);
+  res.json({ labels: r.code === 0 ? r.out.split('\n').map((s) => s.trim()).filter(Boolean) : [] });
+});
 
 app.get('/api/stats', (_q, res) => {
   const rows = all('SELECT * FROM routines');
