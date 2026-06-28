@@ -2409,6 +2409,15 @@ app.get('/api/audit', (req, res) => {
   const rows = all('SELECT slug, summary, created_at FROM routine_audit ORDER BY id DESC LIMIT 60');
   res.json({ entries: rows.map((x) => ({ slug: x.slug, summary: x.summary, ago: relTime(x.created_at) })) });
 });
+// Change-log CSV export — for compliance records / sharing outside the app.
+app.get('/api/audit.csv', (_q, res) => {
+  const rows = all('SELECT slug, summary, created_at FROM routine_audit ORDER BY id DESC LIMIT 1000');
+  const esc = (v) => `"${String(v).replace(/"/g, '""')}"`;
+  const lines = [['timestamp', 'routine', 'change'].join(',')].concat(rows.map((r) => [esc(new Date(r.created_at).toISOString()), esc(r.slug), esc(r.summary)].join(',')));
+  res.setHeader('content-type', 'text/csv');
+  res.setHeader('content-disposition', 'attachment; filename="switchboard-changelog.csv"');
+  res.send(lines.join('\n'));
+});
 // Mentions feed — recent @mentions from comments (directed asks).
 app.get('/api/mentions', (req, res) => {
   const rows = all('SELECT mentioned, by, slug, snippet, created_at FROM mentions ORDER BY id DESC LIMIT 30');

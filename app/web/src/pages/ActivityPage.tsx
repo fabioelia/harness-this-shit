@@ -65,7 +65,10 @@ export function ActivityPage() {
         )}
         {audit && audit.entries.length > 0 && (
           <div className="mb-5 overflow-hidden rounded-xl border border-line bg-surface">
-            <button onClick={() => setShowAudit((v) => !v)} className="flex w-full items-center justify-between px-4 py-2 font-display text-[11px] font-semibold uppercase tracking-[0.07em] text-dim-2 hover:text-t2"><span>Change log · all routines</span><span className="font-mono">{showAudit ? '▾' : '▸'}</span></button>
+            <div className="flex w-full items-center gap-2 px-4 py-2">
+              <button onClick={() => setShowAudit((v) => !v)} className="flex flex-1 items-center justify-between font-display text-[11px] font-semibold uppercase tracking-[0.07em] text-dim-2 hover:text-t2"><span>Change log · all routines</span><span className="font-mono">{showAudit ? '▾' : '▸'}</span></button>
+              <a href="/api/audit.csv" download title="export change log as CSV" className="font-mono text-[11px] text-dim hover:text-brand">CSV ↓</a>
+            </div>
             {showAudit && audit.entries.slice(0, 30).map((e, i) => (
               <Link key={i} to={`/routines/${e.slug}`} className="flex items-center gap-3 border-t border-line-soft px-4 py-1.5 font-mono text-[11.5px] hover:bg-white/[0.015]">
                 <span className="w-[130px] shrink-0 truncate text-brand-soft">{e.slug}</span>
