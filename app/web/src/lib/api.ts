@@ -174,6 +174,12 @@ export const useRoutine = (slug?: string) =>
 export const useRuns = () => useQuery({ queryKey: ['runs'], queryFn: () => get<RunLite[]>('/api/runs'), refetchInterval: 8000 });
 export interface Triage { items: { id: string; slug: string; assignee: string; triage: string; ago: string; summary: string }[] }
 export const useTriage = () => useQuery({ queryKey: ['triage'], queryFn: () => get<Triage>('/api/triage'), refetchInterval: 15000 });
+export interface Bookmarks { bookmarks: { id: string; slug: string; label: string; by: string; ago: string }[] }
+export const useBookmarks = () => useQuery({ queryKey: ['bookmarks'], queryFn: () => get<Bookmarks>('/api/bookmarks'), refetchInterval: 20000 });
+export function useBookmarkRun() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ id, label, by, on }: { id: string; label?: string; by?: string; on: boolean }) => on ? post(`/api/runs/${id}/bookmark`, { label, by }) : del(`/api/runs/${id}/bookmark`), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['run', v.id] }); qc.invalidateQueries({ queryKey: ['bookmarks'] }); } });
+}
 export interface ReviewQueue { total: number; reviewed: number; coverage: number; pending: { id: string; slug: string; ago: string }[] }
 export const useReviewQueue = () => useQuery({ queryKey: ['review-queue'], queryFn: () => get<ReviewQueue>('/api/review-queue'), refetchInterval: 15000 });
 export function useRerunFailed() {

@@ -144,6 +144,7 @@ dropdowns · Fleet inbox badge.
 | 119 | Escalation contact — CC a secondary on failure alerts | collaboration/on-call | ✅ done |
 | 120 | Team standup digest (edits/approvals/comments/sign-offs/resolved over 24h) | collaboration | ✅ done |
 | 121 | Blast-radius confirm — disable/delete lists the dependents it would break | collaboration/safety | ✅ done |
+| 122 | Shared run bookmarks — save notable runs (label + author) for the team | collaboration | ✅ done |
 
 ### Loop-3 QA backlog (test at iteration 110)
 - [x] (iter 107) substantive edit (prompt/triggers/etc) flags needs_review; approve records reviewer + clears it; non-substantive edits (name) do not flag; Fleet badge.

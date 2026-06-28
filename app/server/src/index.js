@@ -2063,6 +2063,20 @@ app.post('/api/runs/:id/rerun', (req, res) => {
   const runId = executeRoutine(r, { ...ev, _rerun: true, upstream: { routine: r.slug, run: x.id } }, `edited rerun · ${x.id}`);
   res.json({ ok: true, runId });
 });
+// Shared run bookmarks — notable runs the team wants to find again.
+app.get('/api/bookmarks', (_q, res) => {
+  const rows = all('SELECT run_id, slug, label, by, created_at FROM bookmarks ORDER BY created_at DESC LIMIT 60');
+  res.json({ bookmarks: rows.map((b) => ({ id: b.run_id, slug: b.slug, label: b.label, by: b.by || 'anon', ago: relTime(b.created_at) })) });
+});
+app.post('/api/runs/:id/bookmark', (req, res) => {
+  const x = one('SELECT id, routine_slug FROM runs WHERE id=?', req.params.id);
+  if (!x) return res.status(404).json({ error: 'not found' });
+  const label = String(req.body?.label || '').trim().slice(0, 80);
+  const by = String(req.body?.by || '').trim().slice(0, 40) || 'anon';
+  run('INSERT INTO bookmarks (run_id, slug, label, by, created_at) VALUES (?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET label=excluded.label, by=excluded.by', x.id, x.routine_slug, label, by, now());
+  res.json({ ok: true });
+});
+app.delete('/api/runs/:id/bookmark', (req, res) => { run('DELETE FROM bookmarks WHERE run_id=?', req.params.id); res.json({ ok: true }); });
 // Run sign-off: a teammate marks whether the agent's output was correct (QA on AI work).
 app.post('/api/runs/:id/verdict', (req, res) => {
   const x = one('SELECT id FROM runs WHERE id=?', req.params.id);
@@ -2160,6 +2174,7 @@ app.get('/api/runs/:id', (req, res) => {
     baseline: r && r.baseline ? { drift: driftPct(r.baseline, x.output) } : null,
     slaBreach: r && r.sla_s > 0 && x.dur_ms && x.dur_ms > r.sla_s * 1000 ? { expected: r.sla_s, actual: Math.round(x.dur_ms / 1000) } : null,
     assignee: x.assignee || '', triage: x.triage || '', verdict: x.verdict || '', verdictBy: x.verdict_by || '',
+    bookmarked: !!one('SELECT 1 FROM bookmarks WHERE run_id=?', x.id),
     stdout: x.output, event: ev, trace, inbox, toolBreakdown,
     assertResult: jObj(x.assert_result) || null,
     lineage: { triggeredBy, downstream, watches },

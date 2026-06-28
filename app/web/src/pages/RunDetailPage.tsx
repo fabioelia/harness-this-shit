@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRun, useDispatchRoutine, useReplayRun, useRunDiff, useRunCompare, useRerunRun, useCancelRun, useSetBaseline, useReplayModel, useModels, useAssignRun, useVerdictRun } from '@/lib/api';
+import { useRun, useDispatchRoutine, useReplayRun, useRunDiff, useRunCompare, useRerunRun, useCancelRun, useSetBaseline, useReplayModel, useModels, useAssignRun, useVerdictRun, useBookmarkRun } from '@/lib/api';
 import { Pill, Dot, Empty, stateMeta } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import { useOperator } from '@/lib/operator';
@@ -95,6 +95,7 @@ export function RunDetailPage() {
   const setBaseline = useSetBaseline();
   const assign = useAssignRun();
   const verdict = useVerdictRun();
+  const bookmark = useBookmarkRun();
   const replayModel = useReplayModel();
   const { data: models } = useModels();
   const [editEvent, setEditEvent] = useState<string | null>(null);
@@ -183,6 +184,7 @@ export function RunDetailPage() {
             {r.event && (
               <button onClick={() => setEditEvent(JSON.stringify(r.event, null, 2))} title="Edit this run's event payload and re-run with the tweaks" className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Edit &amp; re-run</button>
             )}
+            <button onClick={() => { if (r.bookmarked) bookmark.mutate({ id: r.id, on: false }); else { const label = prompt('Bookmark this run for the team — optional label:', '') ?? ''; bookmark.mutate({ id: r.id, on: true, label, by: op || 'anon' }); } }} title={r.bookmarked ? 'remove bookmark' : 'bookmark this run for the team'} className={`flex h-[34px] items-center rounded-md border px-[13px] font-display text-[12.5px] font-semibold ${r.bookmarked ? 'border-brand/50 bg-brand/10 text-brand-soft' : 'border-line bg-surface-2 text-dim hover:border-hair hover:text-t2'}`}>{r.bookmarked ? '★ saved' : '☆ save'}</button>
             <a href={`/api/runs/${r.id}/bundle`} download={`${r.id}.json`} title="Download the full run bundle (event, output, trace, metrics)" className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-dim hover:border-hair hover:text-t2">JSON ↓</a>
             {r.status === 'succeeded' && <button onClick={() => setBaseline.mutate(r.id)} disabled={setBaseline.isPending} title="Pin this output as the routine's golden baseline; future runs report drift from it" className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-dim hover:border-hair hover:text-t2">{setBaseline.isPending ? 'Pinning…' : '◎ Set baseline'}</button>}
             <button
