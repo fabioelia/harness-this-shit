@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useRun, useDispatchRoutine, useReplayRun } from '@/lib/api';
 import { Pill, Dot, Empty, stateMeta } from '@/components/sb';
+import { cn } from '@/lib/utils';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -29,6 +30,8 @@ export function RunDetailPage() {
   const qc = useQueryClient();
   // Live trace over SSE — fills in with no polling lag, then refetches on done.
   const [liveTrace, setLiveTrace] = useState<TE[]>([]);
+  const [tQ, setTQ] = useState('');
+  const [tType, setTType] = useState('all');
   useEffect(() => {
     if (!id) return;
     setLiveTrace([]);
@@ -48,6 +51,11 @@ export function RunDetailPage() {
   const ok = r.status === 'succeeded';
   // Prefer the live stream whenever it's ahead of the last polled snapshot.
   const trace = liveTrace.length > r.trace.length ? liveTrace : r.trace;
+  const shownTrace = trace.filter((e) => {
+    if (tType === 'tools' ? !(e.type === 'tool_use' || e.type === 'tool_result') : tType !== 'all' && e.type !== tType) return false;
+    if (tQ.trim() && !`${e.tool || ''} ${e.text || ''} ${e.type}`.toLowerCase().includes(tQ.toLowerCase())) return false;
+    return true;
+  });
 
   return (
     <div className="font-sans text-fg animate-fade-up">
@@ -112,8 +120,14 @@ export function RunDetailPage() {
           </div>
 
           <div className={CARD}>
-            <div className="mb-3.5 flex items-center justify-between">
-              <span className={LABEL}>Trace · {trace.length} steps{r.cost != null ? ` · $${Number(r.cost).toFixed(4)}` : ''}</span>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <span className={LABEL}>Trace · {shownTrace.length === trace.length ? trace.length : `${shownTrace.length}/${trace.length}`} steps{r.cost != null ? ` · $${Number(r.cost).toFixed(4)}` : ''}</span>
+              {trace.length > 4 && (<>
+                <input value={tQ} onChange={(e) => setTQ(e.target.value)} placeholder="filter steps…" className="h-7 min-w-[120px] flex-1 rounded-md border border-line bg-surface-2 px-2 font-mono text-[11px] text-fg focus:border-brand/60 focus:outline-none" />
+                <span className="inline-flex overflow-hidden rounded-md border border-line text-[10.5px] font-semibold">
+                  {[['all','all'],['tools','tools'],['text','text'],['result','result']].map(([v,l]) => <button key={v} onClick={() => setTType(v)} className={cn('px-1.5 py-1 font-mono', tType===v ? 'bg-brand/15 text-brand-soft':'text-dim hover:text-t2')}>{l}</button>)}
+                </span>
+              </>)}
               <span className="font-mono text-[10.5px] font-medium text-dim">secrets redacted</span>
             </div>
             <div className="flex flex-col">
@@ -124,7 +138,7 @@ export function RunDetailPage() {
                 <span className="flex-1 font-sans text-[12.5px] font-medium leading-[1.45] text-t2">Dispatcher admitted run · trigger {r.trigger}</span>
               </div>
               {trace.length === 0 && !running && <div className="py-2.5 font-mono text-[12px] text-dim">no steps captured</div>}
-              {trace.map((e) => {
+              {shownTrace.map((e) => {
                 const hasBody = !!e.text && ['tool_use', 'tool_result', 'text', 'system', 'result'].includes(e.type);
                 return (
                   <div key={e.seq} className="flex items-start gap-[11px] border-b border-line-soft py-[9px] last:border-0">
