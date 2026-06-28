@@ -37,6 +37,14 @@ async function del<T = unknown>(url: string): Promise<T> {
 
 export const useStats = () => useQuery({ queryKey: ['stats'], queryFn: () => get<Stats>('/api/stats'), refetchInterval: 8000 });
 
+export interface Insights {
+  days: number;
+  daily: { date: string; runs: number; cost: number; fails: number }[];
+  perRoutine: { slug: string; name: string; runs: number; cost: number; turns: number; avgMs: number; fails: number; failRate: number }[];
+  totals: { runs: number; cost: number; turns: number; avgMs: number; fails: number; failRate: number };
+}
+export const useInsights = (days = 14) => useQuery({ queryKey: ['insights', days], queryFn: () => get<Insights>(`/api/insights?days=${days}`), refetchInterval: 15000 });
+
 // GitHub webhooks
 export interface WebhookConfig { publicUrl: string; receiverUrl: string; secretSet: boolean; events: string[]; tunnel: { available: boolean; running: boolean; url: string } }
 export interface RepoHook { id: number; url: string; active: boolean; events: string[]; ours: boolean }

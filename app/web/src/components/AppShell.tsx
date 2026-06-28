@@ -31,6 +31,11 @@ const ICONS = {
       <circle cx="4" cy="5" r="1" /><line x1="7" y1="5" x2="15" y2="5" /><circle cx="4" cy="9" r="1" /><line x1="7" y1="9" x2="15" y2="9" /><circle cx="4" cy="13" r="1" /><line x1="7" y1="13" x2="15" y2="13" />
     </svg>
   ),
+  insights: (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="3" y1="15" x2="15" y2="15" /><rect x="4" y="9" width="2.6" height="5" rx="0.5" /><rect x="8" y="5.5" width="2.6" height="8.5" rx="0.5" /><rect x="12" y="7.5" width="2.6" height="6.5" rx="0.5" />
+    </svg>
+  ),
   config: (
     <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
       <line x1="3" y1="6" x2="15" y2="6" /><circle cx="11" cy="6" r="2" fill="#1a1712" /><line x1="3" y1="12" x2="15" y2="12" /><circle cx="7" cy="12" r="2" fill="#1a1712" />
@@ -46,6 +51,7 @@ const ICONS = {
 const NAV = [
   { to: '/', label: 'Fleet', icon: ICONS.fleet, end: true },
   { to: '/runs', label: 'Runs', icon: ICONS.runs },
+  { to: '/insights', label: 'Insights', icon: ICONS.insights },
   { to: '/team', label: 'Team', icon: ICONS.team },
   { to: '/connectors', label: 'Connectors', icon: ICONS.mcps },
   { to: '/activity', label: 'Activity', icon: ICONS.audit },

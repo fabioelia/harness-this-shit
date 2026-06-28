@@ -1,0 +1,36 @@
+# 50-iteration improvement log
+
+Each iteration = 4 passes: (1) find friction, (2) research harness features
+(observability / efficiency / reproducibility / eliminating humans-in-loop), (3) decide a
+NEW direction (not already done / not similar), (4) implement. QA is deferred until
+iteration 10 — features land on the **QA backlog** below as we go.
+
+## Off-limits (already built this project — do NOT re-do or do something similar)
+Triggers + grouped AND/OR filter builder (labels, check/job field, categories) · reactions
+(check-aware) · chains + run lineage · agent teams + delegation (`agent-message --wait`) ·
+per-routine memory · custom MCP (registry browse, OAuth via mcp-remote, token auth) ·
+connector test/config · model + effort per routine · light mode · one-click sample flows ·
+concurrency leases (scope + wait/drop) · SHA barrier · coalesce mode + task inbox · GitHub
+webhook setup (cloudflared tunnel + per-repo install) · deterministic script routines
+(compile / dynamic windows / revise-on-edit) · run traces + SSE live streaming · pick-or-type
+dropdowns · Fleet inbox badge.
+
+## Decided goals (one per iteration — never repeat)
+| # | Direction | Theme | Status |
+|---|-----------|-------|--------|
+| 1 | Insights: cost & usage observability (spend/runs/turns over time, per-routine) | observability/efficiency | ✅ done |
+
+## QA backlog (test at iteration 10)
+- [ ] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.
+
+## Per-iteration notes
+### Iteration 1
+- **Friction**: Fleet shows one lump "spend $X" but there's no way to see cost/runs/latency
+  *over time* or *per routine* — you can't tell which routine is expensive, slow, or
+  failing, or whether spend is trending up. No usage/efficiency observability.
+- **Research**: LLM-harness observability converges on per-run cost + token + latency
+  capture rolled into trend dashboards (LangSmith/Helicone/Langfuse style); "cost per
+  outcome" and regressions over time are the signal teams act on. We already capture
+  cost_usd / num_turns / dur_ms per run — just not surfaced as trends.
+- **Decision**: Build an **Insights** view — daily spend/run/failure series + a per-routine
+  cost/latency/turns/fail-rate table. Pure observability, distinct from everything built.

@@ -794,6 +794,35 @@ app.get('/api/github/labels', async (req, res) => {
   res.json({ labels: r.code === 0 ? r.out.split('\n').map((s) => s.trim()).filter(Boolean) : [] });
 });
 
+// Observability: cost / runs / turns / latency over time and per routine.
+app.get('/api/insights', (req, res) => {
+  const days = Math.min(60, Math.max(1, parseInt(req.query.days, 10) || 14));
+  const since = now() - days * 86_400_000;
+  const rows = all("SELECT routine_slug, status, cost_usd, num_turns, dur_ms, created_at FROM runs WHERE created_at > ? AND status IN ('succeeded','failed')", since);
+  const dayKey = (ts) => new Date(ts).toISOString().slice(0, 10);
+  const daily = {};
+  for (let i = days - 1; i >= 0; i--) { const k = dayKey(now() - i * 86_400_000); daily[k] = { date: k, runs: 0, cost: 0, fails: 0 }; }
+  const perR = {};
+  const T = { runs: 0, cost: 0, turns: 0, ms: 0, nMs: 0, fails: 0 };
+  for (const r of rows) {
+    const k = dayKey(r.created_at);
+    if (daily[k]) { daily[k].runs++; daily[k].cost += r.cost_usd || 0; if (r.status === 'failed') daily[k].fails++; }
+    const p = (perR[r.routine_slug] ||= { slug: r.routine_slug, runs: 0, cost: 0, turns: 0, ms: 0, nMs: 0, fails: 0 });
+    p.runs++; p.cost += r.cost_usd || 0; p.turns += r.num_turns || 0; if (r.dur_ms) { p.ms += r.dur_ms; p.nMs++; } if (r.status === 'failed') p.fails++;
+    T.runs++; T.cost += r.cost_usd || 0; T.turns += r.num_turns || 0; if (r.dur_ms) { T.ms += r.dur_ms; T.nMs++; } if (r.status === 'failed') T.fails++;
+  }
+  const names = Object.fromEntries(all('SELECT slug,name FROM routines').map((x) => [x.slug, x.name]));
+  const perRoutine = Object.values(perR).map((p) => ({
+    slug: p.slug, name: names[p.slug] || p.slug, runs: p.runs, cost: +p.cost.toFixed(4), turns: p.turns,
+    avgMs: p.nMs ? Math.round(p.ms / p.nMs) : 0, fails: p.fails, failRate: p.runs ? Math.round((100 * p.fails) / p.runs) : 0,
+  })).sort((a, b) => b.cost - a.cost || b.runs - a.runs);
+  res.json({
+    days,
+    daily: Object.values(daily).map((d) => ({ ...d, cost: +d.cost.toFixed(4) })),
+    perRoutine,
+    totals: { runs: T.runs, cost: +T.cost.toFixed(2), turns: T.turns, avgMs: T.nMs ? Math.round(T.ms / T.nMs) : 0, fails: T.fails, failRate: T.runs ? Math.round((100 * T.fails) / T.runs) : 0 },
+  });
+});
 app.get('/api/stats', (_q, res) => {
   const rows = all('SELECT * FROM routines');
   const enabled = rows.filter((r) => r.enabled);
