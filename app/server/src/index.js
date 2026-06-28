@@ -1717,7 +1717,25 @@ app.post('/api/routines/:slug/clone', (req, res) => {
   insertRoutine({ ...body, name: `${body.name} (copy)`, slug });
   res.status(201).json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', slug)));
 });
+app.post('/api/routines/export-bundle', (req, res) => {
+  const slugs = (Array.isArray(req.body?.slugs) ? req.body.slugs : []).filter((s) => typeof s === 'string');
+  const routines = slugs.map((s) => one('SELECT * FROM routines WHERE slug=?', s)).filter(Boolean).map((r) => ({ slug: r.slug, routine: exportBody(r) }));
+  res.json({ switchboard: 'routine-bundle', version: 1, count: routines.length, routines });
+});
 app.post('/api/routines/import', (req, res) => {
+  // A bundle of routines (from export-bundle) → import each.
+  if (req.body && Array.isArray(req.body.routines) && req.body.switchboard === 'routine-bundle') {
+    const out = [];
+    for (const item of req.body.routines) {
+      const body = item.routine && typeof item.routine === 'object' ? item.routine : item;
+      const name = String(body.name || '').trim(); if (!name) continue;
+      let slug = String(item.slug || slugify(name)).replace(/[^a-z0-9_-]/gi, '');
+      if (!slug) continue;
+      if (one('SELECT 1 FROM routines WHERE slug=?', slug)) { let n = 2; while (one('SELECT 1 FROM routines WHERE slug=?', `${slug}-${n}`)) n++; slug = `${slug}-${n}`; }
+      insertRoutine({ ...body, slug }); out.push(slug);
+    }
+    return res.status(201).json({ imported: out });
+  }
   const b = req.body || {};
   const body = b.routine && typeof b.routine === 'object' ? b.routine : b;
   const name = String(body.name || '').trim();

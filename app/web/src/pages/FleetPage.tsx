@@ -311,6 +311,7 @@ export function FleetPage() {
           {([['enable', 'Enable'], ['disable', 'Disable'], ['snooze', 'Snooze 4h'], ['unsnooze', 'Wake']] as const).map(([a, l]) => (
             <button key={a} onClick={() => bulk.mutate({ slugs: [...sel], action: a, hours: 4 }, { onSuccess: () => setSel(new Set()) })} className="h-8 rounded-md border border-line bg-surface-2 px-2.5 font-display text-[12px] font-semibold text-t2 hover:border-hair">{l}</button>
           ))}
+          <button onClick={async () => { const r = await fetch('/api/routines/export-bundle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ slugs: [...sel] }) }); const blob = await r.blob(); const u = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = u; a.download = 'switchboard-routines.json'; a.click(); URL.revokeObjectURL(u); }} className="h-8 rounded-md border border-line bg-surface-2 px-2.5 font-display text-[12px] font-semibold text-t2 hover:border-hair">Export</button>
           <button onClick={() => { if (confirm(`Delete ${sel.size} routine(s)?`)) bulk.mutate({ slugs: [...sel], action: 'delete' }, { onSuccess: () => setSel(new Set()) }); }} className="h-8 rounded-md border border-bad/40 px-2.5 font-display text-[12px] font-semibold text-bad hover:bg-bad/10">Delete</button>
           <button onClick={() => setSel(new Set())} className="ml-1 font-mono text-[11px] text-dim hover:text-fg">clear</button>
         </div>
