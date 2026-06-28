@@ -50,6 +50,8 @@ export function useSetBudget() {
 }
 export const useInsights = (days = 14) => useQuery({ queryKey: ['insights', days], queryFn: () => get<Insights>(`/api/insights?days=${days}`), refetchInterval: 15000 });
 
+export interface Graph { edges: { from: string; to: string; kind: string; label: string; fromName: string; toName: string; toExists: boolean }[] }
+export const useGraph = () => useQuery({ queryKey: ['graph'], queryFn: () => get<Graph>('/api/graph'), refetchInterval: 30000 });
 export interface Schedule { hours: number; count: number; upcoming: { slug: string; name: string; cron: string; at: number; when: string; in: string }[] }
 export const useSchedule = (hours = 48) => useQuery({ queryKey: ['schedule', hours], queryFn: () => get<Schedule>(`/api/schedule?hours=${hours}`), refetchInterval: 30000 });
 

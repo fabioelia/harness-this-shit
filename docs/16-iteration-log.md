@@ -31,6 +31,7 @@ dropdowns · Fleet inbox badge.
 | 11 | Runs page search + status filter | observability/UX | ✅ done |
 | 12 | Routine export / import (JSON bundle, slug-conflict safe) | reproducibility/portability | ✅ done |
 | 13 | Dry-run preview — resolved prompt + tools + would-match, no run ($0) | efficiency/observability | ✅ done |
+| 14 | Routine flow map — chain + reaction edges (fleet topology), missing-target flag | observability | ✅ done |
 
 ## QA backlog (test at iteration 10)
 - [x] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInsights, useSchedule, useSetBudget } from '@/lib/api';
+import { useInsights, useSchedule, useSetBudget, useGraph } from '@/lib/api';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -12,6 +12,7 @@ export function InsightsPage() {
   const { data: d } = useInsights(days);
   const { data: sched } = useSchedule(48);
   const setBudget = useSetBudget();
+  const { data: graph } = useGraph();
   const [capDraft, setCapDraft] = useState('');
   const maxCost = Math.max(0.0001, ...(d?.daily ?? []).map((x) => x.cost));
   const maxRuns = Math.max(1, ...(d?.daily ?? []).map((x) => x.runs));
@@ -101,6 +102,21 @@ export function InsightsPage() {
                 <span className="ml-auto">{d.daily[0]?.date} → {d.daily[d.daily.length - 1]?.date}</span>
               </div>
             </div>
+
+            {graph && graph.edges.length > 0 && (
+              <div className={`${CARD} mb-[18px]`}>
+                <div className={`${LABEL} mb-3`}>Routine flow · {graph.edges.length} edges</div>
+                <div className="flex flex-col gap-1.5 font-mono text-[12px]">
+                  {graph.edges.map((e, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <Link to={`/routines/${e.from}`} className="text-t2 hover:text-brand">{e.fromName}</Link>
+                      <span className={e.kind === 'reaction' ? 'text-lease' : 'text-brand-soft'}>{e.kind === 'reaction' ? `⚡ ${e.label}` : '↳ on success'} →</span>
+                      {e.toExists ? <Link to={`/routines/${e.to}`} className="text-brand hover:underline">{e.toName}</Link> : <span className="text-bad" title="downstream routine does not exist">{e.to} (missing)</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className={CARD}>
               <div className={`${LABEL} mb-3`}>By routine · {d.perRoutine.length} active</div>

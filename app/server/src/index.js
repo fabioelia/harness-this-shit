@@ -884,6 +884,18 @@ app.get('/api/github/labels', async (req, res) => {
   res.json({ labels: r.code === 0 ? r.out.split('\n').map((s) => s.trim()).filter(Boolean) : [] });
 });
 
+// Routine flow: the chain + reaction edges between routines (the fleet's topology).
+app.get('/api/graph', (_q, res) => {
+  const rows = all('SELECT slug,name,chain,reactions FROM routines WHERE enabled=1');
+  const names = Object.fromEntries(rows.map((r) => [r.slug, r.name]));
+  const exists = (s) => s in names || !!one('SELECT 1 FROM routines WHERE slug=?', s);
+  const edges = [];
+  for (const r of rows) {
+    j(r.chain).forEach((t) => { if (t) edges.push({ from: r.slug, to: t, kind: 'chain', label: 'on success' }); });
+    j(r.reactions).forEach((rx) => { if (rx.run) edges.push({ from: r.slug, to: rx.run, kind: 'reaction', label: `${rx.source}:${rx.kind}${rx.when ? ':' + rx.when : ''}${rx.check ? ` [${rx.check}]` : ''}` }); });
+  }
+  res.json({ edges: edges.map((e) => ({ ...e, fromName: names[e.from] || e.from, toName: names[e.to] || e.to, toExists: exists(e.to) })) });
+});
 // Upcoming scheduled runs — project the next fire times of cron routines forward.
 const relFuture = (ts) => { const d = ts - now(); if (d < 60_000) return 'in <1m'; if (d < 3_600_000) return `in ${Math.round(d / 60_000)}m`; if (d < 86_400_000) return `in ${Math.round(d / 3_600_000)}h`; return `in ${Math.round(d / 86_400_000)}d`; };
 app.get('/api/schedule', (req, res) => {
