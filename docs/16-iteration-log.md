@@ -172,6 +172,7 @@ dropdowns · Fleet inbox badge.
 | 147 | Awaiting-review backlog in attention rollup (review queue visible at fleet level) | collaboration/governance | ✅ done |
 | 148 | Contributors leaderboard (approvals/comments/sign-offs per person, 30d) | collaboration | ✅ done |
 | 149 | "People" filter on the activity feed (collaboration events only) | collaboration | ✅ done |
+| 150 | Final loop-3 QA — 16 endpoints + 4 mutations + 10 routes + collab UI | quality | ✅ done — 0 bugs |
 
 ### Loop-3 QA backlog (test at iteration 110)
 - [x] (iter 107) substantive edit (prompt/triggers/etc) flags needs_review; approve records reviewer + clears it; non-substantive edits (name) do not flag; Fleet badge.
