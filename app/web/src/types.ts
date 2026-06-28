@@ -80,6 +80,7 @@ export interface RunDetail {
   cost: number | null; turns: number | null; sessionId: string;
   stdout: string; event: Record<string, unknown> | null;
   trace: TraceEvent[];
+  inbox: { summary: string; ago: string; pending: boolean }[];
   lineage: RunLineage;
   awaiting: string | null;
   summary: { result: string; surface: string };

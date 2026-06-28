@@ -156,6 +156,21 @@ export function RunDetailPage() {
             </div>
           </div>
 
+          {r.inbox.length > 0 && (
+            <div className={CARD}>
+              <div className={`${LABEL} mb-3`}>Inbox · also on its plate <span className="font-mono lowercase tracking-normal text-dim">{r.inbox.length} coalesced</span></div>
+              <div className="flex flex-col gap-1.5">
+                {r.inbox.map((t, i) => (
+                  <div key={i} className="flex items-center gap-2 font-mono text-[11.5px]">
+                    <Dot color={t.pending ? '#e6b052' : '#5fbf86'} size={7} pulse={t.pending} />
+                    <span className="flex-1 truncate text-t2">{t.summary}</span>
+                    <span className="shrink-0 text-dim">{t.pending ? 'pending' : 'picked up'} · {t.ago}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 text-[11px] text-dim-2">Events coalesced onto this run instead of spawning another agent. The agent drains these via <span className="font-mono">inbox</span> before finishing.</div>
+            </div>
+          )}
           {(r.lineage.triggeredBy || r.lineage.downstream.length > 0 || r.lineage.watches.length > 0) && (
             <div className={CARD}>
               <div className={`${LABEL} mb-3`}>Lineage · follow the work</div>

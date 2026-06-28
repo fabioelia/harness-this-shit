@@ -151,7 +151,7 @@ const cleanFilters = (f) => {
 };
 const cleanConcurrency = (c) => {
   const o = c && typeof c === 'object' ? c : {};
-  return { scope: ['auto', 'pr', 'repo', 'routine', 'off'].includes(o.scope) ? o.scope : 'auto', onConflict: o.onConflict === 'drop' ? 'drop' : 'wait' };
+  return { scope: ['auto', 'pr', 'repo', 'routine', 'off'].includes(o.scope) ? o.scope : 'auto', onConflict: ['wait', 'drop', 'coalesce'].includes(o.onConflict) ? o.onConflict : 'wait' };
 };
 
 function relTime(ts) {
@@ -176,11 +176,14 @@ function leaseFor(routine, event) {
   let scope = conc.scope || 'auto';
   const pr = lightPrRef(event, routine);
   if (scope === 'auto') scope = pr ? 'pr' : 'routine';
-  const onConflict = conc.onConflict === 'drop' ? 'drop' : 'wait';
+  const onConflict = ['drop', 'coalesce'].includes(conc.onConflict) ? conc.onConflict : 'wait';
+  const sha = eventSha(event);
+  // Keys are per-routine so a routine never overlaps itself on an entity, but distinct
+  // routines act on the same PR independently (and coalesce hands off to its OWN agent).
   if (scope === 'off') return { key: null, onConflict, sha: '' };
-  if (scope === 'pr' && pr) return { key: `pr:${pr.repo}#${pr.pr}`, onConflict, sha: eventSha(event) };
-  if (scope === 'repo') { const repo = pr?.repo || repoTargets(routine)[0] || eventRepo(event); return { key: repo ? `repo:${repo}` : `routine:${routine.slug}`, onConflict, sha: eventSha(event) }; }
-  return { key: `routine:${routine.slug}`, onConflict, sha: eventSha(event) };
+  if (scope === 'pr' && pr) return { key: `${routine.slug}@pr:${pr.repo}#${pr.pr}`, onConflict, sha };
+  if (scope === 'repo') { const repo = pr?.repo || repoTargets(routine)[0] || eventRepo(event); return { key: repo ? `${routine.slug}@repo:${repo}` : `routine:${routine.slug}`, onConflict, sha }; }
+  return { key: `routine:${routine.slug}`, onConflict, sha };
 }
 // Atomic (node:sqlite is synchronous): steals an expired lease, else reports the holder.
 function acquireLease(key, runId, slug, sha) {
@@ -197,6 +200,27 @@ async function livePrHeadSha(repo, pr) {
   try { const r = await gh(['pr', 'view', String(pr), '--repo', repo, '--json', 'headRefOid', '--jq', '.headRefOid']); return r.code === 0 ? r.out.trim() : ''; }
   catch { return ''; }
 }
+
+// ── Task inbox: when concurrency=coalesce, a new event that would overlap a running
+//    agent is handed off as a TASK onto that agent's plate (keyed by the lease) instead
+//    of spawning a second agent. The running agent drains its inbox before wrapping up. ──
+const handoffSummary = (event, triggerLabel) => {
+  const e = event || {};
+  const pr = e.pull_request?.number ?? e.number;
+  const sha = (eventSha(e) || '').slice(0, 7);
+  const who = e.sender?.login || e.pull_request?.user?.login;
+  const parts = [String(triggerLabel || e.event || 'event').replace(/ · .*/, '')];
+  if (e.action) parts.push(e.action);
+  if (pr) parts.push(`PR #${pr}`);
+  if (sha) parts.push(`@${sha}`);
+  if (who) parts.push(`by ${who}`);
+  return parts.join(' ');
+};
+const addTask = (slug, key, event, originRun, triggerLabel) =>
+  run('INSERT INTO run_tasks (routine_slug,lease_key,summary,payload,origin_run,created_at) VALUES (?,?,?,?,?,?)',
+    slug, key, handoffSummary(event, triggerLabel), JSON.stringify(event || {}), originRun || '', now());
+const pendingTasks = (slug, key) => all("SELECT * FROM run_tasks WHERE routine_slug=? AND lease_key=? AND handled_by='' ORDER BY created_at", slug, key);
+const claimTasks = (ids, runId) => { if (ids.length) run(`UPDATE run_tasks SET handled_by=? WHERE id IN (${ids.map(() => '?').join(',')})`, runId, ...ids); };
 
 // Redact obvious secrets before a trace event is ever written to disk.
 // Runtime options the CLI actually accepts (verified against `claude --model/--effort`).
@@ -286,6 +310,14 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     if (leaseK) {
       let lease = acquireLease(leaseK, id, r.slug, sha);
       if (!lease.ok) {
+        if (onConflict === 'coalesce') {
+          // Hand off to the running agent: drop this run, add the event to its inbox.
+          addTask(r.slug, leaseK, rawEvent ?? {}, id, triggerLabel);
+          run("UPDATE runs SET status='coalesced', dur='—', output=? WHERE id=?", `handed off to ${lease.holder} — added to its task inbox for ${leaseK}`, id);
+          run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
+          logActivity(`${r.slug} coalesced → ${lease.holder} · ${leaseK} (handoff)`, 'idle');
+          return;
+        }
         if (onConflict === 'drop') {
           run("UPDATE runs SET status='skipped', dur=?, output=? WHERE id=?", '—', `stood down — ${leaseK} is held by ${lease.holder}`, id);
           run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
@@ -327,7 +359,9 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     const mcpGranted = tools.filter((c) => !['github', 'slack', 'web', 'webfetch', 'team'].includes(c));
     const mcpConfig = mcpGranted.length ? writeMcpConfig(mcpGranted) : null;
     const agents = tools.includes('team') ? all('SELECT name, role, summary FROM agents ORDER BY name') : [];
-    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints(), { memoryDir, agents });
+    const coalesce = onConflict === 'coalesce' && !!leaseK;
+    const seedTasks = Array.isArray(rawEvent?.tasks) ? rawEvent.tasks : [];
+    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints(), { memoryDir, agents, coalesce, seedTasks });
     run('UPDATE runs SET prompt=? WHERE id=?', prompt, id);
 
     // Step-level trace: normalize each stream-json event into a run_events row,
@@ -367,7 +401,7 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       } catch { /* one malformed event must not kill the run */ }
     };
 
-    const res = await runClaude(prompt, { tools, onEvent, model: normModel(r.model), effort: normEffort(r.effort), memoryDir, mcpConfig });
+    const res = await runClaude(prompt, { tools, onEvent, model: normModel(r.model), effort: normEffort(r.effort), memoryDir, mcpConfig, runId: id, coalesce });
     if (mcpConfig) try { unlinkSync(mcpConfig); } catch { /* ignore */ }
     const ok = !res.isError && !!res.finalText;
     const rawOut = ok ? res.finalText
@@ -402,7 +436,19 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       }
     }
     } finally {
-      if (leaseK) releaseLease(leaseK, id);
+      if (leaseK) {
+        releaseLease(leaseK, id);
+        // Drain: tasks that landed but the agent never fetched → spawn a fresh run to
+        // handle them (and bound the loop by claiming them for that run up front).
+        const pend = pendingTasks(r.slug, leaseK);
+        if (pend.length) {
+          const last = jObj(pend[pend.length - 1].payload) || {};
+          const drainEv = { ...last, event: 'inbox-drain', tasks: pend.map((t) => t.summary), _chainPath: rawEvent?._chainPath };
+          const drainId = executeRoutine(r, drainEv, `inbox · ${pend.length} task${pend.length > 1 ? 's' : ''}`);
+          claimTasks(pend.map((t) => t.id), drainId);
+          logActivity(`${r.slug} draining ${pend.length} inbox task${pend.length > 1 ? 's' : ''} → ${drainId}`, 'queued');
+        }
+      }
     }
   })().catch((e) => {
     run('UPDATE runs SET status=?, output=? WHERE id=?', 'failed', `harness error: ${e.message}`, id);
@@ -1004,6 +1050,17 @@ app.get('/api/runs/:id/stream', (req, res) => {
   runBus.on(id, onMsg);
   req.on('close', cleanup);
 });
+// The running agent's inbox — events coalesced onto this run's lease. POST claims them
+// (the `inbox` tool), so the agent fetches new work before wrapping up.
+const runLeaseKey = (x) => { const r = one('SELECT * FROM routines WHERE slug=?', x.routine_slug); return r ? leaseFor(r, jObj(x.event) || {}).key : null; };
+app.post('/api/runs/:id/inbox', (req, res) => {
+  const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
+  if (!x) return res.status(404).json({ error: 'not found' });
+  const key = runLeaseKey(x);
+  const pend = key ? pendingTasks(x.routine_slug, key) : [];
+  claimTasks(pend.map((t) => t.id), x.id);
+  res.json({ key, tasks: pend.map((t) => ({ id: t.id, summary: t.summary, event: jObj(t.payload) })) });
+});
 app.get('/api/runs/:id', (req, res) => {
   const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
   if (!x) return res.status(404).json({ error: 'not found' });
@@ -1028,12 +1085,18 @@ app.get('/api/runs/:id', (req, res) => {
     .map((d) => ({ runId: d.id, routine: d.routine_slug, status: d.status, dur: d.dur, kind: kindOf(d.trigger) }));
   const watches = all("SELECT * FROM watches WHERE origin_run=? ORDER BY created_at", x.id)
     .map((w) => ({ target: w.target_slug, source: w.source, kind: w.kind, when: w.when_cond, status: w.status, detail: w.detail }));
+  // Inbox: tasks coalesced onto this run's lease (claimed by it, or still pending on its key).
+  const lkey = runLeaseKey(x);
+  const inbox = lkey
+    ? all("SELECT * FROM run_tasks WHERE routine_slug=? AND lease_key=? AND (handled_by=? OR handled_by='') ORDER BY created_at", x.routine_slug, lkey, x.id)
+        .map((t) => ({ summary: t.summary, ago: relTime(t.created_at), pending: !t.handled_by }))
+    : [];
 
   res.json({
     id: x.id, routine: x.routine_slug, status: x.status, trigger: x.trigger, triggerKind: kindOf(x.trigger),
     started: new Date(x.created_at).toLocaleTimeString(), elapsed: x.dur, model: r?.model || 'claude',
     cost: x.cost_usd, turns: x.num_turns, sessionId: x.session_id,
-    stdout: x.output, event: ev, trace,
+    stdout: x.output, event: ev, trace, inbox,
     lineage: { triggeredBy, downstream, watches },
     awaiting: running ? 'auto-mode session running…' : null,
     summary: {

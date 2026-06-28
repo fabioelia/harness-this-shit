@@ -30,6 +30,7 @@ const STATE_META: Record<string, { label: string; color: string; pulse?: boolean
   skipped: { label: 'Stood down', color: SIGNAL.idle },
   canceled: { label: 'Canceled', color: SIGNAL.idle },
   waiting: { label: 'Waiting · lease', color: SIGNAL.lease, pulse: true },
+  coalesced: { label: 'Handed off', color: SIGNAL.lease },
 };
 export const stateMeta = (s: string) => STATE_META[s] ?? STATE_META.idle;
 

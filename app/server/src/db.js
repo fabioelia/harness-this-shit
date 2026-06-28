@@ -67,6 +67,17 @@ CREATE TABLE IF NOT EXISTS leases (
   acquired_at INTEGER NOT NULL DEFAULT 0,
   expires_at INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS run_tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  routine_slug TEXT NOT NULL,
+  lease_key TEXT NOT NULL,                -- the concurrency key the task belongs to (pr:…/repo:…/routine:…)
+  summary TEXT NOT NULL,                  -- human handoff line shown to the running agent
+  payload TEXT NOT NULL DEFAULT '{}',     -- the coalesced event
+  origin_run TEXT NOT NULL DEFAULT '',    -- the run whose dispatch was coalesced
+  handled_by TEXT NOT NULL DEFAULT '',    -- run that claimed it ('' = pending)
+  created_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_run_tasks_key ON run_tasks(routine_slug, lease_key, handled_by);
 CREATE TABLE IF NOT EXISTS mcp_servers (
   name TEXT PRIMARY KEY,
   config TEXT NOT NULL,            -- json server def: {command,args,env} (stdio) | {type,url,headers} (http/sse)

@@ -366,7 +366,7 @@ export function NewRoutinePage() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [reactions, setReactions] = useState<{ source: string; kind: string; when: string; run: string; check?: string }[]>([]);
   const [concScope, setConcScope] = useState('auto');
-  const [concConflict, setConcConflict] = useState<'wait' | 'drop'>('wait');
+  const [concConflict, setConcConflict] = useState<'wait' | 'drop' | 'coalesce'>('wait');
 
   const slug = slugTouched ? slugInput : slugify(name);
   // CI / GitHub events that carry an `action` and can be filtered.
@@ -408,7 +408,7 @@ export function NewRoutinePage() {
     }
     setReactions(d.reactions ?? []);
     setConcScope(d.concurrency?.scope || 'auto');
-    setConcConflict(d.concurrency?.onConflict === 'drop' ? 'drop' : 'wait');
+    setConcConflict((['drop', 'coalesce'].includes(d.concurrency?.onConflict ?? '') ? d.concurrency!.onConflict : 'wait') as 'wait' | 'drop' | 'coalesce');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existing.data, isEdit]);
 
@@ -584,12 +584,13 @@ export function NewRoutinePage() {
                       <option value="routine">per routine</option>
                       <option value="off">off (no lease)</option>
                     </select>
-                    <select value={concConflict} onChange={(e) => setConcConflict(e.target.value as 'wait' | 'drop')} disabled={concScope === 'off'} className={cn(inputCls, 'font-mono text-[12px] disabled:opacity-40')}>
+                    <select value={concConflict} onChange={(e) => setConcConflict(e.target.value as 'wait' | 'drop' | 'coalesce')} disabled={concScope === 'off'} className={cn(inputCls, 'font-mono text-[12px] disabled:opacity-40')}>
                       <option value="wait">wait (serialize)</option>
                       <option value="drop">drop (stand down)</option>
+                      <option value="coalesce">coalesce (hand off to the running agent)</option>
                     </select>
                   </div>
-                  <div className="mt-1.5 text-[11px] text-dim-2">A run acquires a lease on its scope (e.g. <span className="font-mono text-[var(--code-accent)]">pr:acme/x#42</span>). If held, <span className="font-mono">wait</span> serializes; <span className="font-mono">drop</span> stands down. Leases expire after 15m so a crash never wedges. Per-PR scope also runs a <span className="text-t2">SHA barrier</span> — a run whose PR head moved while it waited stands down as stale.</div>
+                  <div className="mt-1.5 text-[11px] text-dim-2">A run acquires a lease on its scope (e.g. <span className="font-mono text-[var(--code-accent)]">pr:acme/x#42</span>). If held: <span className="font-mono">wait</span> serializes; <span className="font-mono">drop</span> stands down; <span className="font-mono">coalesce</span> hands the new event to the <span className="text-t2">already-running agent</span> as a task (only one agent per PR — it drains its <span className="font-mono">inbox</span> before finishing). Leases expire after 15m; per-PR scope also runs a SHA barrier.</div>
                 </div>
                 <div className="border-t border-line-soft pt-3.5">
                   <div className={LABEL}>Chain · <span className="font-mono lowercase tracking-normal text-dim-2">run routines immediately after</span></div>

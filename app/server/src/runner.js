@@ -16,6 +16,7 @@ export function allowedToolsFor(connectors = []) {
   if (connectors.includes('slack')) allow.push('Bash(slack-post:*)');
   if (connectors.includes('web') || connectors.includes('webfetch')) allow.push('WebFetch', 'WebSearch');
   if (connectors.includes('team')) allow.push('Bash(agent-message:*)');
+  if (connectors.includes('__inbox')) allow.push('Bash(inbox:*)');
   // MCP-backed connectors (anything else) get their namespaced tools enabled too
   connectors
     .filter((c) => !['github', 'slack', 'web', 'webfetch', 'team'].includes(c))
@@ -23,10 +24,10 @@ export function allowedToolsFor(connectors = []) {
   return allow;
 }
 
-export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, model, effort, memoryDir, mcpConfig } = {}) {
+export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, model, effort, memoryDir, mcpConfig, runId, coalesce } = {}) {
   return new Promise((resolve) => {
     const start = Date.now();
-    const allow = allowedToolsFor(tools);
+    const allow = allowedToolsFor(coalesce ? [...tools, '__inbox'] : tools);
     // Memory routines run in their memory dir and may read/update files there.
     if (memoryDir) allow.push('Read', 'Write', 'Edit', 'Glob', 'Grep');
     // --allowed-tools is variadic, so it must come last (each tool a separate arg)
@@ -39,8 +40,9 @@ export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, mo
     if (model) args.push('--model', model); // honour the routine's chosen model
     if (effort) args.push('--effort', effort); // and its reasoning-effort level
     if (allow.length) args.push('--allowed-tools', ...allow);
-    // tools dir on PATH so `slack-post` (and future tool scripts) resolve by name
-    const env = { ...process.env, PATH: `${TOOLS_DIR}:${process.env.PATH}` };
+    // tools dir on PATH so `slack-post` (and future tool scripts) resolve by name;
+    // SB_RUN_ID lets the `inbox` tool fetch tasks coalesced onto this very run.
+    const env = { ...process.env, PATH: `${TOOLS_DIR}:${process.env.PATH}`, ...(runId ? { SB_RUN_ID: runId } : {}) };
     const fail = (msg) => resolve({ finalText: '', output: '', stderr: msg, code: -1, ms: Date.now() - start, isError: true, costUsd: null, numTurns: null, sessionId: '', events: 0 });
     let child;
     try {
@@ -89,7 +91,7 @@ export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, mo
 /** Assemble the session input: the routine's natural instruction + the live
  *  trigger context + the tools it may use. No output-format contract — the
  *  session does whatever the instruction needs and takes the actions itself. */
-export function buildPrompt(routine, event, constraints = [], { memoryDir, agents = [] } = {}) {
+export function buildPrompt(routine, event, constraints = [], { memoryDir, agents = [], coalesce = false, seedTasks = [] } = {}) {
   const tools = Array.isArray(routine.connectors)
     ? routine.connectors
     : (() => { try { return JSON.parse(routine.connectors || '[]'); } catch { return []; } })();
@@ -126,6 +128,13 @@ export function buildPrompt(routine, event, constraints = [], { memoryDir, agent
   if (tools.includes('team') && agents.length) {
     lines.push('', '## Your team (delegate with agent-message)', ...agents.map((a) => `- ${a.name}: ${a.summary || a.role || 'agent'}`));
   }
-  lines.push('', 'Carry out the instruction now using the trigger context and your tools. End with a one-line summary of what you did.');
+  if (coalesce) {
+    lines.push('',
+      '## Task inbox (you own this entity)',
+      'You are the single agent handling this PR/entity right now. While you work, related events (a new push, another label, a comment) are NOT given to a second agent — they are coalesced onto YOUR plate as tasks.',
+      '**Before you finish, RUN the shell command `inbox`** — it prints any new tasks that landed since you started (newest event context included). If it returns tasks, fold them into your work, then run `inbox` again. Only wrap up once `inbox` comes back empty, so nothing handed to you is dropped.');
+    if (seedTasks.length) lines.push('', `Tasks already waiting for you:`, ...seedTasks.map((t) => `- ${t}`));
+  }
+  lines.push('', `Carry out the instruction now using the trigger context and your tools.${coalesce ? ' Drain your `inbox` before finishing.' : ''} End with a one-line summary of what you did.`);
   return lines.join('\n');
 }
