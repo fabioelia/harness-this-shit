@@ -1205,8 +1205,12 @@ app.get('/api/insights', (req, res) => {
   const byTag = Object.values(byT).map((t) => ({ ...t, cost: +t.cost.toFixed(4) })).sort((a, b) => b.cost - a.cost);
   const modelOf = Object.fromEntries(all('SELECT slug,model FROM routines').map((x) => [x.slug, x.model]));
   const byM = {};
-  for (const r of rows) { const m = modelOf[r.routine_slug] || 'unknown'; const e = (byM[m] ||= { model: m, runs: 0, cost: 0 }); e.runs++; e.cost += r.cost_usd || 0; }
-  const byModel = Object.values(byM).map((m) => ({ ...m, cost: +m.cost.toFixed(4) })).sort((a, b) => b.cost - a.cost);
+  for (const r of rows) {
+    const m = modelOf[r.routine_slug] || 'unknown';
+    const e = (byM[m] ||= { model: m, runs: 0, cost: 0, ms: 0, nMs: 0, tok: 0 });
+    e.runs++; e.cost += r.cost_usd || 0; if (r.dur_ms) { e.ms += r.dur_ms; e.nMs++; } e.tok += (r.in_tokens || 0) + (r.out_tokens || 0);
+  }
+  const byModel = Object.values(byM).map((m) => ({ model: m.model, runs: m.runs, cost: +m.cost.toFixed(4), avgMs: m.nMs ? Math.round(m.ms / m.nMs) : 0, tokens: m.tok, costPer1k: m.tok ? +(m.cost / (m.tok / 1000)).toFixed(4) : 0 })).sort((a, b) => b.cost - a.cost);
   const names = Object.fromEntries(all('SELECT slug,name FROM routines').map((x) => [x.slug, x.name]));
   const perRoutine = Object.values(perR).map((p) => ({
     slug: p.slug, name: names[p.slug] || p.slug, runs: p.runs, cost: +p.cost.toFixed(4), turns: p.turns,

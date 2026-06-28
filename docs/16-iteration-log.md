@@ -92,6 +92,7 @@ dropdowns · Fleet inbox badge.
 | 71 | Dependency impact — "depended on by" (chain/reaction dependents) per routine | observability/eliminating-humans | ✅ done |
 | 72 | Alert throttling — at most one fail-alert per routine per 30m | eliminating-humans | ✅ done |
 | 73 | Bulk re-run failed runs (replay recent failures, deduped, capped 25) | efficiency/eliminating-humans | ✅ done |
+| 74 | Model efficiency comparison ($/1k tokens + avg latency per model) | efficiency/observability | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.

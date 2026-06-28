@@ -313,7 +313,9 @@ export function InsightsPage() {
                         <span className="w-[150px] shrink-0 truncate text-t2">{m.model.replace(/^claude-/, '')}</span>
                         <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-2"><div className="h-full rounded-full bg-brand/70" style={{ width: `${Math.max(2, share)}%` }} /></div>
                         <span className="w-[64px] shrink-0 text-right text-t2">${m.cost.toFixed(2)}</span>
-                        <span className="w-[44px] shrink-0 text-right text-dim">{m.runs}r</span>
+                        <span className="w-[64px] shrink-0 text-right text-dim-2" title="cost per 1k tokens">{m.costPer1k ? `$${m.costPer1k.toFixed(3)}/1k` : '—'}</span>
+                        <span className="w-[56px] shrink-0 text-right text-dim" title="avg latency">{m.avgMs ? fmtMs(m.avgMs) : '—'}</span>
+                        <span className="w-[40px] shrink-0 text-right text-dim">{m.runs}r</span>
                       </div>
                     );
                   })}
