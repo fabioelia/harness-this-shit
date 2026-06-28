@@ -1182,6 +1182,15 @@ app.get('/api/routines/:slug/export', (req, res) => {
   if (!r) return res.status(404).json({ error: 'not found' });
   res.json({ switchboard: 'routine', version: 1, slug: r.slug, routine: exportBody(r) });
 });
+app.post('/api/routines/:slug/clone', (req, res) => {
+  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const body = exportBody(r);
+  let slug = `${r.slug}-copy`; let n = 1;
+  while (one('SELECT 1 FROM routines WHERE slug=?', slug)) { n++; slug = `${r.slug}-copy-${n}`; }
+  insertRoutine({ ...body, name: `${body.name} (copy)`, slug });
+  res.status(201).json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', slug)));
+});
 app.post('/api/routines/import', (req, res) => {
   const b = req.body || {};
   const body = b.routine && typeof b.routine === 'object' ? b.routine : b;

@@ -195,6 +195,10 @@ export function useSnooze() {
 export function usePreviewRoutine() {
   return useMutation({ mutationFn: (slug: string) => post<RoutinePreview>(`/api/routines/${slug}/preview`, {}) });
 }
+export function useCloneRoutine() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (slug: string) => post<Routine>(`/api/routines/${slug}/clone`), onSuccess: () => qc.invalidateQueries({ queryKey: ['routines'] }) });
+}
 export function useImportRoutine() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (bundle: unknown) => post<Routine>('/api/routines/import', bundle), onSuccess: () => qc.invalidateQueries({ queryKey: ['routines'] }) });
