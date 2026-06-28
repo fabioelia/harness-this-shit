@@ -41,6 +41,7 @@ export interface Routine {
   snoozedUntil: number;
   env: Record<string, string>;
   tags: string[];
+  rateLimit: number;
 }
 
 export interface FrontMatter {

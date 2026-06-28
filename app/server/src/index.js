@@ -290,7 +290,7 @@ const shapeRoutine = (r) => {
     recent, successRate, spend: r.spend, avg: r.avg, runCount: recent.length,
     inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
     scriptMode: !!r.script_mode, scriptLang: r.script_lang || 'bash', compiled: !!(r.script && r.script.trim()), scriptStale: !!r.script_stale,
-    retries: r.retries || 0, assertions: j(r.assertions), tags: j(r.tags),
+    retries: r.retries || 0, assertions: j(r.assertions), tags: j(r.tags), rateLimit: r.rate_limit || 0,
     alertOnFail: !!r.alert_on_fail, alertTarget: r.alert_target || '', timeout: r.timeout_s || 0, env: jObj(r.env) || {}, snoozedUntil: r.snooze_until && r.snooze_until > now() ? r.snooze_until : 0,
   };
 };
@@ -404,6 +404,16 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     id, r.slug, 'running', 'now', '…', triggerLabel, ord, '', JSON.stringify(rawEvent ?? {}), created, '[]');
   run('UPDATE routines SET state=?, last_ago=?, last_status=? WHERE slug=?', 'running', 'now', 'running', r.slug);
 
+  // Rate limit: drop if this routine already ran rate_limit times in the past hour.
+  if ((r.rate_limit || 0) > 0) {
+    const n = one("SELECT COUNT(*) AS n FROM runs WHERE routine_slug=? AND created_at > ? AND status NOT IN ('skipped','coalesced','waiting')", r.slug, created - 3_600_000).n;
+    if (n >= r.rate_limit) {
+      run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", `rate limited — ${n}/${r.rate_limit} runs in the last hour`, id);
+      run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
+      logActivity(`${r.slug} rate limited · ${n}/${r.rate_limit} this hour`, 'idle');
+      return id;
+    }
+  }
   // Script routine that's already compiled (and not stale) → just run the extractor.
   const scriptMode = !!r.script_mode;
   const compiled = scriptMode && r.script && r.script.trim() && !r.script_stale;
@@ -1004,8 +1014,8 @@ function insertRoutine(b) {
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
   run(
     `INSERT INTO routines
-      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,script_mode,script_lang,retries,assertions,alert_on_fail,alert_target,timeout_s,env,tags)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,script_mode,script_lang,retries,assertions,alert_on_fail,alert_target,timeout_s,env,tags,rate_limit)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     slug, (b.name || '').trim(), (b.summary || '').trim(), owner, team,
     JSON.stringify(triggers), JSON.stringify(connectors),
     'idle', 'never', 'idle', next, null, '$0.00', enabled, '', '', '—',
@@ -1013,7 +1023,7 @@ function insertRoutine(b) {
     (b.prompt || '').trim(), normModel(b.model), (b.repo || '').trim(), (b.branch || 'main').trim(),
     JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions), normEffort(b.effort), b.memory ? 1 : 0, JSON.stringify(cleanConcurrency(b.concurrency)),
     b.scriptMode ? 1 : 0, b.scriptLang === 'node' ? 'node' : 'bash', normRetries(b.retries), JSON.stringify(cleanAssertions(b.assertions)),
-    b.alertOnFail ? 1 : 0, (b.alertTarget || '').trim(), Math.max(0, Math.min(1800, parseInt(b.timeout, 10) || 0)), JSON.stringify(cleanEnv(b.env)), JSON.stringify(Array.isArray(b.tags) ? b.tags.map((t) => String(t).trim()).filter(Boolean) : [])
+    b.alertOnFail ? 1 : 0, (b.alertTarget || '').trim(), Math.max(0, Math.min(1800, parseInt(b.timeout, 10) || 0)), JSON.stringify(cleanEnv(b.env)), JSON.stringify(Array.isArray(b.tags) ? b.tags.map((t) => String(t).trim()).filter(Boolean) : []), Math.max(0, Math.min(1000, parseInt(b.rateLimit, 10) || 0))
   );
   return slug;
 }
@@ -1113,7 +1123,7 @@ app.put('/api/routines/:slug', (req, res) => {
   // as the basis and marks it stale so the LLM regenerates from the current script next.
   const staleAfter = (scriptModeAfter && promptChanged) ? 1 : r.script_stale;
   run(
-    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=?,retries=?,assertions=?,alert_on_fail=?,alert_target=?,timeout_s=?,env=?,tags=? WHERE slug=?`,
+    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=?,retries=?,assertions=?,alert_on_fail=?,alert_target=?,timeout_s=?,env=?,tags=?,rate_limit=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
     JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
     JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
@@ -1132,6 +1142,7 @@ app.put('/api/routines/:slug', (req, res) => {
     b.timeout != null ? Math.max(0, Math.min(1800, parseInt(b.timeout, 10) || 0)) : r.timeout_s,
     JSON.stringify(b.env != null ? cleanEnv(b.env) : (jObj(r.env) || {})),
     JSON.stringify(Array.isArray(b.tags) ? b.tags.map((t) => String(t).trim()).filter(Boolean) : j(r.tags)),
+    b.rateLimit != null ? Math.max(0, Math.min(1000, parseInt(b.rateLimit, 10) || 0)) : r.rate_limit,
     r.slug
   );
   const updated = one('SELECT * FROM routines WHERE slug=?', r.slug);

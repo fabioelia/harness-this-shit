@@ -262,6 +262,7 @@ export interface CreateRoutineInput {
   timeout?: number;
   env?: Record<string, string>;
   tags?: string[];
+  rateLimit?: number;
   reactions?: { source: string; kind: string; when: string; run: string; check?: string }[];
   memory?: boolean;
 }
