@@ -409,10 +409,14 @@ function recordOutcome(r, ok) {
   }
 }
 // Notify Slack when a run finally fails (after retries are exhausted) — no human polling.
+const _lastAlert = new Map();
 function alertFailure(r, output, label) {
   if (!r.alert_on_fail) return;
   const target = (r.alert_target || '').trim() || (r.owner && r.owner !== 'unassigned' ? `@${r.owner}` : '');
   if (!target) return;
+  const prev = _lastAlert.get(r.slug);
+  if (prev && now() - prev < 30 * 60_000) { logActivity(`${r.slug} fail-alert throttled (sent <30m ago)`, 'idle'); return; }
+  _lastAlert.set(r.slug, now());
   const tail = String(output || '').split('\n').filter(Boolean).slice(-3).join(' ').slice(0, 220);
   const text = `:warning: *${r.name}* failed (${label || 'run'})\n${tail || 'no output'}`;
   execCapture('slack-post', [target, text], { env: { ...process.env, PATH: `${SCRIPT_TOOLS_DIR}:${process.env.PATH}` }, timeoutMs: 15_000 })
