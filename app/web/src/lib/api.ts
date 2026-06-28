@@ -45,6 +45,9 @@ export interface Insights {
 }
 export const useInsights = (days = 14) => useQuery({ queryKey: ['insights', days], queryFn: () => get<Insights>(`/api/insights?days=${days}`), refetchInterval: 15000 });
 
+export interface Schedule { hours: number; count: number; upcoming: { slug: string; name: string; cron: string; at: number; when: string; in: string }[] }
+export const useSchedule = (hours = 48) => useQuery({ queryKey: ['schedule', hours], queryFn: () => get<Schedule>(`/api/schedule?hours=${hours}`), refetchInterval: 30000 });
+
 // GitHub webhooks
 export interface WebhookConfig { publicUrl: string; receiverUrl: string; secretSet: boolean; events: string[]; tunnel: { available: boolean; running: boolean; url: string } }
 export interface RepoHook { id: number; url: string; active: boolean; events: string[]; ours: boolean }

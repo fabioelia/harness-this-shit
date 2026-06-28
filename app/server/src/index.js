@@ -846,6 +846,26 @@ app.get('/api/github/labels', async (req, res) => {
   res.json({ labels: r.code === 0 ? r.out.split('\n').map((s) => s.trim()).filter(Boolean) : [] });
 });
 
+// Upcoming scheduled runs — project the next fire times of cron routines forward.
+const relFuture = (ts) => { const d = ts - now(); if (d < 60_000) return 'in <1m'; if (d < 3_600_000) return `in ${Math.round(d / 60_000)}m`; if (d < 86_400_000) return `in ${Math.round(d / 3_600_000)}h`; return `in ${Math.round(d / 86_400_000)}d`; };
+app.get('/api/schedule', (req, res) => {
+  const hours = Math.min(168, Math.max(1, parseInt(req.query.hours, 10) || 48));
+  const rows = all("SELECT slug,name,schedule FROM routines WHERE enabled=1 AND triggers LIKE '%schedule%' AND schedule != ''");
+  const start = new Date(now()); start.setSeconds(0, 0);
+  const upcoming = [];
+  for (const r of rows) {
+    let count = 0;
+    for (let m = 1; m <= hours * 60 && count < 3; m++) {
+      const d = new Date(start.getTime() + m * 60_000);
+      if (cronMatches(r.schedule, d)) {
+        upcoming.push({ slug: r.slug, name: r.name, cron: r.schedule, at: d.getTime(), when: d.toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }), in: relFuture(d.getTime()) });
+        count++;
+      }
+    }
+  }
+  upcoming.sort((a, b) => a.at - b.at);
+  res.json({ hours, count: upcoming.length, upcoming });
+});
 // Observability: cost / runs / turns / latency over time and per routine.
 app.get('/api/insights', (req, res) => {
   const days = Math.min(60, Math.max(1, parseInt(req.query.days, 10) || 14));
