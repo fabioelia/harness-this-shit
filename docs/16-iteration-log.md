@@ -26,6 +26,7 @@ dropdowns · Fleet inbox badge.
 | 6 | Upcoming scheduled-runs timeline (cron projection, next 48h) | observability | ✅ done |
 | 7 | Alert on failure → Slack DM/channel (after retries exhausted) | eliminating-humans | ✅ done |
 | 8 | Daily spend cap — auto-pause dispatch when today's spend ≥ cap | efficiency/eliminating-humans | ✅ done |
+| 9 | Orphaned-run watchdog — reap runs stuck running/waiting > 20m (boot + 5min) | resilience/observability | ✅ done |
 
 ## QA backlog (test at iteration 10)
 - [ ] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.

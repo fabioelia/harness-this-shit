@@ -726,6 +726,23 @@ function tickScheduler() {
 }
 if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(tickScheduler, 30_000).unref?.();
 
+// Watchdog: reap runs stuck in running/waiting (server crash mid-run, hung session) so
+// the run list stays honest and routine state / leases don't wedge. Runs on boot + 5-min.
+function reapStaleRuns() {
+  const cutoff = now() - 20 * 60_000; // > the 4-min session timeout + 15-min lease TTL
+  const stale = all("SELECT id, routine_slug FROM runs WHERE status IN ('running','waiting') AND created_at < ?", cutoff);
+  for (const s of stale) {
+    run("UPDATE runs SET status='failed', output=?, dur='—' WHERE id=?", 'reaped — no result within 20m (server restart or stuck session)', s.id);
+    run('DELETE FROM leases WHERE run_id=?', s.id);
+    run("UPDATE routines SET state='idle', last_status='failing' WHERE slug=? AND state='running'", s.routine_slug);
+    logActivity(`${s.routine_slug} run ${s.id} reaped · stuck > 20m`, 'failing');
+  }
+  if (stale.length) logActivity(`watchdog reaped ${stale.length} stuck run${stale.length > 1 ? 's' : ''}`, 'idle');
+  return stale.length;
+}
+reapStaleRuns();
+if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(reapStaleRuns, 5 * 60_000).unref?.();
+
 // ── Reactions: watch a routine's downstream entity, fire a follow-up routine ────
 const wid = () => 'w_' + Math.random().toString(36).slice(2, 9);
 const cleanReactions = (arr) => (Array.isArray(arr) ? arr : [])
