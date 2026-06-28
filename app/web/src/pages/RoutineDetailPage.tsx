@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt } from '@/lib/api';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt, useRoutineAudit } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { FrontMatter, RoutineDetail } from '@/types';
@@ -89,6 +89,23 @@ function ReactiveFlowCard({ d }: { d: RoutineDetail }) {
   );
 }
 
+function AuditCard({ slug }: { slug: string }) {
+  const { data } = useRoutineAudit(slug, true);
+  if (!data || data.entries.length === 0) return null;
+  return (
+    <div className={CARD}>
+      <div className={`${LABEL} mb-3`}>Change log · {data.entries.length}</div>
+      <div className="flex flex-col gap-1">
+        {data.entries.map((e, i) => (
+          <div key={i} className="flex items-center gap-2 font-mono text-[11.5px]">
+            <span className="flex-1 text-t2">{e.summary}</span>
+            <span className="shrink-0 text-dim">{e.ago}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 function PromptHistoryCard({ slug }: { slug: string }) {
   const { data } = useRoutineHistory(slug, true);
   const restore = useRestorePrompt();
@@ -440,6 +457,7 @@ export function RoutineDetailPage() {
           )}
           <TestFireCard slug={d.slug} triggers={d.triggers} repo={d.repo} />
           <PromptHistoryCard slug={d.slug} />
+          <AuditCard slug={d.slug} />
           <MetricCard slug={d.slug} />
           {d.scriptMode && <ScriptCard slug={d.slug} lang={d.scriptLang} compiled={d.compiled} stale={d.scriptStale} script={d.script} />}
           {d.memory && <MemoryCard slug={d.slug} />}

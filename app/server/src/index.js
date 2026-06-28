@@ -1361,6 +1361,15 @@ app.put('/api/routines/:slug', (req, res) => {
   const staleAfter = (scriptModeAfter && promptChanged) ? 1 : r.script_stale;
   // Snapshot the prior prompt before overwriting it, so edits are reversible + auditable.
   if (promptChanged && r.prompt && r.prompt.trim()) run('INSERT INTO prompt_history (slug, prompt, created_at) VALUES (?,?,?)', r.slug, r.prompt, now());
+  // Audit trail: record which config fields changed in this edit.
+  const changed = [];
+  const scal = [['name', b.name, r.name], ['summary', b.summary, r.summary], ['owner', b.owner, r.owner], ['model', b.model, r.model], ['effort', b.effort, r.effort], ['repo', b.repo, r.repo], ['schedule', b.schedule, r.schedule]];
+  for (const [f, nv, ov] of scal) if (nv != null && String(nv) !== String(ov)) changed.push(f);
+  const arr = [['triggers', b.triggers, r.triggers], ['connectors', b.connectors, r.connectors], ['chain', b.chain, r.chain], ['tags', b.tags, r.tags], ['reactions', b.reactions, r.reactions]];
+  for (const [f, nv, ov] of arr) if (nv != null && JSON.stringify(nv) !== ov) changed.push(f);
+  if (b.filters != null && JSON.stringify(cleanFilters(b.filters)) !== r.filters) changed.push('filters');
+  if (promptChanged) changed.push('prompt');
+  if (changed.length) run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', r.slug, `edited: ${changed.join(', ')}`, now());
   run(
     `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=?,retries=?,assertions=?,alert_on_fail=?,alert_target=?,timeout_s=?,env=?,tags=?,rate_limit=?,max_fails=?,notes=?,active_window=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
@@ -2000,7 +2009,13 @@ app.post('/api/routines/:slug/enable', (req, res) => {
   if (!r) return res.status(404).json({ error: 'not found' });
   const en = req.body?.enabled ? 1 : 0;
   run('UPDATE routines SET enabled=?, state=? WHERE slug=?', en, en ? (r.state === 'disabled' ? 'idle' : r.state) : 'disabled', r.slug);
+  if (!!r.enabled !== !!en) run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', r.slug, en ? 'enabled' : 'disabled', now());
   res.json({ ok: true, enabled: !!en });
+});
+app.get('/api/routines/:slug/audit', (req, res) => {
+  if (!one('SELECT 1 FROM routines WHERE slug=?', req.params.slug)) return res.status(404).json({ error: 'not found' });
+  const rows = all('SELECT summary, created_at FROM routine_audit WHERE slug=? ORDER BY id DESC LIMIT 30', req.params.slug);
+  res.json({ entries: rows.map((x) => ({ summary: x.summary, ago: relTime(x.created_at) })) });
 });
 
 app.post('/api/routines/:slug/dispatch', (req, res) => {
