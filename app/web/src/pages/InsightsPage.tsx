@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures, useHeatmap, useReleaseLease, usePruneRuns, useSetRetention, useActiveRuns, useRecommendations, useTeams, useOwners, useSetTeamBudget } from '@/lib/api';
+import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures, useHeatmap, useReleaseLease, usePruneRuns, useSetRetention, useActiveRuns, useRecommendations, useTeams, useOwners, useSetTeamBudget, useContributors } from '@/lib/api';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -26,6 +26,7 @@ export function InsightsPage() {
   const { data: recs } = useRecommendations();
   const { data: teams } = useTeams();
   const { data: owners } = useOwners();
+  const { data: contributors } = useContributors();
   const setTeamBudget = useSetTeamBudget();
   const setDigest = useSetDigest();
   const sendDigest = useSendDigest();
@@ -368,6 +369,30 @@ export function InsightsPage() {
                   {d.byEffort.map((e) => (
                     <span key={e.effort} className="rounded-md border border-line bg-surface-2 px-2.5 py-1 font-mono text-[12px]"><span className="text-t2">{e.effort}</span> <span className="text-dim-2">${e.cost.toFixed(2)}</span> <span className="text-dim">· {e.runs}r</span></span>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {contributors && contributors.contributors.length > 0 && (
+              <div className={`${CARD} mb-[18px]`}>
+                <div className={`${LABEL} mb-3`}>Contributors · 30d <span className="font-mono lowercase tracking-normal text-dim-2">— approvals, comments, sign-offs</span></div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[12.5px]">
+                    <thead><tr className="border-b border-line-soft text-left font-display text-[10px] font-semibold uppercase tracking-[0.06em] text-dim-2">
+                      <th className="pb-2 pr-3 font-medium">Person</th><th className="pb-2 px-3 text-right font-medium">Approvals</th><th className="pb-2 px-3 text-right font-medium">Comments</th><th className="pb-2 px-3 text-right font-medium">Sign-offs</th><th className="pb-2 pl-3 text-right font-medium">Total</th>
+                    </tr></thead>
+                    <tbody className="font-mono">
+                      {contributors.contributors.map((c) => (
+                        <tr key={c.who} className="border-b border-line-soft last:border-0">
+                          <td className="py-2 pr-3 font-sans font-semibold text-t2">{c.who}</td>
+                          <td className="py-2 px-3 text-right text-muted-2">{c.approvals}</td>
+                          <td className="py-2 px-3 text-right text-muted-2">{c.comments}</td>
+                          <td className="py-2 px-3 text-right text-muted-2">{c.signoffs}</td>
+                          <td className="py-2 pl-3 text-right font-semibold text-brand-soft">{c.total}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}

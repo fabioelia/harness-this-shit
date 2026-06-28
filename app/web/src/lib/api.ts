@@ -36,6 +36,8 @@ async function del<T = unknown>(url: string): Promise<T> {
 }
 
 export const useStats = () => useQuery({ queryKey: ['stats'], queryFn: () => get<Stats>('/api/stats'), refetchInterval: 8000 });
+export interface Contributors { contributors: { who: string; approvals: number; comments: number; signoffs: number; total: number }[] }
+export const useContributors = () => useQuery({ queryKey: ['contributors'], queryFn: () => get<Contributors>('/api/contributors'), refetchInterval: 30000 });
 export interface Owners { owners: { owner: string; routines: number; enabled: number; failing: number; runs: number; cost: number; assignedOpen: number }[] }
 export const useOwners = () => useQuery({ queryKey: ['owners'], queryFn: () => get<Owners>('/api/owners'), refetchInterval: 20000 });
 export interface Teams { teams: { team: string; routines: number; enabled: number; owners: string[]; runs: number; cost: number; failRate: number; budget: number; spentToday: number }[] }

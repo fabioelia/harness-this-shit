@@ -1256,6 +1256,16 @@ app.post('/api/team-budgets', (req, res) => {
   setMeta('team_budgets', JSON.stringify(b));
   res.json({ ok: true, budgets: b });
 });
+// Contributors — who's doing the review/sign-off/discussion work (last 30d).
+app.get('/api/contributors', (_q, res) => {
+  const since = now() - 30 * 86_400_000;
+  const people = {};
+  const bump = (who, key) => { const w = (who || '').trim(); if (!w || w === 'anon') return; (people[w] ||= { who: w, approvals: 0, comments: 0, signoffs: 0 })[key]++; };
+  for (const a of all("SELECT summary FROM routine_audit WHERE summary LIKE 'approved by %' AND created_at > ?", since)) bump(a.summary.replace('approved by ', ''), 'approvals');
+  for (const c of all('SELECT author FROM comments WHERE created_at > ?', since)) bump(c.author, 'comments');
+  for (const v of all("SELECT verdict_by FROM runs WHERE verdict != '' AND created_at > ?", since)) bump(v.verdict_by, 'signoffs');
+  res.json({ contributors: Object.values(people).map((p) => ({ ...p, total: p.approvals + p.comments + p.signoffs })).sort((a, b) => b.total - a.total).slice(0, 12) });
+});
 // Owner workload: per-person load — routines owned, health, spend, open triage assigned.
 app.get('/api/owners', (req, res) => {
   const since = now() - 14 * 86_400_000;
