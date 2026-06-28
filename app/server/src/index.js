@@ -514,7 +514,7 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       const s = seq++;
       run('INSERT INTO run_events (run_id,seq,t_offset,type,tool,ok,payload) VALUES (?,?,?,?,?,?,?)',
         id, s, now() - t0, type, tool ?? null, ok == null ? null : (ok ? 1 : 0), JSON.stringify({ d: p, truncated }));
-      runBus.emit(id, { kind: 'event', event: { seq: s, t: fmtOffset(now() - t0), type, tool: tool ?? null, ok: ok == null ? null : (ok ? 1 : 0), text: p, truncated } });
+      runBus.emit(id, { kind: 'event', event: { seq: s, t: fmtOffset(now() - t0), ms: now() - t0, type, tool: tool ?? null, ok: ok == null ? null : (ok ? 1 : 0), text: p, truncated } });
     };
     const onEvent = (o) => {
       try {
@@ -1494,7 +1494,7 @@ app.get('/api/runs/:id/stream', (req, res) => {
   const send = (m) => res.write(`data: ${JSON.stringify(m)}\n\n`);
   for (const e of all('SELECT * FROM run_events WHERE run_id=? ORDER BY seq', id)) {
     let pl; try { pl = JSON.parse(e.payload); } catch { pl = { d: e.payload }; }
-    send({ kind: 'event', event: { seq: e.seq, t: fmtOffset(e.t_offset), type: e.type, tool: e.tool, ok: e.ok, text: pl.d, truncated: !!pl.truncated } });
+    send({ kind: 'event', event: { seq: e.seq, t: fmtOffset(e.t_offset), ms: e.t_offset, type: e.type, tool: e.tool, ok: e.ok, text: pl.d, truncated: !!pl.truncated } });
   }
   if (['succeeded', 'failed', 'skipped', 'canceled'].includes(x.status)) { send({ kind: 'done', status: x.status }); return res.end(); }
   const ping = setInterval(() => res.write(':\n\n'), 25_000);
@@ -1539,7 +1539,7 @@ app.get('/api/runs/:id', (req, res) => {
   const evts = all('SELECT * FROM run_events WHERE run_id=? ORDER BY seq', x.id);
   const trace = evts.map((e) => {
     let pl; try { pl = JSON.parse(e.payload); } catch { pl = { d: e.payload, truncated: false }; }
-    return { seq: e.seq, t: fmtOffset(e.t_offset), type: e.type, tool: e.tool, ok: e.ok, text: pl.d, truncated: !!pl.truncated };
+    return { seq: e.seq, t: fmtOffset(e.t_offset), ms: e.t_offset, type: e.type, tool: e.tool, ok: e.ok, text: pl.d, truncated: !!pl.truncated };
   });
 
   // Lineage: who kicked this run off, and what it kicked off (chains + reactions).

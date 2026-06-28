@@ -54,7 +54,7 @@ function DiffCard({ runId }: { runId: string }) {
   );
 }
 
-type TE = { seq: number; t: string; type: string; tool: string | null; ok: number | null; text: string; truncated: boolean };
+type TE = { seq: number; t: string; ms: number; type: string; tool: string | null; ok: number | null; text: string; truncated: boolean };
 const dotForTrace = (e: TE) => e.type === 'tool_use' ? '#e6b052' : e.type === 'system' ? '#7f8a80' : e.type === 'text' ? '#5b9ee6' : (e.ok === 0 ? '#e5736b' : '#5fbf86');
 const sline = (e: TE): string => {
   const d = e.text ?? '';
@@ -65,6 +65,7 @@ const sline = (e: TE): string => {
   if (e.type === 'result') { try { const o = JSON.parse(d); return `done · ${o.num_turns} turns · $${Number(o.total_cost_usd || 0).toFixed(4)}`; } catch { return 'done'; } }
   return e.type;
 };
+const fmtDur = (ms: number) => ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 const pretty = (e: TE): string => { try { return JSON.stringify(JSON.parse(e.text), null, 2); } catch { return e.text; } };
 
 export function RunDetailPage() {
@@ -102,6 +103,8 @@ export function RunDetailPage() {
     if (tQ.trim() && !`${e.tool || ''} ${e.text || ''} ${e.type}`.toLowerCase().includes(tQ.toLowerCase())) return false;
     return true;
   });
+  const stepDur = (e: TE) => { const i = trace.findIndex((x) => x.seq === e.seq); return i >= 0 && trace[i + 1] ? trace[i + 1].ms - e.ms : 0; };
+  const maxDur = Math.max(1, ...trace.map((e, i) => (trace[i + 1] ? trace[i + 1].ms - e.ms : 0)));
 
   return (
     <div className="font-sans text-fg animate-fade-up">
@@ -193,6 +196,7 @@ export function RunDetailPage() {
                     <span className="mt-px w-[80px] shrink-0 truncate rounded-[4px] border border-white/[0.08] bg-white/[0.045] py-0.5 text-center font-mono text-[9.5px] font-semibold uppercase tracking-[0.04em] text-muted-2">{e.tool || e.type}</span>
                     <div className="min-w-0 flex-1">
                       <span className="block break-words font-sans text-[12.5px] font-medium leading-[1.45] text-t2">{sline(e)}</span>
+                      {stepDur(e) > 250 && <span className="mt-1 flex items-center gap-1.5"><span className="h-[3px] rounded-full bg-brand/40" style={{ width: `${Math.max(6, (stepDur(e) / maxDur) * 120)}px` }} /><span className="font-mono text-[10px] text-dim-3">{fmtDur(stepDur(e))}</span></span>}
                       {hasBody && (
                         <details className="mt-1 group">
                           <summary className="cursor-pointer list-none font-mono text-[10.5px] text-dim hover:text-brand">▸ view{e.truncated ? ' (truncated)' : ''}</summary>
