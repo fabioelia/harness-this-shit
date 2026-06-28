@@ -42,6 +42,11 @@ export interface Insights {
   daily: { date: string; runs: number; cost: number; fails: number }[];
   perRoutine: { slug: string; name: string; runs: number; cost: number; turns: number; avgMs: number; fails: number; failRate: number }[];
   totals: { runs: number; cost: number; turns: number; avgMs: number; fails: number; failRate: number };
+  budget: { cap: number; today: number; over: boolean };
+}
+export function useSetBudget() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (cap: number) => post<{ ok: boolean; cap: number; today: number }>('/api/budget', { cap }), onSuccess: () => qc.invalidateQueries({ queryKey: ['insights'] }) });
 }
 export const useInsights = (days = 14) => useQuery({ queryKey: ['insights', days], queryFn: () => get<Insights>(`/api/insights?days=${days}`), refetchInterval: 15000 });
 

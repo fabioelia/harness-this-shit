@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInsights, useSchedule } from '@/lib/api';
+import { useInsights, useSchedule, useSetBudget } from '@/lib/api';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -11,6 +11,8 @@ export function InsightsPage() {
   const [days, setDays] = useState(14);
   const { data: d } = useInsights(days);
   const { data: sched } = useSchedule(48);
+  const setBudget = useSetBudget();
+  const [capDraft, setCapDraft] = useState('');
   const maxCost = Math.max(0.0001, ...(d?.daily ?? []).map((x) => x.cost));
   const maxRuns = Math.max(1, ...(d?.daily ?? []).map((x) => x.runs));
 
@@ -42,6 +44,23 @@ export function InsightsPage() {
           <div className="font-mono text-[13px] text-dim">loading…</div>
         ) : (
           <>
+            <div className={`${CARD} mb-[18px] flex flex-wrap items-center gap-3`} style={d.budget.over ? { borderColor: 'rgba(229,115,107,.4)' } : undefined}>
+              <span className={`${LABEL}`}>Daily spend cap</span>
+              {d.budget.cap > 0 ? (
+                <span className="font-mono text-[12.5px]">
+                  <span className={d.budget.over ? 'text-bad' : 'text-t2'}>${d.budget.today.toFixed(2)}</span>
+                  <span className="text-dim"> / ${d.budget.cap.toFixed(2)} today</span>
+                  {d.budget.over && <span className="ml-2 rounded bg-bad/15 px-1.5 py-0.5 text-[10px] font-semibold text-bad">DISPATCH PAUSED</span>}
+                </span>
+              ) : <span className="font-mono text-[12px] text-dim">no cap — runs dispatch unbounded</span>}
+              <div className="ml-auto flex items-center gap-2">
+                <span className="font-mono text-[12px] text-dim">$</span>
+                <input value={capDraft} onChange={(e) => setCapDraft(e.target.value)} placeholder={d.budget.cap > 0 ? String(d.budget.cap) : '5.00'} className="h-8 w-24 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+                <button onClick={() => setBudget.mutate(parseFloat(capDraft) || 0, { onSuccess: () => setCapDraft('') })} className="h-8 rounded-md border border-line bg-surface-2 px-3 font-display text-[12px] font-semibold text-t2 hover:border-hair">Set</button>
+                {d.budget.cap > 0 && <button onClick={() => setBudget.mutate(0)} className="h-8 rounded-md border border-line bg-surface-2 px-3 font-display text-[12px] font-semibold text-dim hover:text-bad">Off</button>}
+              </div>
+            </div>
+
             <div className="mb-[18px] grid grid-cols-2 gap-[14px] md:grid-cols-5">
               <Stat label={`Spend · ${days}d`} value={`$${d.totals.cost.toFixed(2)}`} sub={`${d.totals.runs} runs`} />
               <Stat label="Runs" value={fmtN(d.totals.runs)} sub={`${(d.totals.runs / days).toFixed(1)}/day`} />

@@ -40,6 +40,10 @@ const jObj = (s) => { try { return JSON.parse(s); } catch { return null; } };
 const meta = (k, d) => one('SELECT value FROM meta WHERE key=?', k)?.value ?? d;
 const metaGet = meta; // alias used before `meta` is in scope in hoisted fns
 const setMeta = (k, v) => run("INSERT INTO meta (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", k, String(v));
+// Automatic cost guardrail: a daily spend cap that pauses dispatch when reached.
+const todaySpend = () => { const s = new Date(now()); s.setHours(0, 0, 0, 0); return one('SELECT COALESCE(SUM(cost_usd),0) AS s FROM runs WHERE created_at > ?', s.getTime()).s || 0; };
+const budgetCap = () => parseFloat(metaGet('daily_budget', '')) || 0;
+const overBudget = () => { const cap = budgetCap(); return cap > 0 && todaySpend() >= cap; };
 // UI-configured secrets are stored in meta; load them into the process env so the
 // runner's child sessions and the integrations both see them (env wins if already set).
 const TOKEN_ENV = { slack: 'SLACK_BOT_TOKEN', atlassian: 'ATLASSIAN_API_TOKEN' };
@@ -665,6 +669,10 @@ function dispatchEvent(type, payload) {
     logActivity(`event ${type} dropped · kill switch engaged`, 'failing');
     return { error: 'kill switch engaged' };
   }
+  if (overBudget()) {
+    logActivity(`event ${type} dropped · daily budget $${budgetCap()} reached ($${todaySpend().toFixed(2)} spent)`, 'failing');
+    return { error: `daily budget $${budgetCap()} reached — dispatch paused` };
+  }
   const event = payload && Object.keys(payload).length ? payload : { event: type };
   const labelEvt = isLabelEvent(type, event);
   const candidates = all('SELECT * FROM routines WHERE enabled=1')
@@ -705,7 +713,7 @@ export function cronMatches(expr, d) {
 }
 const _lastFired = new Map();
 function tickScheduler() {
-  if (meta('kill_switch', 'false') === 'true') return;
+  if (meta('kill_switch', 'false') === 'true' || overBudget()) return;
   const d = new Date();
   const stamp = `${d.getFullYear()}/${d.getMonth()}/${d.getDate()} ${d.getHours()}:${d.getMinutes()}`;
   for (const r of all('SELECT * FROM routines WHERE enabled=1')) {
@@ -906,7 +914,13 @@ app.get('/api/insights', (req, res) => {
     daily: Object.values(daily).map((d) => ({ ...d, cost: +d.cost.toFixed(4) })),
     perRoutine,
     totals: { runs: T.runs, cost: +T.cost.toFixed(2), turns: T.turns, avgMs: T.nMs ? Math.round(T.ms / T.nMs) : 0, fails: T.fails, failRate: T.runs ? Math.round((100 * T.fails) / T.runs) : 0 },
+    budget: { cap: budgetCap(), today: +todaySpend().toFixed(2), over: overBudget() },
   });
+});
+app.post('/api/budget', (req, res) => {
+  const cap = Math.max(0, parseFloat(req.body?.cap) || 0);
+  setMeta('daily_budget', cap > 0 ? String(cap) : '');
+  res.json({ ok: true, cap, today: +todaySpend().toFixed(2) });
 });
 app.get('/api/stats', (_q, res) => {
   const rows = all('SELECT * FROM routines');
@@ -1216,6 +1230,7 @@ app.get('/api/agents/:name', (req, res) => {
 });
 app.post('/api/agents/:name/message', (req, res) => {
   if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
+  if (overBudget()) return res.status(409).json({ error: `daily budget $${budgetCap()} reached — dispatch paused` });
   const a = one('SELECT * FROM agents WHERE name=?', req.params.name);
   if (!a) return res.status(404).json({ error: 'not found' });
   const text = String(req.body?.text || '').trim();
@@ -1258,6 +1273,7 @@ app.post('/api/runs/:id/replay', (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', x.routine_slug);
   if (!r) return res.status(404).json({ error: 'routine no longer exists' });
   if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
+  if (overBudget()) return res.status(409).json({ error: `daily budget $${budgetCap()} reached — dispatch paused` });
   const ev = jObj(x.event) || {};
   delete ev._attempt; delete ev._recompile;
   const runId = executeRoutine(r, { ...ev, _replay: true, upstream: { routine: r.slug, run: x.id } }, `replay · ${x.id}`);
@@ -1494,6 +1510,7 @@ app.post('/api/routines/:slug/dispatch', (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
   if (!r) return res.status(404).json({ error: 'not found' });
   if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
+  if (overBudget()) return res.status(409).json({ error: `daily budget $${budgetCap()} reached — dispatch paused` });
   const event = req.body?.event ?? { event: 'manual', routine: r.slug, dispatched_at: new Date().toISOString() };
   res.json({ ok: true, runId: executeRoutine(r, event, 'manual'), status: 'running' });
 });

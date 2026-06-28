@@ -25,6 +25,7 @@ dropdowns · Fleet inbox badge.
 | 5 | Metric history — leading number per successful run, sparkline + delta | observability | ✅ done |
 | 6 | Upcoming scheduled-runs timeline (cron projection, next 48h) | observability | ✅ done |
 | 7 | Alert on failure → Slack DM/channel (after retries exhausted) | eliminating-humans | ✅ done |
+| 8 | Daily spend cap — auto-pause dispatch when today's spend ≥ cap | efficiency/eliminating-humans | ✅ done |
 
 ## QA backlog (test at iteration 10)
 - [ ] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.
@@ -33,6 +34,7 @@ dropdowns · Fleet inbox badge.
 - [ ] (iter 5) /api/routines/:slug/metric parses the leading number from each succeeded run's output; sparkline + delta render; non-numeric outputs → card hidden.
 - [ ] (iter 6) /api/schedule projects correct next fire times from each cron (weekday ranges, steps); sorted; window cap; Insights card renders.
 - [ ] (iter 7) alert fires only on FINAL failure (not before retries), resolves owner default, posts via slack-post (@user + #channel), logs send/error; disabled = silent.
+- [ ] (iter 8) cap blocks dispatchEvent + scheduler + manual dispatch/replay/recompile once today's spend ≥ cap; cap=0 unbounded; insights shows today/cap/over; midnight resets (today window).
 - [ ] (iter 4) each assertion type (contains/not_contains/matches/max_cost/max_turns/min_length/no_tool_errors) evaluates correctly; a failed assertion gates chain+reactions (downstream doesn't fire) but doesn't change run status; assertions only eval on a successful session; empty assertions = no verdict; run card renders pass/fail.
 
 ## Per-iteration notes
