@@ -1253,6 +1253,14 @@ app.get('/api/routines/:slug/export', (req, res) => {
   if (!r) return res.status(404).json({ error: 'not found' });
   res.json({ switchboard: 'routine', version: 1, slug: r.slug, routine: exportBody(r) });
 });
+// Diff a run against the previous run of the same routine (output + metric deltas).
+app.get('/api/runs/:id/diff', (req, res) => {
+  const cur = one('SELECT * FROM runs WHERE id=?', req.params.id);
+  if (!cur) return res.status(404).json({ error: 'not found' });
+  const prev = one("SELECT * FROM runs WHERE routine_slug=? AND created_at < ? AND status IN ('succeeded','failed') ORDER BY created_at DESC, ord DESC LIMIT 1", cur.routine_slug, cur.created_at);
+  const brief = (x) => x ? { id: x.id, output: x.output || '', cost: x.cost_usd, turns: x.num_turns, status: x.status, ago: relTime(x.created_at) } : null;
+  res.json({ current: brief(cur), previous: brief(prev) });
+});
 // Prompt history — past versions of a routine's prompt, with restore.
 app.get('/api/routines/:slug/history', (req, res) => {
   const r = one('SELECT prompt FROM routines WHERE slug=?', req.params.slug);

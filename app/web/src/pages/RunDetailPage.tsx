@@ -1,12 +1,58 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRun, useDispatchRoutine, useReplayRun } from '@/lib/api';
+import { useRun, useDispatchRoutine, useReplayRun, useRunDiff } from '@/lib/api';
 import { Pill, Dot, Empty, stateMeta } from '@/components/sb';
 import { cn } from '@/lib/utils';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
+
+// LCS line diff: marks each line common / added / removed.
+function lineDiff(a: string, b: string): { sign: ' ' | '-' | '+'; text: string }[] {
+  const A = a.split('\n'), B = b.split('\n');
+  const m = A.length, n = B.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--) dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out: { sign: ' ' | '-' | '+'; text: string }[] = [];
+  let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (A[i] === B[j]) { out.push({ sign: ' ', text: A[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push({ sign: '-', text: A[i] }); i++; }
+    else { out.push({ sign: '+', text: B[j] }); j++; }
+  }
+  while (i < m) out.push({ sign: '-', text: A[i++] });
+  while (j < n) out.push({ sign: '+', text: B[j++] });
+  return out;
+}
+
+function DiffCard({ runId }: { runId: string }) {
+  const [open, setOpen] = useState(false);
+  const { data } = useRunDiff(runId, open);
+  return (
+    <div className={CARD}>
+      <button onClick={() => setOpen((v) => !v)} className={`${LABEL} flex w-full items-center justify-between hover:text-t2`}>
+        <span>Diff vs previous run</span><span className="font-mono text-dim">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && data && (
+        !data.previous ? <div className="mt-3 font-mono text-[12px] text-dim">no earlier run of this routine to compare.</div> : (
+          <div className="mt-3">
+            <div className="mb-2 flex flex-wrap gap-3 font-mono text-[11px] text-dim-2">
+              <span>prev <Link to={`/runs/${data.previous.id}`} className="text-brand-soft">{data.previous.id}</Link> · {data.previous.ago}</span>
+              {data.previous.cost != null && data.current?.cost != null && <span>Δcost ${(data.current.cost - data.previous.cost).toFixed(4)}</span>}
+              {data.previous.turns != null && data.current?.turns != null && <span>Δturns {data.current.turns - data.previous.turns}</span>}
+            </div>
+            <pre className="max-h-[320px] overflow-auto rounded-md bg-code px-3 py-2 font-mono text-[11px] leading-[1.55]">
+              {lineDiff(data.previous.output, data.current?.output || '').map((l, i) => (
+                <div key={i} className={l.sign === '+' ? 'text-ok' : l.sign === '-' ? 'text-bad' : 'text-dim-2'}>{l.sign} {l.text || ' '}</div>
+              ))}
+            </pre>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
 
 type TE = { seq: number; t: string; type: string; tool: string | null; ok: number | null; text: string; truncated: boolean };
 const dotForTrace = (e: TE) => e.type === 'tool_use' ? '#e6b052' : e.type === 'system' ? '#7f8a80' : e.type === 'text' ? '#5b9ee6' : (e.ok === 0 ? '#e5736b' : '#5fbf86');
@@ -215,6 +261,7 @@ export function RunDetailPage() {
               <div className="mt-2 text-[11px] text-dim-2">Events coalesced onto this run instead of spawning another agent. The agent drains these via <span className="font-mono">inbox</span> before finishing.</div>
             </div>
           )}
+          <DiffCard runId={r.id} />
           {(r.lineage.triggeredBy || r.lineage.downstream.length > 0 || r.lineage.watches.length > 0) && (
             <div className={CARD}>
               <div className={`${LABEL} mb-3`}>Lineage · follow the work</div>
