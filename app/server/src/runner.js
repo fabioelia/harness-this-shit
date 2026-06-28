@@ -142,16 +142,17 @@ export function buildPrompt(routine, event, constraints = [], { memoryDir, agent
     const ext = scriptLang === 'node' ? 'node' : 'bash';
     lines.push('',
       '## Build a reusable extractor (this is a SCRIPT routine)',
-      `Your goal this run is NOT just to answer once — it is to BUILD a self-contained ${ext} script that extracts the data the instruction asks for, so every future run executes the script directly (no LLM, deterministic, $0).`,
+      `Your goal this run is NOT just to answer once — it is to BUILD a self-contained ${ext} script that extracts the data the instruction asks for, so every future run executes the script directly (no LLM, deterministic, $0). It will run UNCHANGED days, weeks and months from now, so it must stay correct as time passes.`,
       'Steps:',
-      `1. Explore to figure out exactly where the data lives — use the gh CLI (\`gh workflow list\`, \`gh run list --json …\`, \`gh api …\`) against the target repo to find the right workflow / job / check / query. Resolve names to ids now so the script doesn't have to guess.`,
-      `2. Write a self-contained ${ext} script to the file at the path in the env var SB_SCRIPT_PATH (use the Write tool). It must:`,
-      `   - Read its inputs from the environment: SB_REPO (owner/name) and SB_EVENT (the trigger payload as JSON). Don't hardcode anything you can read from these.`,
-      `   - Compute any time window RELATIVE to now (e.g. "this week" = last 7 days from the current date), never a fixed date.`,
+      `1. Explore to find exactly where the data lives — gh CLI (\`gh workflow list\`, \`gh run list --json …\`, \`gh api …\`) against the target repo. Resolve workflow/job/check NAMES to stable ids now so the script doesn't have to guess later.`,
+      `2. Write a self-contained ${ext} script to the path in env var SB_SCRIPT_PATH (use the Write tool). It must:`,
+      `   - Read inputs from the environment: SB_REPO (owner/name) and SB_EVENT (the trigger payload as JSON). Don't hardcode anything you can read from these.`,
+      `   - **Be DYNAMIC, not a one-time snapshot.** Anything that depends on WHEN the script runs must be recomputed from the current date/time on every run — never frozen in. In particular, ANY relative time phrase in the instruction — "last 2 weeks", "past 7 days", "yesterday", "this month", "since Monday", "today", "last 24h" — becomes a window computed from *now* at run time. e.g. "last 2 weeks" ⇒ cutoff = (now − 14 days), recomputed each run. NEVER bake today's date or a fixed timestamp into the script.`,
+      `   - Use portable date math: try the BSD form (\`date -u -v-14d '+%Y-%m-%dT%H:%M:%SZ'\`) and fall back to GNU (\`date -u -d '14 days ago' …\`), so it works on macOS and Linux.`,
       `   - Depend only on what's already here: ${ext}${ext === 'bash' ? ', gh, jq, and standard unix tools' : ' and gh via child_process'}. No installs.`,
       `   - Print ONLY the final result to stdout (a number, a short line, or compact JSON) — that stdout becomes the run's output verbatim. Exit non-zero on failure.`,
-      '3. Run the script once yourself to verify it works and produces the right answer; fix it until it does.',
-      'End with the verified result. The harness saves your script from SB_SCRIPT_PATH and runs it verbatim on every future trigger.');
+      '3. Verify it: run the script, check the answer, and confirm any date window is COMPUTED at runtime (grep your script — there must be no literal calendar date). Fix until correct.',
+      'End with the verified result. The harness saves your script from SB_SCRIPT_PATH and runs it verbatim on every future trigger — so e.g. a "last 2 weeks" routine must keep meaning the most-recent 2 weeks, every time, forever.');
   }
   lines.push('', `Carry out the instruction now using the trigger context and your tools.${coalesce ? ' Drain your `inbox` before finishing.' : ''} End with a one-line summary of what you did.`);
   return lines.join('\n');
