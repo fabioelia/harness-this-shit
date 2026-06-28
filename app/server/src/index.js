@@ -419,6 +419,18 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     id, r.slug, 'running', 'now', '…', triggerLabel, ord, '', JSON.stringify(rawEvent ?? {}), created, '[]');
   run('UPDATE routines SET state=?, last_ago=?, last_status=? WHERE slug=?', 'running', 'now', 'running', r.slug);
 
+  // Auto-pause: if a required connector is offline, skip (don't burn a session that'll fail).
+  if (metaGet('skip_on_connector_down', '1') === '1') {
+    const need = j(r.connectors); const down = [];
+    if (need.includes('github') && _intCache.github && _intCache.github.connected === false) down.push('github');
+    if (need.includes('slack') && _intCache.slack && _intCache.slack.connected === false) down.push('slack');
+    if (down.length) {
+      run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", `connector offline: ${down.join(', ')} — skipped (not failed)`, id);
+      run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
+      logActivity(`${r.slug} skipped · ${down.join(', ')} offline`, 'idle');
+      return id;
+    }
+  }
   // Rate limit: drop if this routine already ran rate_limit times in the past hour.
   if ((r.rate_limit || 0) > 0) {
     const n = one("SELECT COUNT(*) AS n FROM runs WHERE routine_slug=? AND created_at > ? AND status NOT IN ('skipped','coalesced','waiting')", r.slug, created - 3_600_000).n;
@@ -776,6 +788,12 @@ function reapStaleRuns() {
 }
 reapStaleRuns();
 if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(reapStaleRuns, 5 * 60_000).unref?.();
+
+// Background-refreshed connector health (so the sync dispatch path can auto-pause cheaply).
+let _intCache = { github: { connected: true }, slack: { connected: true } };
+async function refreshIntCache() { try { _intCache = await integrationStatus(); } catch { /* keep last */ } }
+refreshIntCache();
+setInterval(refreshIntCache, 30_000).unref?.();
 
 // ── Reactions: watch a routine's downstream entity, fire a follow-up routine ────
 const wid = () => 'w_' + Math.random().toString(36).slice(2, 9);
