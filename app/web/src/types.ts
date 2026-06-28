@@ -102,6 +102,7 @@ export interface RunLineage {
 export interface RunDetail {
   id: string; routine: string; status: string; trigger: string; triggerKind: string; started: string; elapsed: string; model: string;
   cost: number | null; turns: number | null; sessionId: string;
+  inTokens: number | null; outTokens: number | null;
   stdout: string; event: Record<string, unknown> | null;
   trace: TraceEvent[];
   toolBreakdown: { tool: string; calls: number; errors: number }[];

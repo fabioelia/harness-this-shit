@@ -175,6 +175,8 @@ export function getDb() {
   _db.exec('CREATE INDEX IF NOT EXISTS idx_prompt_history_slug ON prompt_history(slug, id)');
   ensure('runs', 'assert_result', "assert_result TEXT NOT NULL DEFAULT ''");
   ensure('runs', 'dur_ms', 'dur_ms INTEGER');
+  ensure('runs', 'in_tokens', 'in_tokens INTEGER');
+  ensure('runs', 'out_tokens', 'out_tokens INTEGER');
   const n = _db.prepare('SELECT COUNT(*) AS n FROM routines').get();
   if (fresh || n.n === 0) seed(_db);
   return _db;

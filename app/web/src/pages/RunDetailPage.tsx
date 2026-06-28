@@ -244,7 +244,7 @@ export function RunDetailPage() {
           <div className={CARD}>
             <div className={`${LABEL} mb-3.5`}>Run</div>
             <div className="grid grid-cols-2 gap-x-[18px] gap-y-[13px]">
-              {[['Result', r.summary.result, 'sans'], ['Trigger', r.trigger, 'mono'], ['Elapsed', r.elapsed, 'mono'], ['Cost', r.cost != null ? `$${Number(r.cost).toFixed(4)}` : '—', 'mono'], ['Turns', r.turns != null ? String(r.turns) : '—', 'mono'], ['Tools', r.summary.surface, 'mono']].map(([k, v, f]) => (
+              {[['Result', r.summary.result, 'sans'], ['Trigger', r.trigger, 'mono'], ['Elapsed', r.elapsed, 'mono'], ['Cost', r.cost != null ? `$${Number(r.cost).toFixed(4)}` : '—', 'mono'], ['Turns', r.turns != null ? String(r.turns) : '—', 'mono'], ['Tokens', r.inTokens != null || r.outTokens != null ? `${((r.inTokens || 0) / 1000).toFixed(1)}k in · ${((r.outTokens || 0) / 1000).toFixed(1)}k out` : '—', 'mono'], ['Tools', r.summary.surface, 'mono']].map(([k, v, f]) => (
                 <div key={k as string} className="min-w-0">
                   <div className="mb-[3px] font-display text-[10px] font-medium uppercase tracking-[0.06em] text-dim-2">{k}</div>
                   <div className={`truncate text-[12.5px] font-semibold text-t2 ${f === 'mono' ? 'font-mono' : 'font-sans'}`}>{v}</div>

@@ -86,10 +86,11 @@ export function InsightsPage() {
               {sendDigest.data && <div className="w-full font-mono text-[11px] text-dim-2">{sendDigest.data.sent ? 'sent · ' : 'no channel · '}{sendDigest.data.preview}</div>}
             </div>
 
-            <div className="mb-[18px] grid grid-cols-2 gap-[14px] md:grid-cols-5">
+            <div className="mb-[18px] grid grid-cols-2 gap-[14px] md:grid-cols-6">
               <Stat label={`Spend · ${days}d`} value={`$${d.totals.cost.toFixed(2)}`} sub={d.projection ? `≈ $${d.projection.monthly.toFixed(2)}/mo at this rate` : `${d.totals.runs} runs`} />
               <Stat label="Runs" value={fmtN(d.totals.runs)} sub={`${(d.totals.runs / days).toFixed(1)}/day`} />
               <Stat label="Model turns" value={fmtN(d.totals.turns)} sub={d.totals.runs ? `${(d.totals.turns / Math.max(1, d.totals.runs)).toFixed(1)}/run` : '—'} />
+              <Stat label="Tokens" value={d.totals.inTok || d.totals.outTok ? fmtN(d.totals.inTok + d.totals.outTok) : '—'} sub={d.totals.inTok || d.totals.outTok ? `${fmtN(d.totals.inTok)} in · ${fmtN(d.totals.outTok)} out` : 'not captured'} />
               <Stat label="Avg latency" value={fmtMs(d.totals.avgMs)} />
               <Stat label="Failure rate" value={`${d.totals.failRate}%`} sub={`${d.totals.fails} failed`} />
             </div>

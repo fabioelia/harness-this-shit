@@ -567,8 +567,10 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       : (res.finalText || (res.code === 124 ? `timed out after ${Math.round(res.ms / 1000)}s` : res.stderr || `claude exited ${res.code}`));
     const output = redact(rawOut); // never persist/log unredacted session output
 
-    run('UPDATE runs SET status=?, dur=?, dur_ms=?, output=?, cost_usd=?, num_turns=?, session_id=? WHERE id=?',
-      ok ? 'succeeded' : 'failed', fmtDur(res.ms), res.ms, output, res.costUsd, res.numTurns, res.sessionId, id);
+    const inTok = res.usage ? (res.usage.input_tokens || 0) + (res.usage.cache_read_input_tokens || 0) + (res.usage.cache_creation_input_tokens || 0) : null;
+    const outTok = res.usage ? (res.usage.output_tokens || 0) : null;
+    run('UPDATE runs SET status=?, dur=?, dur_ms=?, output=?, cost_usd=?, num_turns=?, session_id=?, in_tokens=?, out_tokens=? WHERE id=?',
+      ok ? 'succeeded' : 'failed', fmtDur(res.ms), res.ms, output, res.costUsd, res.numTurns, res.sessionId, inTok, outTok, id);
     runBus.emit(id, { kind: 'done', status: ok ? 'succeeded' : 'failed' });
     // Roll up real spend + avg duration onto the routine.
     const agg = one('SELECT COALESCE(SUM(cost_usd),0) AS spend, AVG(dur_ms) AS avgms FROM runs WHERE routine_slug=?', r.slug);
@@ -1086,18 +1088,18 @@ app.get('/api/anomalies', (req, res) => {
 app.get('/api/insights', (req, res) => {
   const days = Math.min(60, Math.max(1, parseInt(req.query.days, 10) || 14));
   const since = now() - days * 86_400_000;
-  const rows = all("SELECT routine_slug, status, cost_usd, num_turns, dur_ms, created_at FROM runs WHERE created_at > ? AND status IN ('succeeded','failed')", since);
+  const rows = all("SELECT routine_slug, status, cost_usd, num_turns, dur_ms, in_tokens, out_tokens, created_at FROM runs WHERE created_at > ? AND status IN ('succeeded','failed')", since);
   const dayKey = (ts) => new Date(ts).toISOString().slice(0, 10);
   const daily = {};
   for (let i = days - 1; i >= 0; i--) { const k = dayKey(now() - i * 86_400_000); daily[k] = { date: k, runs: 0, cost: 0, fails: 0 }; }
   const perR = {};
-  const T = { runs: 0, cost: 0, turns: 0, ms: 0, nMs: 0, fails: 0 };
+  const T = { runs: 0, cost: 0, turns: 0, ms: 0, nMs: 0, fails: 0, inTok: 0, outTok: 0 };
   for (const r of rows) {
     const k = dayKey(r.created_at);
     if (daily[k]) { daily[k].runs++; daily[k].cost += r.cost_usd || 0; if (r.status === 'failed') daily[k].fails++; }
     const p = (perR[r.routine_slug] ||= { slug: r.routine_slug, runs: 0, cost: 0, turns: 0, ms: 0, nMs: 0, fails: 0 });
     p.runs++; p.cost += r.cost_usd || 0; p.turns += r.num_turns || 0; if (r.dur_ms) { p.ms += r.dur_ms; p.nMs++; } if (r.status === 'failed') p.fails++;
-    T.runs++; T.cost += r.cost_usd || 0; T.turns += r.num_turns || 0; if (r.dur_ms) { T.ms += r.dur_ms; T.nMs++; } if (r.status === 'failed') T.fails++;
+    T.runs++; T.cost += r.cost_usd || 0; T.turns += r.num_turns || 0; if (r.dur_ms) { T.ms += r.dur_ms; T.nMs++; } if (r.status === 'failed') T.fails++; T.inTok += r.in_tokens || 0; T.outTok += r.out_tokens || 0;
   }
   const dispatch = {};
   for (const d of all('SELECT status, COUNT(*) AS n FROM runs WHERE created_at > ? GROUP BY status', since)) dispatch[d.status] = d.n;
@@ -1114,7 +1116,7 @@ app.get('/api/insights', (req, res) => {
     days,
     daily: Object.values(daily).map((d) => ({ ...d, cost: +d.cost.toFixed(4) })),
     perRoutine, byModel, dispatch,
-    totals: { runs: T.runs, cost: +T.cost.toFixed(2), turns: T.turns, avgMs: T.nMs ? Math.round(T.ms / T.nMs) : 0, fails: T.fails, failRate: T.runs ? Math.round((100 * T.fails) / T.runs) : 0 },
+    totals: { runs: T.runs, cost: +T.cost.toFixed(2), turns: T.turns, avgMs: T.nMs ? Math.round(T.ms / T.nMs) : 0, fails: T.fails, failRate: T.runs ? Math.round((100 * T.fails) / T.runs) : 0, inTok: T.inTok, outTok: T.outTok },
     projection: { perDay: +(T.cost / days).toFixed(2), monthly: +((T.cost / days) * 30).toFixed(2), runsPerDay: +(T.runs / days).toFixed(1) },
     budget: { cap: budgetCap(), today: +todaySpend().toFixed(2), over: overBudget() },
     digest: { channel: metaGet('digest_channel', ''), hour: parseInt(metaGet('digest_hour', '-1'), 10) },
@@ -1705,6 +1707,7 @@ app.get('/api/runs/:id', (req, res) => {
     id: x.id, routine: x.routine_slug, status: x.status, trigger: x.trigger, triggerKind: kindOf(x.trigger),
     started: new Date(x.created_at).toLocaleTimeString(), elapsed: x.dur, model: r?.model || 'claude',
     cost: x.cost_usd, turns: x.num_turns, sessionId: x.session_id,
+    inTokens: x.in_tokens ?? null, outTokens: x.out_tokens ?? null,
     stdout: x.output, event: ev, trace, inbox, toolBreakdown,
     assertResult: jObj(x.assert_result) || null,
     lineage: { triggeredBy, downstream, watches },

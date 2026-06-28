@@ -72,8 +72,10 @@ dropdowns · Fleet inbox badge.
 | 51 | Cost anomaly detection — flag runs costing ≫ the routine's average | observability/efficiency | ✅ done |
 | 52 | Projected spend forecast ($/day + $/month at current rate) | efficiency | ✅ done |
 | 53 | Failure clustering — group fails by normalized error signature | observability/eliminating-humans | ✅ done |
+| 54 | Token usage capture (input/output tokens per run + Insights totals) | observability | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
+- [ ] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.
 - [ ] (iter 51) /api/anomalies flags runs > 3× routine avg (needs ≥4 samples); ratio + avg correct; Insights card renders/empties.
 
 ## QA backlog (test at iteration 10)

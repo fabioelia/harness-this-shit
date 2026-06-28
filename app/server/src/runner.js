@@ -83,6 +83,7 @@ export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, mo
         isError: resultEvt ? !!resultEvt.is_error : (killed || code !== 0),
         costUsd: resultEvt?.total_cost_usd ?? null,
         numTurns: resultEvt?.num_turns ?? null,
+        usage: resultEvt?.usage ?? null,
         sessionId: resultEvt?.session_id ?? '',
         stderr: err.trim(), code: killed ? 124 : code, ms: Date.now() - start,
         events: nEvents,
