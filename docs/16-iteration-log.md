@@ -49,6 +49,7 @@ dropdowns · Fleet inbox badge.
 | 29 | Circuit breaker — auto-disable after N consecutive failures (+ alert) | eliminating-humans/safety | ✅ done |
 | 30 | Command palette (⌘K) — fuzzy jump to routines + pages | UX | ✅ done |
 | 31 | Diff a run vs the previous run (LCS line diff + cost/turns deltas) | reproducibility | ✅ done |
+| 32 | Bulk fleet ops — multi-select enable/disable/snooze/wake/delete | efficiency/UX | ✅ done |
 
 ## QA backlog (test at iteration 10)
 - [x] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.

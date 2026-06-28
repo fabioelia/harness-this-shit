@@ -1279,6 +1279,25 @@ app.post('/api/routines/:slug/restore/:id', (req, res) => {
   logActivity(`${r.slug} prompt restored from a prior version`, 'idle');
   res.json({ ok: true });
 });
+// Bulk operations across many routines at once.
+app.post('/api/routines/bulk', (req, res) => {
+  const { slugs = [], action, hours, tag } = req.body || {};
+  const list = (Array.isArray(slugs) ? slugs : []).filter((s) => typeof s === 'string');
+  let n = 0;
+  for (const slug of list) {
+    if (!one('SELECT 1 FROM routines WHERE slug=?', slug)) continue;
+    if (action === 'enable') run('UPDATE routines SET enabled=1, fail_streak=0 WHERE slug=?', slug);
+    else if (action === 'disable') run('UPDATE routines SET enabled=0 WHERE slug=?', slug);
+    else if (action === 'snooze') run('UPDATE routines SET snooze_until=? WHERE slug=?', now() + (Number(hours) || 4) * 3_600_000, slug);
+    else if (action === 'unsnooze') run('UPDATE routines SET snooze_until=0 WHERE slug=?', slug);
+    else if (action === 'tag' && tag) { const cur = j(one('SELECT tags FROM routines WHERE slug=?', slug).tags); if (!cur.includes(tag)) run('UPDATE routines SET tags=? WHERE slug=?', JSON.stringify([...cur, String(tag).trim()]), slug); }
+    else if (action === 'delete') run('DELETE FROM routines WHERE slug=?', slug);
+    else continue;
+    n++;
+  }
+  logActivity(`bulk ${action}${tag ? ` #${tag}` : ''} · ${n} routine${n === 1 ? '' : 's'}`, 'idle');
+  res.json({ ok: true, affected: n });
+});
 app.post('/api/routines/:slug/clone', (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
   if (!r) return res.status(404).json({ error: 'not found' });

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { useRoutines, useStats, useToggleRoutine, useKillSwitch, useConnectors, useLoadSamples, useImportRoutine } from '@/lib/api';
+import { useRoutines, useStats, useToggleRoutine, useKillSwitch, useConnectors, useLoadSamples, useImportRoutine, useBulkRoutines } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { Routine, Stats } from '@/types';
@@ -59,16 +59,17 @@ function StatStrip({ s }: { s?: Stats }) {
   );
 }
 
-function FleetRow({ r, i }: { r: Routine; i: number }) {
+function FleetRow({ r, i, selected, onSelect }: { r: Routine; i: number; selected: boolean; onSelect: (slug: string) => void }) {
   const toggle = useToggleRoutine();
   return (
     <div
-      className="border-b border-line-soft transition-colors last:border-0 hover:bg-white/[0.015]"
+      className={`border-b border-line-soft transition-colors last:border-0 hover:bg-white/[0.015] ${selected ? 'bg-brand/[0.06]' : ''}`}
       style={{ display: 'grid', gridTemplateColumns: '36px minmax(0,2.2fr) minmax(0,1.5fr) 156px 144px 116px 92px 132px 78px', alignItems: 'center', padding: '13px 16px' }}
     >
       <div><Toggle on={r.enabled} onCheckedChange={(v) => toggle.mutate({ slug: r.slug, enabled: v })} /></div>
       <div className="min-w-0 pr-3.5">
         <div className="flex items-center gap-2">
+          <input type="checkbox" checked={selected} onChange={() => onSelect(r.slug)} className="h-3.5 w-3.5 shrink-0 accent-[#5b9ee6]" title="select" />
           <Link to={`/routines/${r.slug}`} className="truncate font-display text-[14px] font-semibold text-fg-2 hover:text-brand">{r.name}</Link>
           {r.snoozedUntil > 0 && <span title={`snoozed until ${new Date(r.snoozedUntil).toLocaleString()}`} className="shrink-0 rounded-full border border-lease/40 bg-lease/10 px-1.5 py-px font-mono text-[10px] font-semibold text-lease">💤</span>}
           {r.inbox > 0 && <Link to={`/routines/${r.slug}`} title={`${r.inbox} task${r.inbox > 1 ? 's' : ''} handed off, waiting to be picked up`} className="shrink-0 rounded-full border border-lease/40 bg-lease/10 px-1.5 py-px font-mono text-[10px] font-semibold text-lease">📥 {r.inbox}</Link>}
@@ -116,6 +117,9 @@ export function FleetPage() {
   const kill = useKillSwitch();
   const loadSamples = useLoadSamples();
   const importRoutine = useImportRoutine();
+  const bulk = useBulkRoutines();
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const onSelect = (slug: string) => setSel((prev) => { const n = new Set(prev); n.has(slug) ? n.delete(slug) : n.add(slug); return n; });
   const navigate = useNavigate();
   const ghOff = connectors?.find((c) => c.code === 'GH')?.health === 'off';
   const slackOff = connectors?.find((c) => c.code === 'SL')?.health === 'off';
@@ -260,9 +264,20 @@ export function FleetPage() {
             }
           />
         ) : (
-          list.map((r, i) => <FleetRow key={r.slug} r={r} i={i} />)
+          list.map((r, i) => <FleetRow key={r.slug} r={r} i={i} selected={sel.has(r.slug)} onSelect={onSelect} />)
         )}
       </div>
+      {sel.size > 0 && (
+        <div className="fixed bottom-5 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-xl border border-line bg-surface px-4 py-2.5 shadow-pop">
+          <span className="font-mono text-[12px] text-t2">{sel.size} selected</span>
+          <span className="mx-1 h-4 w-px bg-line" />
+          {([['enable', 'Enable'], ['disable', 'Disable'], ['snooze', 'Snooze 4h'], ['unsnooze', 'Wake']] as const).map(([a, l]) => (
+            <button key={a} onClick={() => bulk.mutate({ slugs: [...sel], action: a, hours: 4 }, { onSuccess: () => setSel(new Set()) })} className="h-8 rounded-md border border-line bg-surface-2 px-2.5 font-display text-[12px] font-semibold text-t2 hover:border-hair">{l}</button>
+          ))}
+          <button onClick={() => { if (confirm(`Delete ${sel.size} routine(s)?`)) bulk.mutate({ slugs: [...sel], action: 'delete' }, { onSuccess: () => setSel(new Set()) }); }} className="h-8 rounded-md border border-bad/40 px-2.5 font-display text-[12px] font-semibold text-bad hover:bg-bad/10">Delete</button>
+          <button onClick={() => setSel(new Set())} className="ml-1 font-mono text-[11px] text-dim hover:text-fg">clear</button>
+        </div>
+      )}
     </div>
   );
 }

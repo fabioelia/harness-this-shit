@@ -97,6 +97,10 @@ export const useGithubRepos = (owner = '', q = '') =>
     staleTime: 60_000,
     placeholderData: (prev) => prev,
   });
+export function useBulkRoutines() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (b: { slugs: string[]; action: string; hours?: number; tag?: string }) => post<{ ok: boolean; affected: number }>('/api/routines/bulk', b), onSuccess: () => { qc.invalidateQueries({ queryKey: ['routines'] }); qc.invalidateQueries({ queryKey: ['stats'] }); } });
+}
 export const useRoutines = () => useQuery({ queryKey: ['routines'], queryFn: () => get<Routine[]>('/api/routines'), refetchInterval: 10000 });
 export const useRoutine = (slug?: string) =>
   useQuery({ queryKey: ['routine', slug], queryFn: () => get<RoutineDetail>(`/api/routines/${slug}`), enabled: !!slug, retry: false });
