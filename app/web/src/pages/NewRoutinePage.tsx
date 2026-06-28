@@ -414,6 +414,7 @@ export function NewRoutinePage() {
   const [assertions, setAssertions] = useState<{ type: string; value: string }[]>([]);
   const [alertOnFail, setAlertOnFail] = useState(false);
   const [alertTarget, setAlertTarget] = useState('');
+  const [escalation, setEscalation] = useState('');
   const [timeoutS, setTimeoutS] = useState(0);
   const [envPairs, setEnvPairs] = useState<{ k: string; v: string }[]>([]);
   const [tags, setTags] = useState('');
@@ -470,7 +471,7 @@ export function NewRoutinePage() {
     setSummary(d.summary); setOwner(d.owner); setTeam(d.team);
     setTriggers(d.triggers); setConnectors(d.connectors);
     setModel(d.model || 'claude-opus-4-8'); setEffort(d.effort || ''); setMemory(!!d.memory); setRepo(d.repo || ''); setBranch(d.branch || 'main');
-    setScriptMode(!!d.scriptMode); setScriptLang(d.scriptLang === 'node' ? 'node' : 'bash'); setRetries(d.retries || 0); setAssertions(d.assertions ?? []); setAlertOnFail(!!d.alertOnFail); setAlertTarget(d.alertTarget || ''); setTimeoutS(d.timeout || 0); setEnvPairs(Object.entries(d.env || {}).map(([k, v]) => ({ k, v: String(v) }))); setTags((d.tags || []).join(', ')); setLifecycle(d.lifecycle || 'active'); setGateReview(!!d.gateReview); setTier(d.tier || 'standard'); setRateLimit(d.rateLimit || 0); setMaxFails(d.maxFails || 0); setSla(d.sla || 0); setNotes(d.notes || ''); setWinStart(d.activeWindow?.start != null ? String(d.activeWindow.start) : ''); setWinEnd(d.activeWindow?.end != null ? String(d.activeWindow.end) : ''); setWinDays(d.activeWindow?.days || []);
+    setScriptMode(!!d.scriptMode); setScriptLang(d.scriptLang === 'node' ? 'node' : 'bash'); setRetries(d.retries || 0); setAssertions(d.assertions ?? []); setAlertOnFail(!!d.alertOnFail); setAlertTarget(d.alertTarget || ''); setEscalation(d.escalation || ''); setTimeoutS(d.timeout || 0); setEnvPairs(Object.entries(d.env || {}).map(([k, v]) => ({ k, v: String(v) }))); setTags((d.tags || []).join(', ')); setLifecycle(d.lifecycle || 'active'); setGateReview(!!d.gateReview); setTier(d.tier || 'standard'); setRateLimit(d.rateLimit || 0); setMaxFails(d.maxFails || 0); setSla(d.sla || 0); setNotes(d.notes || ''); setWinStart(d.activeWindow?.start != null ? String(d.activeWindow.start) : ''); setWinEnd(d.activeWindow?.end != null ? String(d.activeWindow.end) : ''); setWinDays(d.activeWindow?.days || []);
     setPrompt(d.prompt || '');
     setChain(d.chain.join(', '));
     if (d.schedule) setSchedule(d.schedule);
@@ -720,6 +721,7 @@ export function NewRoutinePage() {
                     {alertOnFail && <input value={alertTarget} onChange={(e) => setAlertTarget(e.target.value)} placeholder="@fabio or #alerts · blank = the owner" className={cn(inputCls, 'mt-1.5 font-mono text-[12px]')} />}
                     <div className="mt-1 text-[11px] text-dim-2">When a run finally fails (after retries), Slack-DMs the target so nobody has to watch the dashboard.</div>
                   </div>
+                  <div className="col-span-2"><div className={LABEL}>Escalation contact · <span className="font-mono lowercase tracking-normal text-dim-2">CC'd on failure alerts when the owner is out</span></div><input value={escalation} onChange={(e) => setEscalation(e.target.value)} placeholder="@oncall or #incidents" className={cn(inputCls, 'font-mono text-[12px]')} /></div>
                   <div className="col-span-2">
                     <label className="flex cursor-pointer items-center gap-2 text-[12px] text-t2"><input type="checkbox" checked={gateReview} onChange={(e) => setGateReview(e.target.checked)} className="h-4 w-4 accent-[#e6b052]" />Require approval to run</label>
                     <div className="mt-1 text-[11px] text-dim-2">When a config change is unreviewed, event/schedule dispatch is blocked until a teammate approves (manual runs still allowed).</div>

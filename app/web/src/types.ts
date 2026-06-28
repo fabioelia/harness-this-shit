@@ -58,6 +58,7 @@ export interface Routine {
   reviewedAgo: string;
   gateReview: boolean;
   tier: string;
+  escalation: string;
 }
 
 export interface FrontMatter {
