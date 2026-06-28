@@ -389,7 +389,7 @@ export function useCreateRoutine() {
 export function useUpdateRoutine() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ slug, body }: { slug: string; body: CreateRoutineInput }) => put<Routine>(`/api/routines/${slug}`, body),
+    mutationFn: ({ slug, body }: { slug: string; body: Partial<CreateRoutineInput> }) => put<Routine>(`/api/routines/${slug}`, body),
     onSuccess: (_d, v) => {
       qc.invalidateQueries({ queryKey: ['routines'] });
       qc.invalidateQueries({ queryKey: ['routine', v.slug] });

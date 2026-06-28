@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt, useRoutineAudit, useArchiveRoutine } from '@/lib/api';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt, useRoutineAudit, useArchiveRoutine, useUpdateRoutine } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { FrontMatter, RoutineDetail } from '@/types';
@@ -313,6 +313,10 @@ export function RoutineDetailPage() {
   const preview = usePreviewRoutine();
   const snooze = useSnooze();
   const archive = useArchiveRoutine();
+  const update = useUpdateRoutine();
+  const [reassign, setReassign] = useState(false);
+  const [ownerDraft, setOwnerDraft] = useState("");
+  const [teamDraft, setTeamDraft] = useState("");
   const clone = useCloneRoutine();
   const [msg, setMsg] = useState<{ text: string; tone: 'bad' | 'warn' } | null>(null);
   const raw = useRoutineRaw(slug, showRaw);
@@ -409,7 +413,16 @@ export function RoutineDetailPage() {
         <div className="mt-[11px] flex flex-wrap items-center gap-2.5">
           <span className="font-sans text-[13px] text-muted">{d.summary}</span>
           <span className="h-[13px] w-px bg-line" />
-          <span className="inline-flex items-center gap-[7px]"><Avatar color={d.ownerColor} initials={d.initials} size={20} /><span className="font-sans text-[12px] font-medium text-t2">{d.owner}</span><span className="text-faint">·</span><span className="font-mono text-[11px] font-medium text-dim">{d.team}</span></span>
+          {reassign ? (
+            <span className="inline-flex items-center gap-1.5">
+              <input autoFocus value={ownerDraft} onChange={(e) => setOwnerDraft(e.target.value)} placeholder="owner" className="h-7 w-28 rounded-md border border-line bg-surface-2 px-2 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+              <input value={teamDraft} onChange={(e) => setTeamDraft(e.target.value)} placeholder="team" className="h-7 w-28 rounded-md border border-line bg-surface-2 px-2 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+              <button onClick={() => update.mutate({ slug: d.slug, body: { owner: ownerDraft.trim() || 'unassigned', team: teamDraft.trim() } }, { onSuccess: () => setReassign(false) })} className="font-mono text-[11px] text-brand-soft hover:underline">save</button>
+              <button onClick={() => setReassign(false)} className="font-mono text-[11px] text-dim hover:text-fg">cancel</button>
+            </span>
+          ) : (
+            <button onClick={() => { setOwnerDraft(d.owner); setTeamDraft(d.team); setReassign(true); }} title="reassign owner / team" className="inline-flex items-center gap-[7px] rounded-md px-1 hover:bg-white/[0.04]"><Avatar color={d.ownerColor} initials={d.initials} size={20} /><span className="font-sans text-[12px] font-medium text-t2">{d.owner}</span><span className="text-faint">·</span><span className="font-mono text-[11px] font-medium text-dim">{d.team}</span><span className="ml-0.5 font-mono text-[10px] text-faint">✎</span></button>
+          )}
           {d.connectors.slice(0, 2).map((c) => <Chip key={c}>{c}</Chip>)}
           {d.lastSuccessAgo && <span className={`ml-auto font-mono text-[11.5px] ${d.staleSuccess ? 'text-warn' : 'text-dim'}`} title="when this routine last produced a successful run">last ✓ {d.lastSuccessAgo}</span>}
           <button onClick={() => preview.mutate(d.slug)} className={`font-mono text-[12px] font-medium text-dim hover:text-brand ${d.lastSuccessAgo ? '' : 'ml-auto'}`}>Preview prompt ▸</button>

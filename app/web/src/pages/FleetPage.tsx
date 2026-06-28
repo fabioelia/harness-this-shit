@@ -135,6 +135,7 @@ export function FleetPage() {
   const slackOff = connectors?.find((c) => c.code === 'SL')?.health === 'off';
   const [q, setQ] = useState('');
   const [team, setTeam] = useState('');
+  const [owner, setOwner] = useState('');
   const [trig, setTrig] = useState('');
   const [tag, setTag] = useState('');
   const [conn, setConn] = useState('');
@@ -159,14 +160,15 @@ export function FleetPage() {
   }, [params]);
 
   const opts = useMemo(() => {
-    const teams = new Set<string>(), trigs = new Set<string>(), conns = new Set<string>(), tags = new Set<string>();
-    (routines ?? []).forEach((r) => { if (r.team) teams.add(r.team); r.triggers.forEach((t) => trigs.add(t)); r.connectors.forEach((c) => conns.add(c)); (r.tags || []).forEach((t) => tags.add(t)); });
-    return { teams: [...teams], trigs: [...trigs], conns: [...conns], tags: [...tags] };
+    const teams = new Set<string>(), trigs = new Set<string>(), conns = new Set<string>(), tags = new Set<string>(), owners = new Set<string>();
+    (routines ?? []).forEach((r) => { if (r.team) teams.add(r.team); if (r.owner) owners.add(r.owner); r.triggers.forEach((t) => trigs.add(t)); r.connectors.forEach((c) => conns.add(c)); (r.tags || []).forEach((t) => tags.add(t)); });
+    return { teams: [...teams], trigs: [...trigs], conns: [...conns], tags: [...tags], owners: [...owners].sort() };
   }, [routines]);
 
   const list = (routines ?? []).filter((r) => {
     if (q.trim() && !(r.name + r.summary + r.team + r.owner + r.triggers.join(' ')).toLowerCase().includes(q.toLowerCase())) return false;
     if (team && r.team !== team) return false;
+    if (owner && r.owner !== owner) return false;
     if (trig && !r.triggers.includes(trig)) return false;
     if (conn && !r.connectors.includes(conn)) return false;
     if (tag && !(r.tags || []).includes(tag)) return false;
@@ -242,6 +244,7 @@ export function FleetPage() {
           <span className="rounded border border-line px-[5px] font-mono text-[11px] font-semibold text-faint">/</span>
         </div>
         <FilterSelect value={team} onChange={setTeam} label="Team" options={opts.teams} />
+        <FilterSelect value={owner} onChange={setOwner} label="Owner" options={opts.owners} />
         <FilterSelect value={trig} onChange={setTrig} label="Trigger" options={opts.trigs} />
         <FilterSelect value={conn} onChange={setConn} label="Connector" options={opts.conns} />
         {opts.tags.length > 0 && <FilterSelect value={tag} onChange={setTag} label="Tag" options={opts.tags} />}
@@ -255,8 +258,8 @@ export function FleetPage() {
           Health: needs review
           {needsReview && <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="#d8b486" strokeWidth="1.4"><path d="M3 3 L7 7 M7 3 L3 7" strokeLinecap="round" /></svg>}
         </button>
-        {(team || trig || conn || tag || needsReview || q) && (
-          <button onClick={() => { setTeam(''); setTrig(''); setConn(''); setTag(''); setNeedsReview(false); setQ(''); }} className="font-mono text-[11px] text-dim hover:text-fg">clear</button>
+        {(team || owner || trig || conn || tag || needsReview || q) && (
+          <button onClick={() => { setTeam(''); setOwner(''); setTrig(''); setConn(''); setTag(''); setNeedsReview(false); setQ(''); }} className="font-mono text-[11px] text-dim hover:text-fg">clear</button>
         )}
         <button onClick={() => setGrouped((v) => !v)} className={cn('flex h-[34px] items-center gap-[6px] rounded-md border px-2.5 font-mono text-[11.5px] font-medium', grouped ? 'border-brand/50 bg-brand/10 text-brand-soft' : 'border-line text-dim hover:text-t2')} title="group by team">⊞ team</button>
         <button onClick={() => setShowArchived((v) => !v)} className={cn('flex h-[34px] items-center gap-[6px] rounded-md border px-2.5 font-mono text-[11.5px] font-medium', showArchived ? 'border-warn/50 bg-warn/10 text-warn' : 'border-line text-dim hover:text-t2')} title="show archived routines">{showArchived ? '⊟ archived' : '⊞ archived'}</button>
@@ -272,7 +275,7 @@ export function FleetPage() {
             <button onClick={() => deleteView.mutate(v.name)} className="text-dim hover:text-bad" aria-label={`delete ${v.name}`}>×</button>
           </span>
         ))}
-        {(team || trig || conn || tag || needsReview || q) && (
+        {(team || owner || trig || conn || tag || needsReview || q) && (
           <button onClick={() => { const name = prompt('Save current filters as view:'); if (name) saveView.mutate({ name, params: { q, team, trig, conn, tag, needsReview } }); }} className="font-mono text-[11.5px] text-brand-soft hover:underline">+ save current</button>
         )}
         {!(views?.views ?? []).length && !(team || trig || conn || tag || needsReview || q) && <span className="font-mono text-[11px] text-dim">apply filters, then “save current” to pin a preset</span>}

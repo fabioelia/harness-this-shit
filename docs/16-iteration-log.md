@@ -120,6 +120,14 @@ dropdowns · Fleet inbox badge.
 | 99 | Run-output search date filter (all / 7d / 30d window) | observability | ✅ done |
 | 100 | Loop-2 final QA — all endpoints + full page-render sweep | quality | ✅ done — 0 bugs |
 
+## Loop 3 — team collaboration / how large dev teams work together (iterations 101–150)
+| # | Direction | Theme | Status |
+|---|-----------|-------|--------|
+| 101 | Ownership visibility — Fleet owner filter + quick owner/team reassign | collaboration | ✅ done |
+
+### Loop-3 QA backlog (test at iteration 110)
+- [ ] (iter 101) Fleet owner filter; routine-detail inline owner/team reassign persists via PUT.
+
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.
 - [x] (iter 55) cancel kills the child session, marks failed + frees lease, labels "canceled by user", and does NOT retry/alert even with retries set.
