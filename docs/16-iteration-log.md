@@ -61,6 +61,7 @@ dropdowns · Fleet inbox badge.
 | 41 | Connector usage stats (7d runs + cost attributed per connector) | observability | ✅ done |
 | 42 | Pin/favorite routines (★ sorts to top of Fleet) | UX | ✅ done |
 | 43 | Failing-routines nav badge (count surfaced on Fleet icon everywhere) | observability | ✅ done |
+| 44 | Last-success freshness — last ✓ ago + stale (>7d) badge | observability | ✅ done |
 
 ## QA backlog (test at iteration 10)
 - [x] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.

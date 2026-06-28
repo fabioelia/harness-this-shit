@@ -323,7 +323,8 @@ export function RoutineDetailPage() {
           <span className="h-[13px] w-px bg-line" />
           <span className="inline-flex items-center gap-[7px]"><Avatar color={d.ownerColor} initials={d.initials} size={20} /><span className="font-sans text-[12px] font-medium text-t2">{d.owner}</span><span className="text-faint">·</span><span className="font-mono text-[11px] font-medium text-dim">{d.team}</span></span>
           {d.connectors.slice(0, 2).map((c) => <Chip key={c}>{c}</Chip>)}
-          <button onClick={() => preview.mutate(d.slug)} className="ml-auto font-mono text-[12px] font-medium text-dim hover:text-brand">Preview prompt ▸</button>
+          {d.lastSuccessAgo && <span className={`ml-auto font-mono text-[11.5px] ${d.staleSuccess ? 'text-warn' : 'text-dim'}`} title="when this routine last produced a successful run">last ✓ {d.lastSuccessAgo}</span>}
+          <button onClick={() => preview.mutate(d.slug)} className={`font-mono text-[12px] font-medium text-dim hover:text-brand ${d.lastSuccessAgo ? '' : 'ml-auto'}`}>Preview prompt ▸</button>
           <a href={`/api/routines/${d.slug}/export`} download={`${d.slug}.routine.json`} className="font-mono text-[12px] font-medium text-dim hover:text-brand">Export JSON ↓</a>
           <button onClick={() => setShowRaw(true)} className="font-mono text-[12px] font-medium text-brand hover:underline">View raw {d.file} ›</button>
         </div>

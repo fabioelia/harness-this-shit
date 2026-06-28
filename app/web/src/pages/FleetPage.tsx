@@ -73,6 +73,7 @@ function FleetRow({ r, i, selected, onSelect }: { r: Routine; i: number; selecte
           <input type="checkbox" checked={selected} onChange={() => onSelect(r.slug)} className="h-3.5 w-3.5 shrink-0 accent-[#5b9ee6]" title="select" />
           <button onClick={() => pin.mutate(r.slug)} title={r.pinned ? 'unpin' : 'pin to top'} className={`shrink-0 text-[13px] leading-none ${r.pinned ? 'text-brand' : 'text-faint hover:text-dim'}`}>{r.pinned ? '★' : '☆'}</button>
           <Link to={`/routines/${r.slug}`} className="truncate font-display text-[14px] font-semibold text-fg-2 hover:text-brand">{r.name}</Link>
+          {r.staleSuccess && <span title={`last success was ${r.lastSuccessAgo} — over a week ago`} className="shrink-0 rounded-full border border-warn/40 bg-warn/10 px-1.5 py-px font-mono text-[10px] font-semibold text-warn">stale</span>}
           {r.snoozedUntil > 0 && <span title={`snoozed until ${new Date(r.snoozedUntil).toLocaleString()}`} className="shrink-0 rounded-full border border-lease/40 bg-lease/10 px-1.5 py-px font-mono text-[10px] font-semibold text-lease">💤</span>}
           {r.inbox > 0 && <Link to={`/routines/${r.slug}`} title={`${r.inbox} task${r.inbox > 1 ? 's' : ''} handed off, waiting to be picked up`} className="shrink-0 rounded-full border border-lease/40 bg-lease/10 px-1.5 py-px font-mono text-[10px] font-semibold text-lease">📥 {r.inbox}</Link>}
         </div>

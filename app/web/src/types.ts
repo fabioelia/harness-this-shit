@@ -46,6 +46,8 @@ export interface Routine {
   failStreak: number;
   notes: string;
   pinned: boolean;
+  lastSuccessAgo: string;
+  staleSuccess: boolean;
 }
 
 export interface FrontMatter {
