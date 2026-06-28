@@ -608,8 +608,8 @@ function executeRoutine(r, rawEvent, triggerLabel) {
 
     const inTok = res.usage ? (res.usage.input_tokens || 0) + (res.usage.cache_read_input_tokens || 0) + (res.usage.cache_creation_input_tokens || 0) : null;
     const outTok = res.usage ? (res.usage.output_tokens || 0) : null;
-    run('UPDATE runs SET status=?, dur=?, dur_ms=?, output=?, cost_usd=?, num_turns=?, session_id=?, in_tokens=?, out_tokens=? WHERE id=?',
-      ok ? 'succeeded' : 'failed', fmtDur(res.ms), res.ms, output, res.costUsd, res.numTurns, res.sessionId, inTok, outTok, id);
+    run('UPDATE runs SET status=?, dur=?, dur_ms=?, output=?, cost_usd=?, num_turns=?, session_id=?, in_tokens=?, out_tokens=?, model_used=? WHERE id=?',
+      ok ? 'succeeded' : 'failed', fmtDur(res.ms), res.ms, output, res.costUsd, res.numTurns, res.sessionId, inTok, outTok, normModel(r.model) || '', id);
     runBus.emit(id, { kind: 'done', status: ok ? 'succeeded' : 'failed' });
     // Roll up real spend + avg duration onto the routine.
     const agg = one('SELECT COALESCE(SUM(cost_usd),0) AS spend, AVG(dur_ms) AS avgms FROM runs WHERE routine_slug=?', r.slug);
@@ -1931,7 +1931,7 @@ app.get('/api/runs/:id', (req, res) => {
     .map((t) => ({ tool: t.tool, calls: t.calls, errors: t.errors })).filter((t) => t.calls > 0 || t.errors > 0);
   res.json({
     id: x.id, routine: x.routine_slug, status: x.status, trigger: x.trigger, triggerKind: kindOf(x.trigger),
-    started: new Date(x.created_at).toLocaleTimeString(), elapsed: x.dur, model: r?.model || 'claude',
+    started: new Date(x.created_at).toLocaleTimeString(), elapsed: x.dur, model: x.model_used || r?.model || 'claude',
     cost: x.cost_usd, turns: x.num_turns, sessionId: x.session_id,
     inTokens: x.in_tokens ?? null, outTokens: x.out_tokens ?? null,
     matchExplain: r && ev ? explainMatch(r, ev) : null,
