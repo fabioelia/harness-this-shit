@@ -1097,6 +1097,7 @@ app.get('/api/insights', (req, res) => {
     daily: Object.values(daily).map((d) => ({ ...d, cost: +d.cost.toFixed(4) })),
     perRoutine, byModel, dispatch,
     totals: { runs: T.runs, cost: +T.cost.toFixed(2), turns: T.turns, avgMs: T.nMs ? Math.round(T.ms / T.nMs) : 0, fails: T.fails, failRate: T.runs ? Math.round((100 * T.fails) / T.runs) : 0 },
+    projection: { perDay: +(T.cost / days).toFixed(2), monthly: +((T.cost / days) * 30).toFixed(2), runsPerDay: +(T.runs / days).toFixed(1) },
     budget: { cap: budgetCap(), today: +todaySpend().toFixed(2), over: overBudget() },
     digest: { channel: metaGet('digest_channel', ''), hour: parseInt(metaGet('digest_hour', '-1'), 10) },
   });

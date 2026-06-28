@@ -86,7 +86,7 @@ export function InsightsPage() {
             </div>
 
             <div className="mb-[18px] grid grid-cols-2 gap-[14px] md:grid-cols-5">
-              <Stat label={`Spend · ${days}d`} value={`$${d.totals.cost.toFixed(2)}`} sub={`${d.totals.runs} runs`} />
+              <Stat label={`Spend · ${days}d`} value={`$${d.totals.cost.toFixed(2)}`} sub={d.projection ? `≈ $${d.projection.monthly.toFixed(2)}/mo at this rate` : `${d.totals.runs} runs`} />
               <Stat label="Runs" value={fmtN(d.totals.runs)} sub={`${(d.totals.runs / days).toFixed(1)}/day`} />
               <Stat label="Model turns" value={fmtN(d.totals.turns)} sub={d.totals.runs ? `${(d.totals.turns / Math.max(1, d.totals.runs)).toFixed(1)}/run` : '—'} />
               <Stat label="Avg latency" value={fmtMs(d.totals.avgMs)} />
