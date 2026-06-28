@@ -60,6 +60,8 @@ export interface Routine {
   tier: string;
   escalation: string;
   links: { label: string; url: string }[];
+  sunsetAt: number;
+  sunsetOverdue: boolean;
 }
 
 export interface FrontMatter {

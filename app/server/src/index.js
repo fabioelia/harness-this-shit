@@ -300,7 +300,7 @@ const shapeRoutine = (r) => {
     inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
     scriptMode: !!r.script_mode, scriptLang: r.script_lang || 'bash', compiled: !!(r.script && r.script.trim()), scriptStale: !!r.script_stale,
     retries: r.retries || 0, assertions: j(r.assertions), tags: j(r.tags), rateLimit: r.rate_limit || 0, maxFails: r.max_fails || 0, failStreak: r.fail_streak || 0, notes: r.notes || '', pinned: !!r.pinned, activeWindow: jObj(r.active_window) || null, sla: r.sla_s || 0, archived: !!r.archived, lifecycle: r.lifecycle || 'active',
-    reviewStatus: r.review_status || '', reviewedBy: r.reviewed_by || '', reviewedAgo: r.reviewed_at ? relTime(r.reviewed_at) : '', gateReview: !!r.gate_review, tier: r.tier || 'standard', escalation: r.escalation || '', links: (() => { try { return JSON.parse(r.links || '[]'); } catch { return []; } })(),
+    reviewStatus: r.review_status || '', reviewedBy: r.reviewed_by || '', reviewedAgo: r.reviewed_at ? relTime(r.reviewed_at) : '', gateReview: !!r.gate_review, tier: r.tier || 'standard', escalation: r.escalation || '', links: (() => { try { return JSON.parse(r.links || '[]'); } catch { return []; } })(), sunsetAt: r.sunset_at || 0, sunsetOverdue: !!(r.sunset_at && r.enabled && r.sunset_at < now()),
     longRunning: (() => { const t = one("SELECT MIN(created_at) AS t FROM runs WHERE routine_slug=? AND status IN ('running','waiting')", r.slug)?.t; return !!(t && now() - t > 8 * 60_000); })(),
     lastSuccessAgo: (() => { const t = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND status='succeeded'", r.slug)?.t || 0; return t ? relTime(t) : ''; })(),
     staleSuccess: (() => { const t = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND status='succeeded'", r.slug)?.t || 0; return !!r.enabled && t > 0 && (now() - t) > 7 * 86_400_000; })(),
@@ -1117,6 +1117,7 @@ function lintRoutine(r, slugSet) {
   const trig = j(r.triggers);
   if (r.enabled && trig.length === 0) w.push('enabled but has no triggers — it can never fire');
   if (r.enabled && (!r.owner || r.owner === 'unassigned')) w.push('no owner — nobody is responsible for it');
+  if (r.enabled && r.sunset_at && r.sunset_at < now()) w.push('past its sunset date — should be retired');
   if (trig.includes('schedule') && !String(r.schedule || '').trim()) w.push('schedule trigger but no cron set');
   for (const t of j(r.chain)) if (t && !slugSet.has(t)) w.push(`chains to "${t}" which no longer exists`);
   for (const rx of j(r.reactions)) if (rx.run && !slugSet.has(rx.run)) w.push(`reacts to "${rx.run}" which no longer exists`);
@@ -1452,8 +1453,8 @@ function insertRoutine(b) {
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
   run(
     `INSERT INTO routines
-      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,script_mode,script_lang,retries,assertions,alert_on_fail,alert_target,timeout_s,env,tags,rate_limit,max_fails,notes,active_window,sla_s,lifecycle,gate_review,tier,escalation,links)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,script_mode,script_lang,retries,assertions,alert_on_fail,alert_target,timeout_s,env,tags,rate_limit,max_fails,notes,active_window,sla_s,lifecycle,gate_review,tier,escalation,links,sunset_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     slug, (b.name || '').trim(), (b.summary || '').trim(), owner, team,
     JSON.stringify(triggers), JSON.stringify(connectors),
     'idle', 'never', 'idle', next, null, '$0.00', enabled, '', '', '—',
@@ -1461,7 +1462,7 @@ function insertRoutine(b) {
     (b.prompt || '').trim(), normModel(b.model), (b.repo || '').trim(), (b.branch || 'main').trim(),
     JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions), normEffort(b.effort), b.memory ? 1 : 0, JSON.stringify(cleanConcurrency(b.concurrency)),
     b.scriptMode ? 1 : 0, b.scriptLang === 'node' ? 'node' : 'bash', normRetries(b.retries), JSON.stringify(cleanAssertions(b.assertions)),
-    b.alertOnFail ? 1 : 0, (b.alertTarget || '').trim(), Math.max(0, Math.min(1800, parseInt(b.timeout, 10) || 0)), JSON.stringify(cleanEnv(b.env)), JSON.stringify(Array.isArray(b.tags) ? b.tags.map((t) => String(t).trim()).filter(Boolean) : []), Math.max(0, Math.min(1000, parseInt(b.rateLimit, 10) || 0)), Math.max(0, Math.min(50, parseInt(b.maxFails, 10) || 0)), String(b.notes || '').slice(0, 4000), cleanWindow(b.activeWindow), Math.max(0, Math.min(3600, parseInt(b.sla, 10) || 0)), ['draft','active','deprecated'].includes(b.lifecycle) ? b.lifecycle : 'active', b.gateReview ? 1 : 0, ['critical','standard','experimental'].includes(b.tier) ? b.tier : 'standard', String(b.escalation || '').trim().slice(0, 60), JSON.stringify(Array.isArray(b.links) ? b.links.filter((l) => l && l.url).slice(0, 12).map((l) => ({ label: String(l.label || '').slice(0, 60), url: String(l.url).slice(0, 300) })) : [])
+    b.alertOnFail ? 1 : 0, (b.alertTarget || '').trim(), Math.max(0, Math.min(1800, parseInt(b.timeout, 10) || 0)), JSON.stringify(cleanEnv(b.env)), JSON.stringify(Array.isArray(b.tags) ? b.tags.map((t) => String(t).trim()).filter(Boolean) : []), Math.max(0, Math.min(1000, parseInt(b.rateLimit, 10) || 0)), Math.max(0, Math.min(50, parseInt(b.maxFails, 10) || 0)), String(b.notes || '').slice(0, 4000), cleanWindow(b.activeWindow), Math.max(0, Math.min(3600, parseInt(b.sla, 10) || 0)), ['draft','active','deprecated'].includes(b.lifecycle) ? b.lifecycle : 'active', b.gateReview ? 1 : 0, ['critical','standard','experimental'].includes(b.tier) ? b.tier : 'standard', String(b.escalation || '').trim().slice(0, 60), JSON.stringify(Array.isArray(b.links) ? b.links.filter((l) => l && l.url).slice(0, 12).map((l) => ({ label: String(l.label || '').slice(0, 60), url: String(l.url).slice(0, 300) })) : []), Number(b.sunsetAt) || 0
   );
   return slug;
 }
@@ -1585,7 +1586,7 @@ app.put('/api/routines/:slug', (req, res) => {
     if (changed.some((f) => ['prompt', 'triggers', 'connectors', 'filters', 'reactions', 'chain', 'model'].includes(f))) run("UPDATE routines SET review_status='needs_review' WHERE slug=?", r.slug);
   }
   run(
-    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=?,retries=?,assertions=?,alert_on_fail=?,alert_target=?,timeout_s=?,env=?,tags=?,rate_limit=?,max_fails=?,notes=?,active_window=?,sla_s=?,lifecycle=?,gate_review=?,tier=?,escalation=?,links=? WHERE slug=?`,
+    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=?,retries=?,assertions=?,alert_on_fail=?,alert_target=?,timeout_s=?,env=?,tags=?,rate_limit=?,max_fails=?,notes=?,active_window=?,sla_s=?,lifecycle=?,gate_review=?,tier=?,escalation=?,links=?,sunset_at=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
     JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
     JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
@@ -1614,6 +1615,7 @@ app.put('/api/routines/:slug', (req, res) => {
     ['critical','standard','experimental'].includes(b.tier) ? b.tier : r.tier,
     b.escalation != null ? String(b.escalation).trim().slice(0, 60) : r.escalation,
     b.links != null ? JSON.stringify(Array.isArray(b.links) ? b.links.filter((l) => l && l.url).slice(0, 12).map((l) => ({ label: String(l.label || '').slice(0, 60), url: String(l.url).slice(0, 300) })) : []) : r.links,
+    b.sunsetAt != null ? (Number(b.sunsetAt) || 0) : r.sunset_at,
     r.slug
   );
   const updated = one('SELECT * FROM routines WHERE slug=?', r.slug);
