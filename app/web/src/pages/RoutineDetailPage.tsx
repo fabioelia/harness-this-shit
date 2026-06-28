@@ -367,7 +367,7 @@ export function RoutineDetailPage() {
         <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-8" onClick={() => preview.reset()}>
           <div className="mt-12 w-full max-w-[820px] overflow-hidden rounded-lg border border-line bg-surface shadow-pop" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-line-soft px-4 py-2.5">
-              <span className="font-mono text-[12px] font-medium text-t2">Resolved prompt · what the agent receives{preview.data.willCompile ? ' (compile run)' : ''}</span>
+              <span className="font-mono text-[12px] font-medium text-t2">Resolved prompt · {preview.data.promptChars.toLocaleString()} chars · ~{preview.data.estTokens.toLocaleString()} tokens{preview.data.willCompile ? ' (compile run)' : ''}</span>
               <button onClick={() => preview.reset()} className="font-mono text-[12px] text-dim hover:text-fg">esc ✕</button>
             </div>
             <div className="flex flex-wrap items-center gap-2 border-b border-line-soft px-4 py-2 font-mono text-[11px]">

@@ -235,7 +235,7 @@ export interface MetricHistory {
   latest: { runId: string; at: number; ago: string; value: number | null; raw: string } | null;
 }
 export const useRoutineMetric = (slug: string, enabled = true) => useQuery({ queryKey: ['metric', slug], enabled, queryFn: () => get<MetricHistory>(`/api/routines/${slug}/metric?n=30`), refetchInterval: 15000 });
-export interface RoutinePreview { prompt: string; tools: string[]; agents: string[]; wouldMatch: boolean; leaseKey: string | null; scriptMode: boolean; willCompile: boolean; allowedTools: string[] }
+export interface RoutinePreview { prompt: string; tools: string[]; agents: string[]; wouldMatch: boolean; leaseKey: string | null; scriptMode: boolean; willCompile: boolean; allowedTools: string[]; promptChars: number; estTokens: number }
 export interface Audit { entries: { summary: string; ago: string }[] }
 export const useRoutineAudit = (slug: string, enabled = true) => useQuery({ queryKey: ['audit', slug], enabled, queryFn: () => get<Audit>(`/api/routines/${slug}/audit`) });
 export function useSnooze() {

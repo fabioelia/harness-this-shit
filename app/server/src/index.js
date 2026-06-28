@@ -1462,7 +1462,7 @@ app.post('/api/routines/:slug/preview', (req, res) => {
   const triggerType = event.event || event.type || 'manual';
   const wouldMatch = j(r.triggers).includes(triggerType) && repoMatches(r, event) && filtersMatch(r, event);
   const { key } = leaseFor(r, event);
-  res.json({ prompt, tools, agents: agents.map((a) => a.name), wouldMatch, leaseKey: key, scriptMode: !!r.script_mode, willCompile, allowedTools: allowedToolsFor(tools) });
+  res.json({ prompt, tools, agents: agents.map((a) => a.name), wouldMatch, leaseKey: key, scriptMode: !!r.script_mode, willCompile, allowedTools: allowedToolsFor(tools), promptChars: prompt.length, estTokens: Math.round(prompt.length / 4) });
 });
 app.get('/api/routines/:slug/export', (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
