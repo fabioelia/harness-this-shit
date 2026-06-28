@@ -161,6 +161,7 @@ dropdowns · Fleet inbox badge.
 | 136 | Routine timeline — merged changes/approvals/comments chronology | collaboration | ✅ done |
 | 137 | Ownership handover with note (reassign + comment + mention + audit) | collaboration | ✅ done |
 | 138 | Discussion indicator on Fleet (💬 comment count badge) | collaboration | ✅ done |
+| 139 | "Mine" Fleet quick-filter (one-click owner=operator) | collaboration/personal | ✅ done |
 
 ### Loop-3 QA backlog (test at iteration 110)
 - [x] (iter 107) substantive edit (prompt/triggers/etc) flags needs_review; approve records reviewer + clears it; non-substantive edits (name) do not flag; Fleet badge.

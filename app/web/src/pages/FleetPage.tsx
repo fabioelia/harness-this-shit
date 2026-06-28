@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useRoutines, useStats, useToggleRoutine, useKillSwitch, useConnectors, useLoadSamples, useImportRoutine, useBulkRoutines, usePinRoutine, useFleetViews, useSaveView, useDeleteView, useAttention } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle } from '@/components/sb';
 import { cn } from '@/lib/utils';
+import { useOperator } from '@/lib/operator';
 import type { Routine, Stats } from '@/types';
 
 
@@ -145,6 +146,7 @@ export function FleetPage() {
   const [trig, setTrig] = useState('');
   const [tag, setTag] = useState('');
   const [tier, setTier] = useState('');
+  const [operator] = useOperator();
   const [conn, setConn] = useState('');
   const [needsReview, setNeedsReview] = useState(false);
   const [grouped, setGrouped] = useState(false);
@@ -254,6 +256,7 @@ export function FleetPage() {
         </div>
         <FilterSelect value={team} onChange={setTeam} label="Team" options={opts.teams} />
         <FilterSelect value={owner} onChange={setOwner} label="Owner" options={opts.owners} />
+        {operator && <button onClick={() => setOwner(owner === operator ? '' : operator)} title={`show only routines you (${operator}) own`} className={cn('h-[34px] rounded-md border px-3 font-display text-[12px] font-semibold', owner === operator ? 'border-brand/50 bg-brand/10 text-brand-soft' : 'border-line bg-surface text-dim hover:border-hair hover:text-t2')}>Mine</button>}
         <FilterSelect value={trig} onChange={setTrig} label="Trigger" options={opts.trigs} />
         <FilterSelect value={conn} onChange={setConn} label="Connector" options={opts.conns} />
         {opts.tags.length > 0 && <FilterSelect value={tag} onChange={setTag} label="Tag" options={opts.tags} />}
