@@ -47,6 +47,7 @@ dropdowns · Fleet inbox badge.
 | 27 | Live concurrency view — held leases + queued inbox tasks (fleet-wide) | observability | ✅ done |
 | 28 | Daily digest to Slack (scheduled rollup: runs/spend/failures/busiest) | eliminating-humans | ✅ done |
 | 29 | Circuit breaker — auto-disable after N consecutive failures (+ alert) | eliminating-humans/safety | ✅ done |
+| 30 | Command palette (⌘K) — fuzzy jump to routines + pages | UX | ✅ done |
 
 ## QA backlog (test at iteration 10)
 - [x] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.
