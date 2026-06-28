@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRun, useDispatchRoutine, useReplayRun, useRunDiff, useRerunRun, useCancelRun } from '@/lib/api';
+import { useRun, useDispatchRoutine, useReplayRun, useRunDiff, useRerunRun, useCancelRun, useSetBaseline } from '@/lib/api';
 import { Pill, Dot, Empty, stateMeta } from '@/components/sb';
 import { cn } from '@/lib/utils';
 
@@ -76,6 +76,7 @@ export function RunDetailPage() {
   const replay = useReplayRun();
   const rerun = useRerunRun();
   const cancel = useCancelRun();
+  const setBaseline = useSetBaseline();
   const [editEvent, setEditEvent] = useState<string | null>(null);
   const qc = useQueryClient();
   // Live trace over SSE — fills in with no polling lag, then refetches on done.
@@ -132,6 +133,7 @@ export function RunDetailPage() {
           <div className="flex min-w-0 items-center gap-3">
             <span className="font-mono text-[22px] font-bold tracking-tight">{r.id}</span>
             <Pill label={m.label} color={m.color} />
+            {r.baseline && <span title="line-level divergence from the routine's golden baseline" className={`rounded-md border px-2 py-0.5 font-mono text-[11px] font-semibold ${r.baseline.drift > 40 ? 'border-bad/40 bg-bad/10 text-bad' : r.baseline.drift > 0 ? 'border-warn/40 bg-warn/10 text-warn' : 'border-ok/40 bg-ok/10 text-ok'}`}>{r.baseline.drift}% drift</span>}
           </div>
           <div className="flex items-center gap-2">
             {(r.status === 'running' || r.status === 'waiting') && (
@@ -150,6 +152,7 @@ export function RunDetailPage() {
               <button onClick={() => setEditEvent(JSON.stringify(r.event, null, 2))} title="Edit this run's event payload and re-run with the tweaks" className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Edit &amp; re-run</button>
             )}
             <a href={`/api/runs/${r.id}/bundle`} download={`${r.id}.json`} title="Download the full run bundle (event, output, trace, metrics)" className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-dim hover:border-hair hover:text-t2">JSON ↓</a>
+            {r.status === 'succeeded' && <button onClick={() => setBaseline.mutate(r.id)} disabled={setBaseline.isPending} title="Pin this output as the routine's golden baseline; future runs report drift from it" className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-dim hover:border-hair hover:text-t2">{setBaseline.isPending ? 'Pinning…' : '◎ Set baseline'}</button>}
             <button
               onClick={() => dispatch.mutate(r.routine, { onSuccess: (res) => navigate(`/runs/${res.runId}`) })}
               disabled={dispatch.isPending}

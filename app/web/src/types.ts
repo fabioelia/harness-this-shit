@@ -110,6 +110,7 @@ export interface RunDetail {
   trace: TraceEvent[];
   toolBreakdown: { tool: string; calls: number; errors: number }[];
   matchExplain: { fired: boolean; checks: { label: string; ok: boolean; detail: string }[] } | null;
+  baseline: { drift: number } | null;
   inbox: { summary: string; ago: string; pending: boolean }[];
   assertResult: { passed: boolean; results: { type: string; value: string; ok: boolean; detail: string }[] } | null;
   lineage: RunLineage;

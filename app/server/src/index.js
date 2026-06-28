@@ -1537,6 +1537,26 @@ app.get('/api/runs/search', (req, res) => {
   };
   res.json({ q, results: rows.map((x) => ({ id: x.id, slug: x.routine_slug, status: x.status, ago: relTime(x.created_at), snippet: snip(x.output) })) });
 });
+// Golden output: pin a run's output as the routine's baseline; later runs report drift.
+const lineSet = (s) => new Set(String(s || '').split('\n').map((l) => l.trim()).filter(Boolean));
+function driftPct(baseline, output) {
+  const a = lineSet(baseline), b = lineSet(output);
+  if (!a.size && !b.size) return 0;
+  let inter = 0; for (const x of a) if (b.has(x)) inter++;
+  const union = a.size + b.size - inter;
+  return union ? Math.round(100 * (1 - inter / union)) : 0;
+}
+app.post('/api/runs/:id/baseline', (req, res) => {
+  const x = one('SELECT routine_slug, output, status FROM runs WHERE id=?', req.params.id);
+  if (!x) return res.status(404).json({ error: 'not found' });
+  run('UPDATE routines SET baseline=? WHERE slug=?', x.output || '', x.routine_slug);
+  logActivity(`${x.routine_slug} baseline set from run ${req.params.id}`, 'idle');
+  res.json({ ok: true });
+});
+app.delete('/api/routines/:slug/baseline', (req, res) => {
+  run("UPDATE routines SET baseline='' WHERE slug=?", req.params.slug);
+  res.json({ ok: true });
+});
 // Diff a run against the previous run of the same routine (output + metric deltas).
 app.get('/api/runs/:id/diff', (req, res) => {
   const cur = one('SELECT * FROM runs WHERE id=?', req.params.id);
@@ -1867,6 +1887,7 @@ app.get('/api/runs/:id', (req, res) => {
     cost: x.cost_usd, turns: x.num_turns, sessionId: x.session_id,
     inTokens: x.in_tokens ?? null, outTokens: x.out_tokens ?? null,
     matchExplain: r && ev ? explainMatch(r, ev) : null,
+    baseline: r && r.baseline ? { drift: driftPct(r.baseline, x.output) } : null,
     stdout: x.output, event: ev, trace, inbox, toolBreakdown,
     assertResult: jObj(x.assert_result) || null,
     lineage: { triggeredBy, downstream, watches },
