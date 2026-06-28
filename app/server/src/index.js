@@ -2329,6 +2329,16 @@ app.post('/api/routines/:slug/enable', (req, res) => {
   if (!!r.enabled !== !!en) run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', r.slug, en ? 'enabled' : 'disabled', now());
   res.json({ ok: true, enabled: !!en });
 });
+// Personal inbox — what's directed at one operator: @mentions + assigned open runs.
+app.get('/api/inbox', (req, res) => {
+  const who = String(req.query.who || '').trim();
+  if (!who) return res.json({ who: '', assigned: [], mentions: [], count: 0 });
+  const assigned = all("SELECT id, routine_slug, triage, created_at FROM runs WHERE assignee=? AND triage != 'resolved' ORDER BY created_at DESC LIMIT 20", who)
+    .map((x) => ({ id: x.id, slug: x.routine_slug, triage: x.triage || 'open', ago: relTime(x.created_at) }));
+  const mentions = all('SELECT by, slug, snippet, created_at FROM mentions WHERE mentioned=? ORDER BY id DESC LIMIT 20', who)
+    .map((m) => ({ by: m.by || 'anon', slug: m.slug, snippet: m.snippet, ago: relTime(m.created_at) }));
+  res.json({ who, assigned, mentions, count: assigned.length + mentions.length });
+});
 // Mentions feed — recent @mentions from comments (directed asks).
 app.get('/api/mentions', (req, res) => {
   const rows = all('SELECT mentioned, by, slug, snippet, created_at FROM mentions ORDER BY id DESC LIMIT 30');

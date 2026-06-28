@@ -4,7 +4,7 @@ import { TooltipProvider, Tip } from '@/components/ui/tooltip';
 import { CommandPalette } from '@/components/CommandPalette';
 import { ShortcutsHelp } from '@/components/ShortcutsHelp';
 import { useOperator, setOperator } from '@/lib/operator';
-import { useKillSwitch, useStats } from '@/lib/api';
+import { useKillSwitch, useStats, useInbox } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 const ICONS = {
@@ -66,6 +66,7 @@ export function AppShell() {
   const kill = useKillSwitch();
   const halted = !!stats?.killSwitch;
   const [operator] = useOperator();
+  const { data: inbox } = useInbox(operator);
   const [light, setLight] = useState(() => typeof document !== 'undefined' && document.documentElement.classList.contains('light'));
   const toggleTheme = () => {
     const next = !light;
@@ -94,6 +95,9 @@ export function AppShell() {
             >
               <span className="relative">
                 {n.icon}
+                {n.to === '/activity' && (inbox?.count ?? 0) > 0 && (
+                  <span className="absolute -right-2.5 -top-1.5 grid h-[15px] min-w-[15px] place-items-center rounded-full bg-brand px-1 font-mono text-[9px] font-bold text-[#16130f]" title={`${inbox?.count} for you`}>{inbox?.count}</span>
+                )}
                 {n.to === '/' && (stats?.failing ?? 0) > 0 && (
                   <span className="absolute -right-2.5 -top-1.5 grid h-[15px] min-w-[15px] place-items-center rounded-full bg-bad px-1 font-mono text-[9px] font-bold text-white" title={`${stats?.failing} routine(s) failing`}>{stats?.failing}</span>
                 )}
