@@ -283,10 +283,25 @@ const redact = (s) => String(s)
   .replace(/gh[pousr]_[A-Za-z0-9]{20,}/g, 'gh***')
   .replace(/-----BEGIN[\s\S]*?PRIVATE KEY-----/g, '***private-key***');
 
+const ACTIVE_RUN = new Set(['running', 'waiting', 'queued']);
 const shapeRoutine = (r) => {
   const recent = all('SELECT status FROM runs WHERE routine_slug=? ORDER BY created_at DESC LIMIT 12', r.slug).map((x) => x.status).reverse();
   const finished = recent.filter((s) => s === 'succeeded' || s === 'failed');
   const successRate = finished.length ? Math.round((100 * finished.filter((s) => s === 'succeeded').length) / finished.length) : null;
+  // Reconcile a "running" display against reality. last_ago/last_status/state are stored
+  // strings stamped 'now'/'running' when a run starts; a crashed session, a compiled-script
+  // path, or a server restart can leave them wedged so the routine shows "now" forever while
+  // nothing is actually running. Only show running if the latest run is genuinely active;
+  // otherwise derive the display from the real latest run (or idle if there are none).
+  let lastAgo = r.last_ago, lastStatus = r.last_status, state = r.enabled ? r.state : 'disabled';
+  if (lastStatus === 'running' || lastAgo === 'now' || r.state === 'running') {
+    const latest = one('SELECT status, created_at FROM runs WHERE routine_slug=? ORDER BY created_at DESC LIMIT 1', r.slug);
+    if (!latest || !ACTIVE_RUN.has(latest.status)) {
+      lastAgo = latest ? relTime(latest.created_at) : '—';
+      lastStatus = !latest ? 'idle' : latest.status === 'succeeded' ? 'success' : latest.status === 'failed' ? 'failing' : 'idle';
+      if (state === 'running') state = r.enabled ? 'idle' : 'disabled';
+    }
+  }
   return {
     slug: r.slug, name: r.name, summary: r.summary,
     owner: r.owner, team: r.team, ownerColor: r.av_color, initials: r.initials,
@@ -294,8 +309,8 @@ const shapeRoutine = (r) => {
     schedule: r.schedule || '', filters: jObj(r.filters) || {}, reactions: j(r.reactions),
     concurrency: jObj(r.concurrency) || {},
     model: r.model, effort: r.effort || '', memory: !!r.memory, repo: r.repo, branch: r.branch,
-    state: r.enabled ? r.state : 'disabled', enabled: !!r.enabled,
-    lastAgo: r.last_ago, lastStatus: r.last_status, next: r.next,
+    state, enabled: !!r.enabled,
+    lastAgo, lastStatus, next: r.next,
     recent, successRate, spend: r.spend, avg: r.avg, runCount: recent.length,
     inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
     scriptMode: !!r.script_mode, scriptLang: r.script_lang || 'bash', compiled: !!(r.script && r.script.trim()), scriptStale: !!r.script_stale,
@@ -873,15 +888,25 @@ if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(tickScheduler, 30_
 // the run list stays honest and routine state / leases don't wedge. Runs on boot + 5-min.
 function reapStaleRuns() {
   const cutoff = now() - 20 * 60_000; // > the 4-min session timeout + 15-min lease TTL
-  const stale = all("SELECT id, routine_slug FROM runs WHERE status IN ('running','waiting') AND created_at < ?", cutoff);
+  const stale = all("SELECT id, routine_slug, created_at FROM runs WHERE status IN ('running','waiting') AND created_at < ?", cutoff);
   for (const s of stale) {
     run("UPDATE runs SET status='failed', output=?, dur='—' WHERE id=?", 'reaped — no result within 20m (server restart or stuck session)', s.id);
     run('DELETE FROM leases WHERE run_id=?', s.id);
-    run("UPDATE routines SET state='idle', last_status='failing' WHERE slug=? AND state='running'", s.routine_slug);
+    run("UPDATE routines SET state='idle', last_status='failing', last_ago=? WHERE slug=? AND state='running'", relTime(s.created_at), s.routine_slug);
     logActivity(`${s.routine_slug} run ${s.id} reaped · stuck > 20m`, 'failing');
   }
+  // Un-wedge routines stuck displaying 'running'/'now' whose latest run already finished
+  // (terminal status, so the loop above never saw it) — keeps the stored row honest.
+  let unwedged = 0;
+  for (const x of all("SELECT slug FROM routines WHERE state='running' OR last_status='running' OR last_ago='now'")) {
+    const latest = one('SELECT status, created_at FROM runs WHERE routine_slug=? ORDER BY created_at DESC LIMIT 1', x.slug);
+    if (latest && ACTIVE_RUN.has(latest.status)) continue; // genuinely active — leave it
+    const ls = !latest ? 'idle' : latest.status === 'succeeded' ? 'success' : latest.status === 'failed' ? 'failing' : 'idle';
+    run("UPDATE routines SET state='idle', last_status=?, last_ago=? WHERE slug=?", ls, latest ? relTime(latest.created_at) : '—', x.slug);
+    unwedged++;
+  }
   if (stale.length) logActivity(`watchdog reaped ${stale.length} stuck run${stale.length > 1 ? 's' : ''}`, 'idle');
-  return stale.length;
+  return stale.length + unwedged;
 }
 reapStaleRuns();
 if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(reapStaleRuns, 5 * 60_000).unref?.();
