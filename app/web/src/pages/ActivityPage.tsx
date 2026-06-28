@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useActivity, useMentions, useInbox, useGlobalAudit, useStandup } from '@/lib/api';
+import { useActivity, useMentions, useInbox, useGlobalAudit, useStandup, usePostStandup } from '@/lib/api';
 import { Dot, Empty } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import { useOperator } from '@/lib/operator';
@@ -14,6 +14,7 @@ export function ActivityPage() {
   const { data: inbox } = useInbox(operator);
   const { data: audit } = useGlobalAudit();
   const { data: standup } = useStandup(1);
+  const postStandup = usePostStandup();
   const [showAudit, setShowAudit] = useState(false);
   const [q, setQ] = useState('');
   const [state, setState] = useState('all');
@@ -61,7 +62,10 @@ export function ActivityPage() {
         )}
         {standup && Object.values(standup.counts).some((n) => n > 0) && (
           <div className="mb-5 rounded-xl border border-line bg-surface px-4 py-3">
-            <div className="mb-2 font-display text-[11px] font-semibold uppercase tracking-[0.07em] text-dim-2">Team standup · last 24h</div>
+            <div className="mb-2 flex items-center justify-between">
+              <span className="font-display text-[11px] font-semibold uppercase tracking-[0.07em] text-dim-2">Team standup · last 24h</span>
+              <button onClick={() => postStandup.mutate()} className="font-mono text-[11px] text-dim hover:text-brand">{postStandup.isPending ? 'posting…' : postStandup.data ? (postStandup.data.sent ? `posted → ${postStandup.data.channel}` : 'set a digest channel first') : 'post to Slack ↗'}</button>
+            </div>
             <div className="flex flex-wrap gap-4 font-mono text-[12px]">
               {([['changes', 'edits'], ['approvals', 'approvals'], ['comments', 'comments'], ['signoffs', 'sign-offs'], ['resolved', 'incidents resolved']] as const).map(([k, label]) => (
                 <span key={k} className="text-dim-2"><span className="font-semibold text-t2">{standup.counts[k]}</span> {label}</span>

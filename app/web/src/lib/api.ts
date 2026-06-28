@@ -297,6 +297,9 @@ export interface Inbox { who: string; count: number; assigned: { id: string; slu
 export const useInbox = (who: string) => useQuery({ queryKey: ['inbox', who], enabled: !!who, queryFn: () => get<Inbox>(`/api/inbox?who=${encodeURIComponent(who)}`), refetchInterval: 12000 });
 export interface Standup { days: number; counts: { changes: number; approvals: number; comments: number; signoffs: number; resolved: number }; recent: { slug: string; summary: string; ago: string }[] }
 export const useStandup = (days = 1) => useQuery({ queryKey: ['standup', days], queryFn: () => get<Standup>(`/api/standup?days=${days}`), refetchInterval: 20000 });
+export function usePostStandup() {
+  return useMutation({ mutationFn: () => post<{ sent: boolean; preview: string; channel: string }>('/api/standup/send', {}) });
+}
 export interface GlobalAudit { entries: { slug: string; summary: string; ago: string }[] }
 export const useGlobalAudit = () => useQuery({ queryKey: ['global-audit'], queryFn: () => get<GlobalAudit>('/api/audit'), refetchInterval: 15000 });
 export const useWatch = (slug: string, who: string) => useQuery({ queryKey: ['watch', slug, who], enabled: !!slug, queryFn: () => get<{ watching: boolean; watchers: number }>(`/api/routines/${slug}/watch?who=${encodeURIComponent(who)}`) });

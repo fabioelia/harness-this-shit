@@ -1084,6 +1084,25 @@ app.post('/api/digest', (req, res) => {
   res.json({ channel: metaGet('digest_channel', ''), hour: parseInt(metaGet('digest_hour', '-1'), 10) });
 });
 app.post('/api/digest/send', (_q, res) => res.json({ sent: sendDigest(), preview: buildDigest() }));
+function buildStandup() {
+  const since = now() - 86_400_000;
+  const audit = all('SELECT slug, summary FROM routine_audit WHERE created_at > ? ORDER BY id DESC', since);
+  const approvals = audit.filter((a) => a.summary.startsWith('approved by')).length;
+  const changes = audit.filter((a) => a.summary.startsWith('edited') || a.summary.includes(' edited')).length;
+  const comments = one('SELECT COUNT(*) AS n FROM comments WHERE created_at > ?', since).n;
+  const signoffs = one("SELECT COUNT(*) AS n FROM runs WHERE verdict != '' AND created_at > ?", since).n;
+  const resolved = one("SELECT COUNT(*) AS n FROM runs WHERE triage='resolved' AND created_at > ?", since).n;
+  return `:speech_balloon: *Team standup — last 24h*\n• ${changes} config change(s), ${approvals} approval(s)\n• ${comments} comment(s), ${signoffs} sign-off(s)\n• ${resolved} incident(s) resolved`;
+}
+app.post('/api/standup/send', (_q, res) => {
+  const target = metaGet('digest_channel', '').trim();
+  const preview = buildStandup();
+  if (target) {
+    execCapture('slack-post', [target, preview], { env: { ...process.env, PATH: `${SCRIPT_TOOLS_DIR}:${process.env.PATH}` }, timeoutMs: 15_000 })
+      .then((r) => logActivity(`team standup ${r.code === 0 ? `posted → ${target}` : `error: ${(r.err || '').slice(0, 50)}`}`, 'idle')).catch(() => {});
+  }
+  res.json({ sent: !!target, preview, channel: target });
+});
 // Auto-generated ops report (markdown) — spend, top routines, failures, warnings.
 app.get('/api/report.md', (req, res) => {
   const days = Math.min(365, Math.max(1, parseInt(req.query.days, 10) || 7));
