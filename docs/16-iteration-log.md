@@ -29,6 +29,7 @@ dropdowns · Fleet inbox badge.
 | 9 | Orphaned-run watchdog — reap runs stuck running/waiting > 20m (boot + 5min) | resilience/observability | ✅ done |
 | 10 | QA checkpoint — exercise the iter 1–9 backlog, fix bugs | quality | ✅ done — 0 bugs |
 | 11 | Runs page search + status filter | observability/UX | ✅ done |
+| 12 | Routine export / import (JSON bundle, slug-conflict safe) | reproducibility/portability | ✅ done |
 
 ## QA backlog (test at iteration 10)
 - [x] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.

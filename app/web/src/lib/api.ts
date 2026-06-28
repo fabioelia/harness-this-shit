@@ -183,6 +183,10 @@ export interface MetricHistory {
   latest: { runId: string; at: number; ago: string; value: number | null; raw: string } | null;
 }
 export const useRoutineMetric = (slug: string, enabled = true) => useQuery({ queryKey: ['metric', slug], enabled, queryFn: () => get<MetricHistory>(`/api/routines/${slug}/metric?n=30`), refetchInterval: 15000 });
+export function useImportRoutine() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (bundle: unknown) => post<Routine>('/api/routines/import', bundle), onSuccess: () => qc.invalidateQueries({ queryKey: ['routines'] }) });
+}
 export function useReplayRun() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (id: string) => post<{ ok: boolean; runId: string }>(`/api/runs/${id}/replay`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['runs'] }); } });

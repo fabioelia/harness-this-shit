@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
-import { useRoutines, useStats, useToggleRoutine, useKillSwitch, useConnectors, useLoadSamples } from '@/lib/api';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useRoutines, useStats, useToggleRoutine, useKillSwitch, useConnectors, useLoadSamples, useImportRoutine } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { Routine, Stats } from '@/types';
@@ -113,6 +113,8 @@ export function FleetPage() {
   const { data: connectors } = useConnectors();
   const kill = useKillSwitch();
   const loadSamples = useLoadSamples();
+  const importRoutine = useImportRoutine();
+  const navigate = useNavigate();
   const ghOff = connectors?.find((c) => c.code === 'GH')?.health === 'off';
   const slackOff = connectors?.find((c) => c.code === 'SL')?.health === 'off';
   const [q, setQ] = useState('');
@@ -174,6 +176,15 @@ export function FleetPage() {
           <button onClick={() => loadSamples.mutate()} disabled={loadSamples.isPending} className="flex h-9 items-center gap-2 rounded-md border border-line bg-surface-2 px-3.5 font-display text-[12.5px] font-semibold text-t2 hover:border-hair disabled:opacity-40" title="Seed 3 real developer flows (routines + agents)">
             {loadSamples.isPending ? 'Loading…' : 'Load examples'}
           </button>
+          <label className="flex h-9 cursor-pointer items-center gap-2 rounded-md border border-line bg-surface-2 px-3.5 font-display text-[12.5px] font-semibold text-t2 hover:border-hair" title="Import a routine from an exported .routine.json">
+            Import
+            <input type="file" accept="application/json,.json" className="hidden" onChange={async (e) => {
+              const f = e.target.files?.[0]; if (!f) return;
+              try { const bundle = JSON.parse(await f.text()); importRoutine.mutate(bundle, { onSuccess: (r) => navigate(`/routines/${r.slug}`) }); }
+              catch { alert('Not valid JSON'); }
+              e.target.value = '';
+            }} />
+          </label>
           <Link to="/routines/new" className="flex h-9 items-center gap-2 rounded-md bg-brand px-[15px] font-display text-[12.5px] font-semibold text-[#16130f] transition-colors hover:bg-brand-deep">
             <span className="-mt-px text-[16px] leading-none">+</span>New routine
           </Link>

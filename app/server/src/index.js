@@ -1130,6 +1130,31 @@ app.delete('/api/routines/:slug', (req, res) => {
   res.json({ ok: true });
 });
 
+// Portability: export a routine's full definition as a JSON bundle, and import one.
+const exportBody = (r) => ({
+  name: r.name, summary: r.summary, owner: r.owner, team: r.team,
+  triggers: j(r.triggers), connectors: j(r.connectors), chain: j(r.chain),
+  schedule: r.schedule, filters: jObj(r.filters) || {}, reactions: j(r.reactions),
+  concurrency: jObj(r.concurrency) || {}, model: r.model, effort: r.effort, memory: !!r.memory,
+  repo: r.repo, prompt: r.prompt, scriptMode: !!r.script_mode, scriptLang: r.script_lang,
+  retries: r.retries, assertions: j(r.assertions), alertOnFail: !!r.alert_on_fail, alertTarget: r.alert_target,
+});
+app.get('/api/routines/:slug/export', (req, res) => {
+  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  res.json({ switchboard: 'routine', version: 1, slug: r.slug, routine: exportBody(r) });
+});
+app.post('/api/routines/import', (req, res) => {
+  const b = req.body || {};
+  const body = b.routine && typeof b.routine === 'object' ? b.routine : b;
+  const name = String(body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'bundle has no routine name' });
+  let slug = String(b.slug || body.slug || slugify(name)).trim().replace(/[^a-z0-9_-]/gi, '');
+  if (!slug) return res.status(400).json({ error: 'could not derive a slug' });
+  if (one('SELECT 1 FROM routines WHERE slug=?', slug)) { let n = 2; while (one('SELECT 1 FROM routines WHERE slug=?', `${slug}-${n}`)) n++; slug = `${slug}-${n}`; }
+  insertRoutine({ ...body, slug });
+  res.status(201).json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', slug)));
+});
 app.post('/api/routines/:slug/validate', async (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
   if (!r) return res.status(404).json({ error: 'not found' });
