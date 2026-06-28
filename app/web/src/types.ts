@@ -51,6 +51,7 @@ export interface Routine {
   longRunning: boolean;
   activeWindow: { start: number | null; end: number | null; days: number[] } | null;
   sla: number;
+  archived: boolean;
 }
 
 export interface FrontMatter {

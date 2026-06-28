@@ -290,7 +290,7 @@ const shapeRoutine = (r) => {
     recent, successRate, spend: r.spend, avg: r.avg, runCount: recent.length,
     inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
     scriptMode: !!r.script_mode, scriptLang: r.script_lang || 'bash', compiled: !!(r.script && r.script.trim()), scriptStale: !!r.script_stale,
-    retries: r.retries || 0, assertions: j(r.assertions), tags: j(r.tags), rateLimit: r.rate_limit || 0, maxFails: r.max_fails || 0, failStreak: r.fail_streak || 0, notes: r.notes || '', pinned: !!r.pinned, activeWindow: jObj(r.active_window) || null, sla: r.sla_s || 0,
+    retries: r.retries || 0, assertions: j(r.assertions), tags: j(r.tags), rateLimit: r.rate_limit || 0, maxFails: r.max_fails || 0, failStreak: r.fail_streak || 0, notes: r.notes || '', pinned: !!r.pinned, activeWindow: jObj(r.active_window) || null, sla: r.sla_s || 0, archived: !!r.archived,
     longRunning: (() => { const t = one("SELECT MIN(created_at) AS t FROM runs WHERE routine_slug=? AND status IN ('running','waiting')", r.slug)?.t; return !!(t && now() - t > 8 * 60_000); })(),
     lastSuccessAgo: (() => { const t = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND status='succeeded'", r.slug)?.t || 0; return t ? relTime(t) : ''; })(),
     staleSuccess: (() => { const t = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND status='succeeded'", r.slug)?.t || 0; return !!r.enabled && t > 0 && (now() - t) > 7 * 86_400_000; })(),
@@ -1261,7 +1261,15 @@ app.get('/api/stats', (_q, res) => {
   });
 });
 
-app.get('/api/routines', (_q, res) => res.json(all('SELECT * FROM routines ORDER BY ord').map(shapeRoutine)));
+app.get('/api/routines', (req, res) => res.json(all(`SELECT * FROM routines ${req.query.archived ? 'WHERE archived=1' : 'WHERE archived=0'} ORDER BY ord`).map(shapeRoutine)));
+app.post('/api/routines/:slug/archive', (req, res) => {
+  const r = one('SELECT slug FROM routines WHERE slug=?', req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const archived = req.body?.archived ? 1 : 0;
+  run('UPDATE routines SET archived=?, enabled=CASE WHEN ?=1 THEN 0 ELSE enabled END WHERE slug=?', archived, archived, req.params.slug);
+  logActivity(`${req.params.slug} ${archived ? 'archived' : 'restored'}`, 'idle');
+  res.json({ ok: true, archived: !!archived });
+});
 
 app.get('/api/routines/:slug', (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);

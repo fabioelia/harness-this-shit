@@ -115,7 +115,8 @@ function FleetRow({ r, i, selected, onSelect }: { r: Routine; i: number; selecte
 }
 
 export function FleetPage() {
-  const { data: routines } = useRoutines();
+  const [showArchived, setShowArchived] = useState(false);
+  const { data: routines } = useRoutines(showArchived);
   const { data: stats } = useStats();
   const { data: connectors } = useConnectors();
   const kill = useKillSwitch();
@@ -249,6 +250,7 @@ export function FleetPage() {
           <button onClick={() => { setTeam(''); setTrig(''); setConn(''); setTag(''); setNeedsReview(false); setQ(''); }} className="font-mono text-[11px] text-dim hover:text-fg">clear</button>
         )}
         <button onClick={() => setGrouped((v) => !v)} className={cn('flex h-[34px] items-center gap-[6px] rounded-md border px-2.5 font-mono text-[11.5px] font-medium', grouped ? 'border-brand/50 bg-brand/10 text-brand-soft' : 'border-line text-dim hover:text-t2')} title="group by team">⊞ team</button>
+        <button onClick={() => setShowArchived((v) => !v)} className={cn('flex h-[34px] items-center gap-[6px] rounded-md border px-2.5 font-mono text-[11.5px] font-medium', showArchived ? 'border-warn/50 bg-warn/10 text-warn' : 'border-line text-dim hover:text-t2')} title="show archived routines">{showArchived ? '⊟ archived' : '⊞ archived'}</button>
         <span className="ml-auto text-[12px] text-dim">{list.length} of {routines?.length ?? 0}</span>
       </div>
 

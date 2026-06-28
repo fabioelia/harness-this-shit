@@ -105,6 +105,7 @@ dropdowns · Fleet inbox badge.
 | 84 | Run output copy + permalink + byte-size indicator | UX | ✅ done |
 | 85 | Spend by reasoning-effort level on Insights | efficiency/observability | ✅ done |
 | 86 | Per-routine SLA — flag completed runs slower than expected duration | observability/eliminating-humans | ✅ done |
+| 87 | Routine archive (soft delete) — hide from Fleet, restorable, archived view | ops/UX | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.

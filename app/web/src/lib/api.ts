@@ -145,7 +145,11 @@ export function useBulkRoutines() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (b: { slugs: string[]; action: string; hours?: number; tag?: string }) => post<{ ok: boolean; affected: number }>('/api/routines/bulk', b), onSuccess: () => { qc.invalidateQueries({ queryKey: ['routines'] }); qc.invalidateQueries({ queryKey: ['stats'] }); } });
 }
-export const useRoutines = () => useQuery({ queryKey: ['routines'], queryFn: () => get<Routine[]>('/api/routines'), refetchInterval: 10000 });
+export const useRoutines = (archived = false) => useQuery({ queryKey: ['routines', archived], queryFn: () => get<Routine[]>(`/api/routines${archived ? '?archived=1' : ''}`), refetchInterval: 10000 });
+export function useArchiveRoutine() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ slug, archived }: { slug: string; archived: boolean }) => post<{ ok: boolean; archived: boolean }>(`/api/routines/${slug}/archive`, { archived }), onSuccess: () => qc.invalidateQueries({ queryKey: ['routines'] }) });
+}
 export const useRoutine = (slug?: string) =>
   useQuery({ queryKey: ['routine', slug], queryFn: () => get<RoutineDetail>(`/api/routines/${slug}`), enabled: !!slug, retry: false });
 export const useRuns = () => useQuery({ queryKey: ['runs'], queryFn: () => get<RunLite[]>('/api/runs'), refetchInterval: 8000 });

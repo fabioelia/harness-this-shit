@@ -174,6 +174,7 @@ export function getDb() {
   ensure('routines', 'active_window', "active_window TEXT NOT NULL DEFAULT ''");
   ensure('routines', 'baseline', "baseline TEXT NOT NULL DEFAULT ''");
   ensure('routines', 'sla_s', 'sla_s INTEGER NOT NULL DEFAULT 0');
+  ensure('routines', 'archived', 'archived INTEGER NOT NULL DEFAULT 0');
   _db.exec('CREATE TABLE IF NOT EXISTS prompt_history (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, prompt TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)');
   _db.exec('CREATE TABLE IF NOT EXISTS routine_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, summary TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)');
   _db.exec('CREATE INDEX IF NOT EXISTS idx_routine_audit_slug ON routine_audit(slug, id)');
