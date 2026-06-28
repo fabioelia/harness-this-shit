@@ -98,6 +98,10 @@ export const useGithubRepos = (owner = '', q = '') =>
     staleTime: 60_000,
     placeholderData: (prev) => prev,
   });
+export function usePinRoutine() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (slug: string) => post<{ ok: boolean; pinned: boolean }>(`/api/routines/${slug}/pin`), onSuccess: () => qc.invalidateQueries({ queryKey: ['routines'] }) });
+}
 export function useBulkRoutines() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (b: { slugs: string[]; action: string; hours?: number; tag?: string }) => post<{ ok: boolean; affected: number }>('/api/routines/bulk', b), onSuccess: () => { qc.invalidateQueries({ queryKey: ['routines'] }); qc.invalidateQueries({ queryKey: ['stats'] }); } });

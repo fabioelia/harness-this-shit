@@ -290,7 +290,7 @@ const shapeRoutine = (r) => {
     recent, successRate, spend: r.spend, avg: r.avg, runCount: recent.length,
     inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
     scriptMode: !!r.script_mode, scriptLang: r.script_lang || 'bash', compiled: !!(r.script && r.script.trim()), scriptStale: !!r.script_stale,
-    retries: r.retries || 0, assertions: j(r.assertions), tags: j(r.tags), rateLimit: r.rate_limit || 0, maxFails: r.max_fails || 0, failStreak: r.fail_streak || 0, notes: r.notes || '',
+    retries: r.retries || 0, assertions: j(r.assertions), tags: j(r.tags), rateLimit: r.rate_limit || 0, maxFails: r.max_fails || 0, failStreak: r.fail_streak || 0, notes: r.notes || '', pinned: !!r.pinned,
     alertOnFail: !!r.alert_on_fail, alertTarget: r.alert_target || '', timeout: r.timeout_s || 0, env: jObj(r.env) || {}, snoozedUntil: r.snooze_until && r.snooze_until > now() ? r.snooze_until : 0,
   };
 };
@@ -1337,6 +1337,13 @@ app.post('/api/routines/bulk', (req, res) => {
   }
   logActivity(`bulk ${action}${tag ? ` #${tag}` : ''} · ${n} routine${n === 1 ? '' : 's'}`, 'idle');
   res.json({ ok: true, affected: n });
+});
+app.post('/api/routines/:slug/pin', (req, res) => {
+  const r = one('SELECT pinned FROM routines WHERE slug=?', req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const pinned = r.pinned ? 0 : 1;
+  run('UPDATE routines SET pinned=? WHERE slug=?', pinned, req.params.slug);
+  res.json({ ok: true, pinned: !!pinned });
 });
 app.post('/api/routines/:slug/clone', (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);

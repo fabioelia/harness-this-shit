@@ -170,6 +170,7 @@ export function getDb() {
   ensure('routines', 'max_fails', 'max_fails INTEGER NOT NULL DEFAULT 0');
   ensure('routines', 'fail_streak', 'fail_streak INTEGER NOT NULL DEFAULT 0');
   ensure('routines', 'notes', "notes TEXT NOT NULL DEFAULT ''");
+  ensure('routines', 'pinned', 'pinned INTEGER NOT NULL DEFAULT 0');
   _db.exec('CREATE TABLE IF NOT EXISTS prompt_history (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, prompt TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)');
   _db.exec('CREATE INDEX IF NOT EXISTS idx_prompt_history_slug ON prompt_history(slug, id)');
   ensure('runs', 'assert_result', "assert_result TEXT NOT NULL DEFAULT ''");

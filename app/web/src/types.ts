@@ -45,6 +45,7 @@ export interface Routine {
   maxFails: number;
   failStreak: number;
   notes: string;
+  pinned: boolean;
 }
 
 export interface FrontMatter {

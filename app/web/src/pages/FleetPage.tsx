@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { useRoutines, useStats, useToggleRoutine, useKillSwitch, useConnectors, useLoadSamples, useImportRoutine, useBulkRoutines } from '@/lib/api';
+import { useRoutines, useStats, useToggleRoutine, useKillSwitch, useConnectors, useLoadSamples, useImportRoutine, useBulkRoutines, usePinRoutine } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { Routine, Stats } from '@/types';
@@ -61,6 +61,7 @@ function StatStrip({ s }: { s?: Stats }) {
 
 function FleetRow({ r, i, selected, onSelect }: { r: Routine; i: number; selected: boolean; onSelect: (slug: string) => void }) {
   const toggle = useToggleRoutine();
+  const pin = usePinRoutine();
   return (
     <div
       className={`border-b border-line-soft transition-colors last:border-0 hover:bg-white/[0.015] ${selected ? 'bg-brand/[0.06]' : ''}`}
@@ -70,6 +71,7 @@ function FleetRow({ r, i, selected, onSelect }: { r: Routine; i: number; selecte
       <div className="min-w-0 pr-3.5">
         <div className="flex items-center gap-2">
           <input type="checkbox" checked={selected} onChange={() => onSelect(r.slug)} className="h-3.5 w-3.5 shrink-0 accent-[#5b9ee6]" title="select" />
+          <button onClick={() => pin.mutate(r.slug)} title={r.pinned ? 'unpin' : 'pin to top'} className={`shrink-0 text-[13px] leading-none ${r.pinned ? 'text-brand' : 'text-faint hover:text-dim'}`}>{r.pinned ? '★' : '☆'}</button>
           <Link to={`/routines/${r.slug}`} className="truncate font-display text-[14px] font-semibold text-fg-2 hover:text-brand">{r.name}</Link>
           {r.snoozedUntil > 0 && <span title={`snoozed until ${new Date(r.snoozedUntil).toLocaleString()}`} className="shrink-0 rounded-full border border-lease/40 bg-lease/10 px-1.5 py-px font-mono text-[10px] font-semibold text-lease">💤</span>}
           {r.inbox > 0 && <Link to={`/routines/${r.slug}`} title={`${r.inbox} task${r.inbox > 1 ? 's' : ''} handed off, waiting to be picked up`} className="shrink-0 rounded-full border border-lease/40 bg-lease/10 px-1.5 py-px font-mono text-[10px] font-semibold text-lease">📥 {r.inbox}</Link>}
@@ -264,7 +266,7 @@ export function FleetPage() {
             }
           />
         ) : (
-          list.map((r, i) => <FleetRow key={r.slug} r={r} i={i} selected={sel.has(r.slug)} onSelect={onSelect} />)
+          [...list].sort((a, b) => Number(b.pinned) - Number(a.pinned)).map((r, i) => <FleetRow key={r.slug} r={r} i={i} selected={sel.has(r.slug)} onSelect={onSelect} />)
         )}
       </div>
       {sel.size > 0 && (

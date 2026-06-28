@@ -59,6 +59,7 @@ dropdowns · Fleet inbox badge.
 | 39 | Spend-by-model breakdown on Insights (cost/runs per model + share bars) | observability/efficiency | ✅ done |
 | 40 | Edit & re-run an event (tweak a past payload, dispatch through matcher) | reproducibility | ✅ done |
 | 41 | Connector usage stats (7d runs + cost attributed per connector) | observability | ✅ done |
+| 42 | Pin/favorite routines (★ sorts to top of Fleet) | UX | ✅ done |
 
 ## QA backlog (test at iteration 10)
 - [x] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.
