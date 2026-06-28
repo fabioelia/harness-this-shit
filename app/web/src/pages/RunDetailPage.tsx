@@ -290,6 +290,20 @@ export function RunDetailPage() {
               <div className="mt-2 text-[11px] text-dim-2">Events coalesced onto this run instead of spawning another agent. The agent drains these via <span className="font-mono">inbox</span> before finishing.</div>
             </div>
           )}
+          {r.matchExplain && r.matchExplain.checks.length > 0 && (
+            <div className={CARD}>
+              <div className={`${LABEL} mb-3`}>Why it fired · {r.matchExplain.fired ? <span className="text-ok">matches the routine</span> : <span className="text-warn">would not match now</span>}</div>
+              <div className="flex flex-col gap-1.5">
+                {r.matchExplain.checks.map((c, i) => (
+                  <div key={i} className="flex items-start gap-2 font-mono text-[11.5px]">
+                    <span className={`mt-px shrink-0 ${c.ok ? 'text-ok' : 'text-bad'}`}>{c.ok ? '✓' : '✗'}</span>
+                    <span className="flex-1 text-t2">{c.label}<span className="ml-2 text-dim-2">{c.detail}</span></span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 font-mono text-[10.5px] text-dim-2">re-evaluated against this run's event + the routine's current triggers/filters.</div>
+            </div>
+          )}
           {r.toolBreakdown && r.toolBreakdown.length > 0 && (
             <div className={CARD}>
               <div className={`${LABEL} mb-3`}>Tools used · {r.toolBreakdown.reduce((a, t) => a + t.calls, 0)} calls</div>

@@ -77,11 +77,13 @@ dropdowns · Fleet inbox badge.
 | 56 | Webhook delivery idempotency — drop repeated X-GitHub-Delivery within 10m | eliminating-humans/reliability | ✅ done |
 | 57 | Run activity heatmap (day-of-week × hour) on Insights | observability | ✅ done |
 | 58 | Saved Fleet views — named filter presets (apply/save/delete) | efficiency/UX | ✅ done |
+| 59 | "Why it fired" — per-condition trigger/repo/filter match explanation on a run | reproducibility/observability | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [ ] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.
 - [ ] (iter 55) cancel kills the child session, marks failed + frees lease, labels "canceled by user", and does NOT retry/alert even with retries set.
 - [ ] (iter 56) a repeated x-github-delivery id within 10m is dropped (logged as dup, no dispatch); distinct ids + missing id pass through.
+- [ ] (iter 59) match explain re-evaluates trigger/repo/each filter condition against the run event; ✓/✗ correct; fired flag matches dispatcher.
 - [ ] (iter 51) /api/anomalies flags runs > 3× routine avg (needs ≥4 samples); ratio + avg correct; Insights card renders/empties.
 
 ## QA backlog (test at iteration 10)

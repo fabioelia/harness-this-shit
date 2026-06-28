@@ -106,6 +106,7 @@ export interface RunDetail {
   stdout: string; event: Record<string, unknown> | null;
   trace: TraceEvent[];
   toolBreakdown: { tool: string; calls: number; errors: number }[];
+  matchExplain: { fired: boolean; checks: { label: string; ok: boolean; detail: string }[] } | null;
   inbox: { summary: string; ago: string; pending: boolean }[];
   assertResult: { passed: boolean; results: { type: string; value: string; ok: boolean; detail: string }[] } | null;
   lineage: RunLineage;

@@ -711,6 +711,24 @@ function filtersMatch(r, event) {
   return mode === 'or' ? checks.some(Boolean) : checks.every(Boolean);
 }
 
+// Explain why a run matched (or would match): trigger + repo + each filter condition.
+function explainMatch(r, event) {
+  const checks = [];
+  const type = event?.event || event?.type || 'manual';
+  const triggers = j(r.triggers);
+  checks.push({ label: `trigger is "${type}"`, ok: triggers.includes(type), detail: `listens for [${triggers.join(', ') || 'none'}]` });
+  const targets = repoTargets(r);
+  if (targets.length) checks.push({ label: 'repository in target', ok: repoMatches(r, event), detail: `target [${targets.join(', ')}]` });
+  let f; try { f = JSON.parse(r.filters || '{}'); } catch { f = {}; }
+  if (Array.isArray(f.groups)) {
+    for (const g of f.groups) for (const c of (g.conditions || [])) {
+      const vals = (FILTER_FIELDS[c.field]?.(event) || []).map(String);
+      checks.push({ label: `${c.field} ${c.op} [${(c.values || []).join(', ')}]`, ok: evalCondition(c, event), detail: `event ${c.field}: [${vals.join(', ') || '—'}]` });
+    }
+  }
+  return { fired: triggers.includes(type) && repoMatches(r, event) && filtersMatch(r, event), checks };
+}
+
 function dispatchEvent(type, payload) {
   if (meta('kill_switch', 'false') === 'true') {
     logActivity(`event ${type} dropped · kill switch engaged`, 'failing');
@@ -1753,6 +1771,7 @@ app.get('/api/runs/:id', (req, res) => {
     started: new Date(x.created_at).toLocaleTimeString(), elapsed: x.dur, model: r?.model || 'claude',
     cost: x.cost_usd, turns: x.num_turns, sessionId: x.session_id,
     inTokens: x.in_tokens ?? null, outTokens: x.out_tokens ?? null,
+    matchExplain: r && ev ? explainMatch(r, ev) : null,
     stdout: x.output, event: ev, trace, inbox, toolBreakdown,
     assertResult: jObj(x.assert_result) || null,
     lineage: { triggeredBy, downstream, watches },
