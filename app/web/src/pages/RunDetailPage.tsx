@@ -236,6 +236,7 @@ export function RunDetailPage() {
                   {(() => { const errN = trace.filter((e) => e.type === 'tool_result' && e.ok === 0).length; return [['all', 'all'], ['tools', 'tools'], ['text', 'text'], ['result', 'result'], ['errors', errN ? `errors ${errN}` : 'errors']].map(([v, l]) => <button key={v} onClick={() => setTType(v)} className={cn('px-1.5 py-1 font-mono', tType === v ? (v === 'errors' ? 'bg-bad/15 text-bad' : 'bg-brand/15 text-brand-soft') : v === 'errors' && errN ? 'text-bad/70 hover:text-bad' : 'text-dim hover:text-t2')}>{l}</button>); })()}
                 </span>
               </>)}
+              <button onClick={() => { navigator.clipboard?.writeText(trace.map((e) => `[${e.t}] ${(e.tool || e.type).toUpperCase()}: ${sline(e)}`).join('\n')); setCopied('trace'); setTimeout(() => setCopied(null), 1200); }} className="font-mono text-[10.5px] text-dim hover:text-brand">{copied === 'trace' ? 'copied ✓' : 'copy trace'}</button>
               <span className="font-mono text-[10.5px] font-medium text-dim">secrets redacted</span>
             </div>
             <div className="flex flex-col">
