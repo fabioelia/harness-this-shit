@@ -1173,6 +1173,23 @@ app.get('/api/heatmap', (req, res) => {
   }
   res.json({ grid, max: Math.max(1, ...grid.flat()), days });
 });
+// Recommendations: analyze recent runs + config and suggest concrete optimizations.
+app.get('/api/recommendations', (req, res) => {
+  const since = now() - 14 * 86_400_000;
+  const rows = all("SELECT routine_slug, status, cost_usd FROM runs WHERE created_at > ? AND status IN ('succeeded','failed')", since);
+  const byR = {};
+  for (const r of rows) { const e = (byR[r.routine_slug] ||= { runs: 0, cost: 0, fails: 0 }); e.runs++; e.cost += r.cost_usd || 0; if (r.status === 'failed') e.fails++; }
+  const recs = [];
+  for (const r of all('SELECT slug,name,effort,model,retries FROM routines WHERE enabled=1 AND archived=0')) {
+    const s = byR[r.slug]; if (!s || s.runs < 5) continue;
+    const fr = s.fails / s.runs; const perRun = s.cost / s.runs;
+    if (['high', 'xhigh', 'max'].includes(r.effort) && fr < 0.05 && s.runs >= 8) recs.push({ slug: r.slug, name: r.name, kind: 'cost', text: `${r.effort} effort with ${Math.round((1 - fr) * 100)}% success over ${s.runs} runs — try lowering effort to cut cost` });
+    if (fr > 0.4) recs.push({ slug: r.slug, name: r.name, kind: 'reliability', text: `${Math.round(fr * 100)}% failure over ${s.runs} runs — review the prompt${(r.retries || 0) === 0 ? ' or add auto-retries' : ''}` });
+    else if (fr > 0.15 && (r.retries || 0) === 0) recs.push({ slug: r.slug, name: r.name, kind: 'reliability', text: `${Math.round(fr * 100)}% failure and no retries — enable auto-retry to absorb transient failures` });
+    if (r.model === 'claude-opus-4-8' && perRun > 0.3 && fr < 0.1) recs.push({ slug: r.slug, name: r.name, kind: 'cost', text: `$${perRun.toFixed(2)}/run on opus with low failures — a smaller model may handle this` });
+  }
+  res.json({ recommendations: recs.slice(0, 15) });
+});
 // Cost anomalies: successful runs that cost far more than their routine's average.
 app.get('/api/anomalies', (req, res) => {
   const days = Math.min(60, Math.max(1, parseInt(req.query.days, 10) || 14));

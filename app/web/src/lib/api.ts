@@ -78,6 +78,8 @@ export interface Heatmap { grid: number[][]; max: number; days: number }
 export const useHeatmap = (days = 30) => useQuery({ queryKey: ['heatmap', days], queryFn: () => get<Heatmap>(`/api/heatmap?days=${days}`), refetchInterval: 60000 });
 export interface Failures { total: number; clusters: { signature: string; count: number; routines: string[]; sampleRun: string; ago: string }[] }
 export const useFailures = (days = 7) => useQuery({ queryKey: ['failures', days], queryFn: () => get<Failures>(`/api/failures?days=${days}`), refetchInterval: 20000 });
+export interface Recs { recommendations: { slug: string; name: string; kind: string; text: string }[] }
+export const useRecommendations = () => useQuery({ queryKey: ['recs'], queryFn: () => get<Recs>('/api/recommendations'), refetchInterval: 30000 });
 export interface Anomalies { anomalies: { id: string; slug: string; cost: number; avg: number; x: number; turns: number; ago: string }[] }
 export const useAnomalies = (days = 14) => useQuery({ queryKey: ['anomalies', days], queryFn: () => get<Anomalies>(`/api/anomalies?days=${days}`), refetchInterval: 20000 });
 export interface Lint { count: number; issues: { slug: string; name: string; warnings: string[] }[] }

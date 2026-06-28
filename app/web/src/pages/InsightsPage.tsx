@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures, useHeatmap, useReleaseLease, usePruneRuns, useSetRetention, useActiveRuns } from '@/lib/api';
+import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures, useHeatmap, useReleaseLease, usePruneRuns, useSetRetention, useActiveRuns, useRecommendations } from '@/lib/api';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -23,6 +23,7 @@ export function InsightsPage() {
   const setRetention = useSetRetention();
   const [retDraft, setRetDraft] = useState<string | null>(null);
   const { data: active } = useActiveRuns();
+  const { data: recs } = useRecommendations();
   const setDigest = useSetDigest();
   const sendDigest = useSendDigest();
   const [capDraft, setCapDraft] = useState('');
@@ -112,6 +113,22 @@ export function InsightsPage() {
               <Stat label="Avg latency" value={fmtMs(d.totals.avgMs)} />
               <Stat label="Failure rate" value={`${d.totals.failRate}%`} sub={`${d.totals.fails} failed`} />
             </div>
+
+            {recs && recs.recommendations.length > 0 && (
+              <div className={`${CARD} mb-[18px]`} style={{ borderColor: 'rgba(91,158,230,.35)' }}>
+                <div className="mb-2 font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-brand-soft">💡 Recommendations · {recs.recommendations.length}</div>
+                <div className="flex flex-col gap-1.5">
+                  {recs.recommendations.map((rc, i) => (
+                    <div key={i} className="flex items-start gap-2 font-mono text-[12px]">
+                      <span className={`mt-px shrink-0 rounded px-1.5 py-px text-[9.5px] font-semibold uppercase ${rc.kind === 'cost' ? 'bg-warn/15 text-warn' : 'bg-bad/15 text-bad'}`}>{rc.kind}</span>
+                      <Link to={`/routines/${rc.slug}`} className="shrink-0 font-sans font-semibold text-t2 hover:text-brand">{rc.name}</Link>
+                      <span className="flex-1 text-dim-2">{rc.text}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 font-mono text-[10.5px] text-dim-2">auto-derived from the last 14 days of runs + each routine's config.</div>
+              </div>
+            )}
 
             {failures && failures.clusters.length > 0 && (
               <div className={`${CARD} mb-[18px]`} style={{ borderColor: 'rgba(229,115,107,.3)' }}>
