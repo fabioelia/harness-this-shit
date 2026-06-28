@@ -135,6 +135,7 @@ dropdowns · Fleet inbox badge.
 | 110 | Loop-3 QA checkpoint — collaboration endpoints + full page-render sweep | quality | ✅ done — 0 bugs |
 | 111 | Approval gate — block dispatch of an unreviewed change until approved | collaboration/governance | ✅ done |
 | 112 | @mentions in comments → mentions feed on Activity | collaboration | ✅ done |
+| 113 | Operator identity — set your name once (nav chip), default author/reviewer/assignee | collaboration | ✅ done |
 
 ### Loop-3 QA backlog (test at iteration 110)
 - [x] (iter 107) substantive edit (prompt/triggers/etc) flags needs_review; approve records reviewer + clears it; non-substantive edits (name) do not flag; Fleet badge.

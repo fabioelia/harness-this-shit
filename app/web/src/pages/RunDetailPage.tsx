@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useRun, useDispatchRoutine, useReplayRun, useRunDiff, useRunCompare, useRerunRun, useCancelRun, useSetBaseline, useReplayModel, useModels, useAssignRun } from '@/lib/api';
 import { Pill, Dot, Empty, stateMeta } from '@/components/sb';
 import { cn } from '@/lib/utils';
+import { useOperator } from '@/lib/operator';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -97,6 +98,7 @@ export function RunDetailPage() {
   const { data: models } = useModels();
   const [editEvent, setEditEvent] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [op] = useOperator();
   const [assignee, setAssignee] = useState("");
   const qc = useQueryClient();
   // Live trace over SSE — fills in with no polling lag, then refetches on done.
@@ -358,9 +360,9 @@ export function RunDetailPage() {
           <div className={CARD}>
             <div className={`${LABEL} mb-3`}>Triage{r.triage ? ` · ${r.triage}` : ''}</div>
             <div className="flex flex-wrap items-center gap-2">
-              <input value={assignee} onChange={(e) => setAssignee(e.target.value)} placeholder="assign to…" className="h-8 w-36 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+              <input value={assignee} onChange={(e) => setAssignee(e.target.value)} placeholder={op ? `assign (you: ${op})` : "assign to…"} className="h-8 w-36 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
               {(['open', 'investigating', 'resolved'] as const).map((st) => (
-                <button key={st} onClick={() => assign.mutate({ id: r.id, assignee: assignee.trim() || r.assignee, triage: st })} className={`h-8 rounded-md border px-2.5 font-mono text-[11.5px] font-semibold ${r.triage === st ? (st === 'resolved' ? 'border-ok/50 bg-ok/10 text-ok' : st === 'investigating' ? 'border-warn/50 bg-warn/10 text-warn' : 'border-bad/50 bg-bad/10 text-bad') : 'border-line text-dim hover:text-t2'}`}>{st}</button>
+                <button key={st} onClick={() => assign.mutate({ id: r.id, assignee: assignee.trim() || r.assignee || op, triage: st })} className={`h-8 rounded-md border px-2.5 font-mono text-[11.5px] font-semibold ${r.triage === st ? (st === 'resolved' ? 'border-ok/50 bg-ok/10 text-ok' : st === 'investigating' ? 'border-warn/50 bg-warn/10 text-warn' : 'border-bad/50 bg-bad/10 text-bad') : 'border-line text-dim hover:text-t2'}`}>{st}</button>
               ))}
             </div>
             {r.assignee && <div className="mt-2 font-mono text-[11.5px] text-dim-2">assigned to <span className="text-brand-soft">{r.assignee}</span></div>}
