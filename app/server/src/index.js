@@ -1067,7 +1067,26 @@ function lintRoutine(r, slugSet) {
 app.get('/api/lint', (_q, res) => {
   const rows = all('SELECT * FROM routines');
   const slugSet = new Set(rows.map((r) => r.slug));
-  const issues = rows.map((r) => ({ slug: r.slug, name: r.name, warnings: lintRoutine(r, slugSet) })).filter((x) => x.warnings.length);
+  // Build the chain+reaction edge graph and find cycles (would loop forever).
+  const edges = {};
+  for (const r of rows) edges[r.slug] = [...j(r.chain), ...j(r.reactions).map((x) => x.run).filter(Boolean)].filter((t) => slugSet.has(t));
+  const inCycle = new Set();
+  const cycleOf = {};
+  const WHITE = 0, GRAY = 1, BLACK = 2; const color = {}; const stack = [];
+  const dfs = (n) => {
+    color[n] = GRAY; stack.push(n);
+    for (const m of edges[n] || []) {
+      if (color[m] === GRAY) { const i = stack.indexOf(m); const cyc = stack.slice(i).concat(m); cyc.forEach((s) => { inCycle.add(s); cycleOf[s] = cyc.join(' → '); }); }
+      else if (!color[m]) dfs(m);
+    }
+    stack.pop(); color[n] = BLACK;
+  };
+  for (const r of rows) if (!color[r.slug]) dfs(r.slug);
+  const issues = rows.map((r) => {
+    const warnings = lintRoutine(r, slugSet);
+    if (inCycle.has(r.slug)) warnings.push(`dependency cycle: ${cycleOf[r.slug]} — fires forever`);
+    return { slug: r.slug, name: r.name, warnings };
+  }).filter((x) => x.warnings.length);
   res.json({ count: issues.reduce((a, x) => a + x.warnings.length, 0), issues });
 });
 // Routine flow: the chain + reaction edges between routines (the fleet's topology).
