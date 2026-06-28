@@ -288,6 +288,7 @@ export interface CreateRoutineInput {
   tags?: string[];
   rateLimit?: number;
   maxFails?: number;
+  notes?: string;
   reactions?: { source: string; kind: string; when: string; run: string; check?: string }[];
   memory?: boolean;
 }

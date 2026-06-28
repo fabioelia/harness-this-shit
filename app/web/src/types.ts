@@ -44,6 +44,7 @@ export interface Routine {
   rateLimit: number;
   maxFails: number;
   failStreak: number;
+  notes: string;
 }
 
 export interface FrontMatter {

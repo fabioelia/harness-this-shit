@@ -431,6 +431,12 @@ export function RoutineDetailPage() {
               )}
             </div>
           )}
+          {d.notes && d.notes.trim() && (
+            <div className={CARD}>
+              <div className={`${LABEL} mb-2`}>Notes · runbook</div>
+              <div className="whitespace-pre-wrap break-words font-sans text-[13px] leading-relaxed text-muted-2">{d.notes}</div>
+            </div>
+          )}
           <TestFireCard slug={d.slug} triggers={d.triggers} repo={d.repo} />
           <PromptHistoryCard slug={d.slug} />
           <MetricCard slug={d.slug} />
