@@ -293,7 +293,7 @@ export interface MetricHistory {
 }
 export const useRoutineMetric = (slug: string, enabled = true) => useQuery({ queryKey: ['metric', slug], enabled, queryFn: () => get<MetricHistory>(`/api/routines/${slug}/metric?n=30`), refetchInterval: 15000 });
 export interface RoutinePreview { prompt: string; tools: string[]; agents: string[]; wouldMatch: boolean; leaseKey: string | null; scriptMode: boolean; willCompile: boolean; allowedTools: string[]; promptChars: number; estTokens: number }
-export interface Inbox { who: string; count: number; assigned: { id: string; slug: string; triage: string; ago: string }[]; mentions: { by: string; slug: string; snippet: string; ago: string }[]; watched: { slug: string; summary: string; ago: string }[] }
+export interface Inbox { who: string; count: number; assigned: { id: string; slug: string; triage: string; ago: string }[]; mentions: { by: string; slug: string; snippet: string; ago: string }[]; watched: { slug: string; summary: string; ago: string }[]; watchedFails: { id: string; slug: string; ago: string }[] }
 export const useInbox = (who: string) => useQuery({ queryKey: ['inbox', who], enabled: !!who, queryFn: () => get<Inbox>(`/api/inbox?who=${encodeURIComponent(who)}`), refetchInterval: 12000 });
 export interface Standup { days: number; counts: { changes: number; approvals: number; comments: number; signoffs: number; resolved: number }; recent: { slug: string; summary: string; ago: string }[] }
 export const useStandup = (days = 1) => useQuery({ queryKey: ['standup', days], queryFn: () => get<Standup>(`/api/standup?days=${days}`), refetchInterval: 20000 });

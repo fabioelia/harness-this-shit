@@ -166,6 +166,7 @@ dropdowns · Fleet inbox badge.
 | 141 | Snooze with a reason (shown to the team on Fleet + detail) | collaboration | ✅ done |
 | 142 | Edit a comment (fix typos in place) | collaboration | ✅ done |
 | 143 | Upstream feeder health on routine detail (disabled/failing/missing feeders) | collaboration | ✅ done |
+| 144 | Watched-routine failure alerts in inbox (watch → notified on breakage) | collaboration | ✅ done |
 
 ### Loop-3 QA backlog (test at iteration 110)
 - [x] (iter 107) substantive edit (prompt/triggers/etc) flags needs_review; approve records reviewer + clears it; non-substantive edits (name) do not flag; Fleet badge.

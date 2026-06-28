@@ -2406,13 +2406,15 @@ app.get('/api/inbox', (req, res) => {
   const mentions = all('SELECT by, slug, snippet, created_at FROM mentions WHERE mentioned=? ORDER BY id DESC LIMIT 20', who)
     .map((m) => ({ by: m.by || 'anon', slug: m.slug, snippet: m.snippet, ago: relTime(m.created_at) }));
   const watchSlugs = all('SELECT slug FROM routine_watch WHERE who=?', who).map((x) => x.slug);
-  let watched = [];
+  let watched = []; let watchedFails = [];
   if (watchSlugs.length) {
     const ph = watchSlugs.map(() => '?').join(',');
     watched = all(`SELECT slug, summary, created_at FROM routine_audit WHERE slug IN (${ph}) AND created_at > ? ORDER BY id DESC LIMIT 15`, ...watchSlugs, now() - 3 * 86_400_000)
       .map((a) => ({ slug: a.slug, summary: a.summary, ago: relTime(a.created_at) }));
+    watchedFails = all(`SELECT id, routine_slug, created_at FROM runs WHERE routine_slug IN (${ph}) AND status='failed' AND created_at > ? ORDER BY created_at DESC LIMIT 10`, ...watchSlugs, now() - 2 * 86_400_000)
+      .map((x) => ({ id: x.id, slug: x.routine_slug, ago: relTime(x.created_at) }));
   }
-  res.json({ who, assigned, mentions, watched, count: assigned.length + mentions.length + watched.length });
+  res.json({ who, assigned, mentions, watched, watchedFails, count: assigned.length + mentions.length + watched.length + watchedFails.length });
 });
 // Team standup — a rollup of recent people-activity (changes, approvals, comments, sign-offs).
 app.get('/api/standup', (req, res) => {
