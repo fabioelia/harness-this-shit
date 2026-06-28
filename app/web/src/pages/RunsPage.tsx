@@ -25,7 +25,10 @@ export function RunsPage() {
     <div className="font-sans text-fg animate-fade-up">
       <div className="border-b border-line-soft bg-head px-[26px] py-[22px]">
         <div className="mb-3 font-mono text-[12px] font-medium text-dim"><span className="text-brand">Switchboard</span> › Runs</div>
-        <div className="font-display text-[23px] font-bold tracking-tight">Runs</div>
+        <div className="flex items-center justify-between">
+          <div className="font-display text-[23px] font-bold tracking-tight">Runs</div>
+          <a href="/api/runs.csv" download className="flex h-9 items-center gap-2 rounded-md border border-line bg-surface-2 px-3.5 font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Export CSV ↓</a>
+        </div>
         <div className="mt-1 text-[13px] text-muted-2">Every execution across the fleet — status, trigger, and how long it took.</div>
       </div>
       <div className="px-[26px] py-5 pb-[26px]">

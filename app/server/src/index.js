@@ -1262,6 +1262,19 @@ app.get('/api/routines/:slug/export', (req, res) => {
   if (!r) return res.status(404).json({ error: 'not found' });
   res.json({ switchboard: 'routine', version: 1, slug: r.slug, routine: exportBody(r) });
 });
+// Export runs as CSV (all, or one routine) for offline analysis.
+app.get('/api/runs.csv', (req, res) => {
+  const slug = req.query.routine ? String(req.query.routine) : '';
+  const rows = slug
+    ? all('SELECT * FROM runs WHERE routine_slug=? ORDER BY created_at DESC LIMIT 5000', slug)
+    : all('SELECT * FROM runs ORDER BY created_at DESC LIMIT 5000');
+  const esc = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const lines = [['id', 'routine', 'status', 'trigger', 'cost_usd', 'num_turns', 'dur', 'created_at'].join(',')];
+  for (const x of rows) lines.push([x.id, x.routine_slug, x.status, x.trigger, x.cost_usd ?? '', x.num_turns ?? '', x.dur, new Date(x.created_at).toISOString()].map(esc).join(','));
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', `attachment; filename="switchboard-runs${slug ? '-' + slug : ''}.csv"`);
+  res.send(lines.join('\n'));
+});
 // Full-text search across all run outputs (and routine slug).
 app.get('/api/runs/search', (req, res) => {
   const q = String(req.query.q || '').trim();
