@@ -1182,6 +1182,20 @@ app.get('/api/heatmap', (req, res) => {
   }
   res.json({ grid, max: Math.max(1, ...grid.flat()), days });
 });
+// Team rollup: per-team ownership, health, and spend — how the org's work divides up.
+app.get('/api/teams', (req, res) => {
+  const since = now() - 14 * 86_400_000;
+  const runAgg = {};
+  for (const x of all('SELECT routine_slug, status, cost_usd FROM runs WHERE created_at > ?', since)) { const e = (runAgg[x.routine_slug] ||= { runs: 0, cost: 0, fails: 0 }); e.runs++; e.cost += x.cost_usd || 0; if (x.status === 'failed') e.fails++; }
+  const teams = {};
+  for (const r of all('SELECT slug,team,owner,enabled FROM routines WHERE archived=0')) {
+    const t = (r.team || '').trim() || 'no team';
+    const e = (teams[t] ||= { team: t, routines: 0, enabled: 0, owners: new Set(), runs: 0, cost: 0, fails: 0 });
+    e.routines++; if (r.enabled) e.enabled++; if (r.owner && r.owner !== 'unassigned') e.owners.add(r.owner);
+    const a = runAgg[r.slug]; if (a) { e.runs += a.runs; e.cost += a.cost; e.fails += a.fails; }
+  }
+  res.json({ teams: Object.values(teams).map((t) => ({ team: t.team, routines: t.routines, enabled: t.enabled, owners: [...t.owners], runs: t.runs, cost: +t.cost.toFixed(2), failRate: t.runs ? Math.round((100 * t.fails) / t.runs) : 0 })).sort((a, b) => b.routines - a.routines) });
+});
 // Attention rollup: the single "what needs me right now" summary across signals.
 app.get('/api/attention', (_q, res) => {
   const rows = all('SELECT * FROM routines WHERE archived=0');

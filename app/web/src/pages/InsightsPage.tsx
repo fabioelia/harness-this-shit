@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures, useHeatmap, useReleaseLease, usePruneRuns, useSetRetention, useActiveRuns, useRecommendations } from '@/lib/api';
+import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures, useHeatmap, useReleaseLease, usePruneRuns, useSetRetention, useActiveRuns, useRecommendations, useTeams } from '@/lib/api';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -24,6 +24,7 @@ export function InsightsPage() {
   const [retDraft, setRetDraft] = useState<string | null>(null);
   const { data: active } = useActiveRuns();
   const { data: recs } = useRecommendations();
+  const { data: teams } = useTeams();
   const setDigest = useSetDigest();
   const sendDigest = useSendDigest();
   const [capDraft, setCapDraft] = useState('');
@@ -365,6 +366,31 @@ export function InsightsPage() {
                   {d.byEffort.map((e) => (
                     <span key={e.effort} className="rounded-md border border-line bg-surface-2 px-2.5 py-1 font-mono text-[12px]"><span className="text-t2">{e.effort}</span> <span className="text-dim-2">${e.cost.toFixed(2)}</span> <span className="text-dim">· {e.runs}r</span></span>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {teams && teams.teams.length > 0 && (
+              <div className={`${CARD} mb-[18px]`}>
+                <div className={`${LABEL} mb-3`}>By team · {teams.teams.length}</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[12.5px]">
+                    <thead><tr className="border-b border-line-soft text-left font-display text-[10px] font-semibold uppercase tracking-[0.06em] text-dim-2">
+                      <th className="pb-2 pr-3 font-medium">Team</th><th className="pb-2 px-3 text-right font-medium">Routines</th><th className="pb-2 px-3 text-right font-medium">Owners</th><th className="pb-2 px-3 text-right font-medium">Runs·14d</th><th className="pb-2 px-3 text-right font-medium">Spend</th><th className="pb-2 pl-3 text-right font-medium">Fail rate</th>
+                    </tr></thead>
+                    <tbody className="font-mono">
+                      {teams.teams.map((t) => (
+                        <tr key={t.team} className="border-b border-line-soft last:border-0">
+                          <td className="py-2 pr-3"><Link to={`/?team=${encodeURIComponent(t.team)}`} className="font-sans font-semibold text-t2 hover:text-brand">{t.team}</Link></td>
+                          <td className="py-2 px-3 text-right text-muted-2">{t.enabled}/{t.routines}</td>
+                          <td className="py-2 px-3 text-right text-dim-2" title={t.owners.join(', ')}>{t.owners.length}</td>
+                          <td className="py-2 px-3 text-right text-muted-2">{t.runs}</td>
+                          <td className="py-2 px-3 text-right text-t2">${t.cost.toFixed(2)}</td>
+                          <td className="py-2 pl-3 text-right"><span className={t.failRate > 20 ? 'text-bad' : t.failRate > 0 ? 'text-warn' : 'text-dim'}>{t.failRate}%</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}

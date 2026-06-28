@@ -36,6 +36,8 @@ async function del<T = unknown>(url: string): Promise<T> {
 }
 
 export const useStats = () => useQuery({ queryKey: ['stats'], queryFn: () => get<Stats>('/api/stats'), refetchInterval: 8000 });
+export interface Teams { teams: { team: string; routines: number; enabled: number; owners: string[]; runs: number; cost: number; failRate: number }[] }
+export const useTeams = () => useQuery({ queryKey: ['teams-rollup'], queryFn: () => get<Teams>('/api/teams'), refetchInterval: 20000 });
 export interface Attention { total: number; items: { kind: string; n: number; text: string; link: string }[] }
 export const useAttention = () => useQuery({ queryKey: ['attention'], queryFn: () => get<Attention>('/api/attention'), refetchInterval: 12000 });
 

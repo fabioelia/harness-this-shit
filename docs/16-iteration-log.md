@@ -124,6 +124,7 @@ dropdowns · Fleet inbox badge.
 | # | Direction | Theme | Status |
 |---|-----------|-------|--------|
 | 101 | Ownership visibility — Fleet owner filter + quick owner/team reassign | collaboration | ✅ done |
+| 102 | Per-team rollup (routines/owners/runs/spend/fail-rate by team) | collaboration | ✅ done |
 
 ### Loop-3 QA backlog (test at iteration 110)
 - [ ] (iter 101) Fleet owner filter; routine-detail inline owner/team reassign persists via PUT.
