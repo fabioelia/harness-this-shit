@@ -128,6 +128,7 @@ dropdowns · Fleet inbox badge.
 | 103 | Routine discussion — team comment threads (author + body) per routine | collaboration | ✅ done |
 | 104 | Routine lifecycle status (draft/active/deprecated) + Fleet badges | collaboration | ✅ done |
 | 105 | Run handoff — assign a run to a teammate + triage status (open/investigating/resolved) | collaboration | ✅ done |
+| 106 | Triage queue — shared list of unresolved failed runs (assignee + status) | collaboration | ✅ done |
 
 ### Loop-3 QA backlog (test at iteration 110)
 - [ ] (iter 103) comment post/list/delete; commentCount on detail; author persists in localStorage.

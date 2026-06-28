@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useRuns, useRunSearch, useRerunFailed } from '@/lib/api';
+import { useRuns, useRunSearch, useRerunFailed, useTriage } from '@/lib/api';
 import { Dot, Empty, stateMeta } from '@/components/sb';
 import { cn } from '@/lib/utils';
 
@@ -18,6 +18,7 @@ export function RunsPage() {
   const [oqDays, setOqDays] = useState(0);
   const { data: outHits } = useRunSearch(oq, oqDays);
   const rerunFailed = useRerunFailed();
+  const { data: triage } = useTriage();
   const failedCount = (runs ?? []).filter((r) => r.status === 'failed').length;
   const filtered = (runs ?? []).filter((r) => {
     if (status !== 'all' && !STATUS_GROUPS[status]?.includes(r.status)) return false;
@@ -38,6 +39,20 @@ export function RunsPage() {
         <div className="mt-1 text-[13px] text-muted-2">Every execution across the fleet — status, trigger, and how long it took.</div>
       </div>
       <div className="px-[26px] py-5 pb-[26px]">
+        {triage && triage.items.length > 0 && (
+          <div className="mb-4 overflow-hidden rounded-xl border border-bad/30 bg-bad/[0.04]">
+            <div className="border-b border-line-soft px-4 py-2 font-display text-[11px] font-semibold uppercase tracking-[0.07em] text-bad">Triage queue · {triage.items.length} unresolved</div>
+            {triage.items.slice(0, 8).map((t) => (
+              <Link key={t.id} to={`/runs/${t.id}`} className="flex items-center gap-3 border-b border-line-soft px-4 py-2 last:border-0 font-mono text-[11.5px] hover:bg-white/[0.015]">
+                <span className={`shrink-0 rounded px-1.5 py-px text-[10px] font-semibold ${t.triage === 'investigating' ? 'bg-warn/15 text-warn' : 'bg-bad/15 text-bad'}`}>{t.triage}</span>
+                <span className="w-[130px] shrink-0 truncate text-t2">{t.slug}</span>
+                <span className="flex-1 truncate text-dim-2">{t.summary}</span>
+                <span className="shrink-0 text-brand-soft">{t.assignee || 'unassigned'}</span>
+                <span className="w-[52px] shrink-0 text-right text-dim">{t.ago}</span>
+              </Link>
+            ))}
+          </div>
+        )}
         <div className="mb-3">
           <div className="flex items-center gap-2">
             <input value={oq} onChange={(e) => setOq(e.target.value)} placeholder="🔎 search inside run outputs…" className="h-9 flex-1 rounded-md border border-line bg-surface-2 px-3 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />

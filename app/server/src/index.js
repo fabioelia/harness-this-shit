@@ -988,6 +988,11 @@ if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(tickWatches, 45_00
 app.get('/api/health', (_q, res) => res.json({ ok: true }));
 app.get('/api/models', (_q, res) => res.json({ models: MODELS, efforts: EFFORTS, defaultModel: DEFAULT_MODEL }));
 // Live concurrency leases — who's holding what, on which entity/SHA.
+// Triage queue: recent failed runs not yet resolved — the team's shared work list.
+app.get('/api/triage', (req, res) => {
+  const rows = all("SELECT id, routine_slug, output, assignee, triage, created_at FROM runs WHERE status='failed' AND created_at > ? AND triage != 'resolved' ORDER BY created_at DESC LIMIT 50", now() - 14 * 86_400_000);
+  res.json({ items: rows.map((x) => ({ id: x.id, slug: x.routine_slug, assignee: x.assignee || '', triage: x.triage || 'open', ago: relTime(x.created_at), summary: (String(x.output || '').split('\n').filter(Boolean).pop() || '').slice(0, 90) })) });
+});
 // Currently-active runs across the fleet (running or waiting), with elapsed time.
 app.get('/api/runs/active', (_q, res) => {
   const rows = all("SELECT id, routine_slug, trigger, status, created_at FROM runs WHERE status IN ('running','waiting') ORDER BY created_at");

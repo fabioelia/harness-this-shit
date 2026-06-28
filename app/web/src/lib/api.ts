@@ -162,6 +162,8 @@ export function useArchiveRoutine() {
 export const useRoutine = (slug?: string) =>
   useQuery({ queryKey: ['routine', slug], queryFn: () => get<RoutineDetail>(`/api/routines/${slug}`), enabled: !!slug, retry: false });
 export const useRuns = () => useQuery({ queryKey: ['runs'], queryFn: () => get<RunLite[]>('/api/runs'), refetchInterval: 8000 });
+export interface Triage { items: { id: string; slug: string; assignee: string; triage: string; ago: string; summary: string }[] }
+export const useTriage = () => useQuery({ queryKey: ['triage'], queryFn: () => get<Triage>('/api/triage'), refetchInterval: 15000 });
 export function useRerunFailed() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (hours: number) => post<{ rerun: number }>('/api/runs/rerun-failed', { hours }), onSuccess: () => qc.invalidateQueries({ queryKey: ['runs'] }) });
