@@ -979,6 +979,11 @@ if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(tickWatches, 45_00
 app.get('/api/health', (_q, res) => res.json({ ok: true }));
 app.get('/api/models', (_q, res) => res.json({ models: MODELS, efforts: EFFORTS, defaultModel: DEFAULT_MODEL }));
 // Live concurrency leases — who's holding what, on which entity/SHA.
+// Currently-active runs across the fleet (running or waiting), with elapsed time.
+app.get('/api/runs/active', (_q, res) => {
+  const rows = all("SELECT id, routine_slug, trigger, status, created_at FROM runs WHERE status IN ('running','waiting') ORDER BY created_at");
+  res.json({ active: rows.map((x) => ({ id: x.id, slug: x.routine_slug, trigger: x.trigger, status: x.status, elapsed: fmtDur(now() - x.created_at), longRunning: now() - x.created_at > 8 * 60_000 })) });
+});
 // Manually release a stuck lease.
 app.delete('/api/leases', (req, res) => {
   const key = String(req.query.key || '');

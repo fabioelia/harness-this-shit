@@ -97,6 +97,7 @@ dropdowns · Fleet inbox badge.
 | 76 | Capture the actual model per run (model_used) — accurate run/override model | observability | ✅ done |
 | 77 | Quick-start templates (prefill New form: PR reviewer, daily report, CI watcher, metric) | efficiency/UX | ✅ done |
 | 78 | MTTR — mean time to recovery (fail→next success) per routine | observability | ✅ done |
+| 79 | Active-runs live panel (all running/waiting runs + elapsed) on Insights | observability | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.

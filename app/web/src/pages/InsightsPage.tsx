@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures, useHeatmap, useReleaseLease, usePruneRuns, useSetRetention } from '@/lib/api';
+import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures, useHeatmap, useReleaseLease, usePruneRuns, useSetRetention, useActiveRuns } from '@/lib/api';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -22,6 +22,7 @@ export function InsightsPage() {
   const prune = usePruneRuns();
   const setRetention = useSetRetention();
   const [retDraft, setRetDraft] = useState<string | null>(null);
+  const { data: active } = useActiveRuns();
   const setDigest = useSetDigest();
   const sendDigest = useSendDigest();
   const [capDraft, setCapDraft] = useState('');
@@ -209,6 +210,22 @@ export function InsightsPage() {
                 <span className="ml-auto">{d.daily[0]?.date} → {d.daily[d.daily.length - 1]?.date}</span>
               </div>
             </div>
+
+            {active && active.active.length > 0 && (
+              <div className={`${CARD} mb-[18px]`}>
+                <div className={`${LABEL} mb-3 flex items-center gap-2`}><span className="inline-block h-2 w-2 animate-sbpulse rounded-full bg-brand" />Running now · {active.active.length}</div>
+                <div className="flex flex-col gap-1.5 font-mono text-[12px]">
+                  {active.active.map((a) => (
+                    <div key={a.id} className="flex items-center gap-3">
+                      <Link to={`/runs/${a.id}`} className="w-[110px] shrink-0 truncate text-brand-soft hover:underline">{a.id}</Link>
+                      <Link to={`/routines/${a.slug}`} className="flex-1 truncate font-sans font-semibold text-t2 hover:text-brand">{a.slug}</Link>
+                      <span className="shrink-0 text-dim-2">{a.trigger}</span>
+                      <span className={`w-[60px] shrink-0 text-right ${a.longRunning ? 'text-bad' : 'text-dim'}`}>{a.elapsed}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {conc && conc.leases && conc.pending && (conc.leases.length > 0 || conc.pending.length > 0) && (
               <div className={`${CARD} mb-[18px]`}>

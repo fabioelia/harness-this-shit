@@ -81,6 +81,8 @@ export interface Anomalies { anomalies: { id: string; slug: string; cost: number
 export const useAnomalies = (days = 14) => useQuery({ queryKey: ['anomalies', days], queryFn: () => get<Anomalies>(`/api/anomalies?days=${days}`), refetchInterval: 20000 });
 export interface Lint { count: number; issues: { slug: string; name: string; warnings: string[] }[] }
 export const useLint = () => useQuery({ queryKey: ['lint'], queryFn: () => get<Lint>('/api/lint'), refetchInterval: 20000 });
+export interface ActiveRuns { active: { id: string; slug: string; trigger: string; status: string; elapsed: string; longRunning: boolean }[] }
+export const useActiveRuns = () => useQuery({ queryKey: ['active-runs'], queryFn: () => get<ActiveRuns>('/api/runs/active'), refetchInterval: 3000 });
 export interface Leases { leases: { key: string; runId: string; slug: string; sha: string; held: string; ttl: string }[]; pending: { slug: string; key: string; summary: string; ago: string }[] }
 export const useLeases = () => useQuery({ queryKey: ['leases'], queryFn: () => get<Leases>('/api/leases'), refetchInterval: 4000 });
 export function useReleaseLease() {
