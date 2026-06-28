@@ -8,7 +8,7 @@ const runBus = new EventEmitter();
 runBus.setMaxListeners(0);
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
+import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync, unlinkSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { getDb, all, one, run } from './db.js';
 import { runClaude, buildPrompt, allowedToolsFor } from './runner.js';
@@ -1075,6 +1075,9 @@ function lintRoutine(r, slugSet) {
   if (r.script_mode && !(r.script && r.script.trim())) w.push('script mode but the extractor is not compiled yet');
   if (r.alert_on_fail && !String(r.alert_target || '').trim() && (!r.owner || r.owner === 'unassigned')) w.push('alert-on-fail set but no target and no owner to notify');
   if ((r.max_fails || 0) > 0 && (r.retries || 0) >= r.max_fails) w.push('auto-disable threshold ≤ retries — it may never trip');
+  if (r.memory) {
+    try { const mp = join(memDirFor(r.slug), 'memory.md'); if (existsSync(mp)) { const age = now() - statSync(mp).mtimeMs; if (age > 30 * 86_400_000) w.push(`memory not updated in ${Math.round(age / 86_400_000)}d — possibly stale or not being written`); } } catch { /* ignore */ }
+  }
   return w;
 }
 app.get('/api/lint', (_q, res) => {
