@@ -78,13 +78,14 @@ dropdowns · Fleet inbox badge.
 | 57 | Run activity heatmap (day-of-week × hour) on Insights | observability | ✅ done |
 | 58 | Saved Fleet views — named filter presets (apply/save/delete) | efficiency/UX | ✅ done |
 | 59 | "Why it fired" — per-condition trigger/repo/filter match explanation on a run | reproducibility/observability | ✅ done |
+| 60 | Loop-2 QA checkpoint — endpoints + all-page render sweep | quality | ✅ done — 0 bugs |
 
 ## QA backlog — loop 2 (test at iteration 60)
-- [ ] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.
-- [ ] (iter 55) cancel kills the child session, marks failed + frees lease, labels "canceled by user", and does NOT retry/alert even with retries set.
-- [ ] (iter 56) a repeated x-github-delivery id within 10m is dropped (logged as dup, no dispatch); distinct ids + missing id pass through.
-- [ ] (iter 59) match explain re-evaluates trigger/repo/each filter condition against the run event; ✓/✗ correct; fired flag matches dispatcher.
-- [ ] (iter 51) /api/anomalies flags runs > 3× routine avg (needs ≥4 samples); ratio + avg correct; Insights card renders/empties.
+- [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.
+- [x] (iter 55) cancel kills the child session, marks failed + frees lease, labels "canceled by user", and does NOT retry/alert even with retries set.
+- [x] (iter 56) a repeated x-github-delivery id within 10m is dropped (logged as dup, no dispatch); distinct ids + missing id pass through.
+- [x] (iter 59) match explain re-evaluates trigger/repo/each filter condition against the run event; ✓/✗ correct; fired flag matches dispatcher.
+- [x] (iter 51) /api/anomalies flags runs > 3× routine avg (needs ≥4 samples); ratio + avg correct; Insights card renders/empties.
 
 ## QA backlog (test at iteration 10)
 - [x] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.
