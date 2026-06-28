@@ -48,6 +48,7 @@ export interface Routine {
   pinned: boolean;
   lastSuccessAgo: string;
   staleSuccess: boolean;
+  activeWindow: { start: number | null; end: number | null; days: number[] } | null;
 }
 
 export interface FrontMatter {

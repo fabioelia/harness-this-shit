@@ -418,6 +418,9 @@ export function NewRoutinePage() {
   const [rateLimit, setRateLimit] = useState(0);
   const [maxFails, setMaxFails] = useState(0);
   const [notes, setNotes] = useState('');
+  const [winStart, setWinStart] = useState<string>('');
+  const [winEnd, setWinEnd] = useState<string>('');
+  const [winDays, setWinDays] = useState<number[]>([]);
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('main');
   const [prompt, setPrompt] = useState('');
@@ -461,7 +464,7 @@ export function NewRoutinePage() {
     setSummary(d.summary); setOwner(d.owner); setTeam(d.team);
     setTriggers(d.triggers); setConnectors(d.connectors);
     setModel(d.model || 'claude-opus-4-8'); setEffort(d.effort || ''); setMemory(!!d.memory); setRepo(d.repo || ''); setBranch(d.branch || 'main');
-    setScriptMode(!!d.scriptMode); setScriptLang(d.scriptLang === 'node' ? 'node' : 'bash'); setRetries(d.retries || 0); setAssertions(d.assertions ?? []); setAlertOnFail(!!d.alertOnFail); setAlertTarget(d.alertTarget || ''); setTimeoutS(d.timeout || 0); setEnvPairs(Object.entries(d.env || {}).map(([k, v]) => ({ k, v: String(v) }))); setTags((d.tags || []).join(', ')); setRateLimit(d.rateLimit || 0); setMaxFails(d.maxFails || 0); setNotes(d.notes || '');
+    setScriptMode(!!d.scriptMode); setScriptLang(d.scriptLang === 'node' ? 'node' : 'bash'); setRetries(d.retries || 0); setAssertions(d.assertions ?? []); setAlertOnFail(!!d.alertOnFail); setAlertTarget(d.alertTarget || ''); setTimeoutS(d.timeout || 0); setEnvPairs(Object.entries(d.env || {}).map(([k, v]) => ({ k, v: String(v) }))); setTags((d.tags || []).join(', ')); setRateLimit(d.rateLimit || 0); setMaxFails(d.maxFails || 0); setNotes(d.notes || ''); setWinStart(d.activeWindow?.start != null ? String(d.activeWindow.start) : ''); setWinEnd(d.activeWindow?.end != null ? String(d.activeWindow.end) : ''); setWinDays(d.activeWindow?.days || []);
     setPrompt(d.prompt || '');
     setChain(d.chain.join(', '));
     if (d.schedule) setSchedule(d.schedule);
@@ -520,7 +523,7 @@ export function NewRoutinePage() {
   const valid = name.trim().length > 0 && slug.length > 0;
   function submit() {
     if (!valid) return;
-    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, scriptMode, scriptLang, retries, assertions: assertions.filter((a) => a.type === 'no_tool_errors' || a.value.trim()), alertOnFail, alertTarget, timeout: timeoutS, env: Object.fromEntries(envPairs.filter((p) => p.k.trim()).map((p) => [p.k.trim(), p.v])), tags: tags.split(',').map((t) => t.trim()).filter(Boolean), rateLimit, maxFails, notes };
+    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, scriptMode, scriptLang, retries, assertions: assertions.filter((a) => a.type === 'no_tool_errors' || a.value.trim()), alertOnFail, alertTarget, timeout: timeoutS, env: Object.fromEntries(envPairs.filter((p) => p.k.trim()).map((p) => [p.k.trim(), p.v])), tags: tags.split(',').map((t) => t.trim()).filter(Boolean), rateLimit, maxFails, notes, activeWindow: (winStart || winEnd || winDays.length) ? { start: winStart === '' ? null : +winStart, end: winEnd === '' ? null : +winEnd, days: winDays } : null };
     if (isEdit) update.mutate({ slug: editSlug!, body }, { onSuccess: () => navigate(`/routines/${editSlug}`) });
     else create.mutate(body, { onSuccess: (r) => navigate(`/routines/${r.slug}`) });
   }
@@ -655,6 +658,19 @@ export function NewRoutinePage() {
                   <div><div className={LABEL}>Max duration (s)</div><input type="number" min={0} max={1800} value={timeoutS || ''} onChange={(e) => setTimeoutS(+e.target.value)} placeholder="240 (default)" className={cn(inputCls, 'font-mono text-[12px]')} /></div>
                   <div><div className={LABEL}>Rate limit · <span className="font-mono lowercase tracking-normal text-dim-2">runs/hour, 0=off</span></div><input type="number" min={0} max={1000} value={rateLimit || ''} onChange={(e) => setRateLimit(+e.target.value)} placeholder="0 (unlimited)" className={cn(inputCls, 'font-mono text-[12px]')} /></div>
                   <div><div className={LABEL}>Auto-disable after · <span className="font-mono lowercase tracking-normal text-dim-2">consecutive fails, 0=off</span></div><input type="number" min={0} max={50} value={maxFails || ''} onChange={(e) => setMaxFails(+e.target.value)} placeholder="0 (never)" className={cn(inputCls, 'font-mono text-[12px]')} /></div>
+                  <div className="col-span-2">
+                    <div className={LABEL}>Active window · <span className="font-mono lowercase tracking-normal text-dim-2">events outside skip (blank = always)</span></div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                      <input type="number" min={0} max={23} value={winStart} onChange={(e) => setWinStart(e.target.value)} placeholder="from h" className={cn(inputCls, 'h-8 w-20 font-mono text-[12px]')} />
+                      <span className="font-mono text-[12px] text-dim">→</span>
+                      <input type="number" min={0} max={24} value={winEnd} onChange={(e) => setWinEnd(e.target.value)} placeholder="to h" className={cn(inputCls, 'h-8 w-20 font-mono text-[12px]')} />
+                      <span className="mx-1 h-5 w-px bg-line" />
+                      {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((lbl, di) => (
+                        <button key={di} type="button" onClick={() => setWinDays(winDays.includes(di) ? winDays.filter((x) => x !== di) : [...winDays, di])} className={cn('h-8 w-8 rounded-md border font-mono text-[11px]', winDays.includes(di) ? 'border-brand/50 bg-brand/15 text-brand-soft' : 'border-line text-dim hover:text-t2')}>{lbl}</button>
+                      ))}
+                    </div>
+                    <div className="mt-1 text-[11px] text-dim-2">e.g. 9 → 18 with Mo–Fr = business hours only. No days selected = every day.</div>
+                  </div>
                   <div className="col-span-2">
                     <div className={LABEL}>Environment variables <span className="font-mono lowercase tracking-normal text-dim-2">— available to the session shell & scripts</span></div>
                     {envPairs.map((p, i) => (

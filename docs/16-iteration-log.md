@@ -80,11 +80,13 @@ dropdowns · Fleet inbox badge.
 | 59 | "Why it fired" — per-condition trigger/repo/filter match explanation on a run | reproducibility/observability | ✅ done |
 | 60 | Loop-2 QA checkpoint — endpoints + all-page render sweep | quality | ✅ done — 0 bugs |
 | 61 | Cost attribution by tag (spend/runs per routine tag) | observability/efficiency | ✅ done |
+| 62 | Active window — restrict event/schedule triggers to allowed hours+weekdays | efficiency/control | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.
 - [x] (iter 55) cancel kills the child session, marks failed + frees lease, labels "canceled by user", and does NOT retry/alert even with retries set.
 - [x] (iter 56) a repeated x-github-delivery id within 10m is dropped (logged as dup, no dispatch); distinct ids + missing id pass through.
+- [ ] (iter 62) event/schedule run outside window → skipped; manual/replay/rerun bypass; midnight-wrap windows; day filter; blank = always.
 - [x] (iter 59) match explain re-evaluates trigger/repo/each filter condition against the run event; ✓/✗ correct; fired flag matches dispatcher.
 - [x] (iter 51) /api/anomalies flags runs > 3× routine avg (needs ≥4 samples); ratio + avg correct; Insights card renders/empties.
 
