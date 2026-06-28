@@ -2088,6 +2088,21 @@ app.post('/api/runs/:id/bookmark', (req, res) => {
   res.json({ ok: true });
 });
 app.delete('/api/runs/:id/bookmark', (req, res) => { run('DELETE FROM bookmarks WHERE run_id=?', req.params.id); res.json({ ok: true }); });
+// Emoji reactions — lightweight team signal on a run (toggles per person+emoji).
+const REACT_SET = ['👍', '🔥', '👀', '🎉', '❤️'];
+app.post('/api/runs/:id/react', (req, res) => {
+  if (!one('SELECT 1 FROM runs WHERE id=?', req.params.id)) return res.status(404).json({ error: 'not found' });
+  const emoji = String(req.body?.emoji || '');
+  if (!REACT_SET.includes(emoji)) return res.status(400).json({ error: 'unknown emoji' });
+  const by = String(req.body?.by || '').trim().slice(0, 40) || 'anon';
+  if (one('SELECT 1 FROM run_reactions WHERE run_id=? AND emoji=? AND by=?', req.params.id, emoji, by)) run('DELETE FROM run_reactions WHERE run_id=? AND emoji=? AND by=?', req.params.id, emoji, by);
+  else run('INSERT INTO run_reactions (run_id, emoji, by) VALUES (?,?,?)', req.params.id, emoji, by);
+  res.json({ ok: true });
+});
+function runReactions(id, me) {
+  const rows = all('SELECT emoji, by FROM run_reactions WHERE run_id=?', id);
+  return REACT_SET.map((e) => { const r = rows.filter((x) => x.emoji === e); return { emoji: e, count: r.length, mine: me ? r.some((x) => x.by === me) : false, who: r.map((x) => x.by) }; });
+}
 // Run sign-off: a teammate marks whether the agent's output was correct (QA on AI work).
 app.post('/api/runs/:id/verdict', (req, res) => {
   const x = one('SELECT id FROM runs WHERE id=?', req.params.id);
@@ -2186,6 +2201,7 @@ app.get('/api/runs/:id', (req, res) => {
     slaBreach: r && r.sla_s > 0 && x.dur_ms && x.dur_ms > r.sla_s * 1000 ? { expected: r.sla_s, actual: Math.round(x.dur_ms / 1000) } : null,
     assignee: x.assignee || '', triage: x.triage || '', verdict: x.verdict || '', verdictBy: x.verdict_by || '',
     bookmarked: !!one('SELECT 1 FROM bookmarks WHERE run_id=?', x.id),
+    reactions: runReactions(x.id, String(req.query.me || '').trim()),
     stdout: x.output, event: ev, trace, inbox, toolBreakdown,
     assertResult: jObj(x.assert_result) || null,
     lineage: { triggeredBy, downstream, watches },

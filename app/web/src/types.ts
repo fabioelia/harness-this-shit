@@ -135,6 +135,7 @@ export interface RunDetail {
   verdict: string;
   verdictBy: string;
   bookmarked: boolean;
+  reactions: { emoji: string; count: number; mine: boolean; who: string[] }[];
   inbox: { summary: string; ago: string; pending: boolean }[];
   assertResult: { passed: boolean; results: { type: string; value: string; ok: boolean; detail: string }[] } | null;
   lineage: RunLineage;

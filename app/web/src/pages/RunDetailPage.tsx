@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRun, useDispatchRoutine, useReplayRun, useRunDiff, useRunCompare, useRerunRun, useCancelRun, useSetBaseline, useReplayModel, useModels, useAssignRun, useVerdictRun, useBookmarkRun } from '@/lib/api';
+import { useRun, useDispatchRoutine, useReplayRun, useRunDiff, useRunCompare, useRerunRun, useCancelRun, useSetBaseline, useReplayModel, useModels, useAssignRun, useVerdictRun, useBookmarkRun, useReactRun } from '@/lib/api';
 import { Pill, Dot, Empty, stateMeta } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import { useOperator } from '@/lib/operator';
@@ -87,7 +87,9 @@ const pretty = (e: TE): string => { try { return JSON.stringify(JSON.parse(e.tex
 export function RunDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { data: r, isLoading } = useRun(id);
+  const [op] = useOperator();
+  const { data: r, isLoading } = useRun(id, op);
+  const react = useReactRun();
   const dispatch = useDispatchRoutine();
   const replay = useReplayRun();
   const rerun = useRerunRun();
@@ -100,7 +102,6 @@ export function RunDetailPage() {
   const { data: models } = useModels();
   const [editEvent, setEditEvent] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
-  const [op] = useOperator();
   const [assignee, setAssignee] = useState("");
   const qc = useQueryClient();
   // Live trace over SSE — fills in with no polling lag, then refetches on done.
@@ -184,6 +185,13 @@ export function RunDetailPage() {
             {r.event && (
               <button onClick={() => setEditEvent(JSON.stringify(r.event, null, 2))} title="Edit this run's event payload and re-run with the tweaks" className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Edit &amp; re-run</button>
             )}
+            <div className="flex h-[34px] items-center gap-0.5 rounded-md border border-line bg-surface-2 px-1.5">
+              {r.reactions.map((rx) => (
+                <button key={rx.emoji} onClick={() => react.mutate({ id: r.id, emoji: rx.emoji, by: op || 'anon' })} title={rx.who.length ? rx.who.join(', ') : 'react'} className={`flex items-center gap-0.5 rounded px-1 py-0.5 text-[13px] leading-none ${rx.mine ? 'bg-brand/15' : 'hover:bg-white/[0.05]'}`}>
+                  <span>{rx.emoji}</span>{rx.count > 0 && <span className={`font-mono text-[10px] ${rx.mine ? 'text-brand-soft' : 'text-dim'}`}>{rx.count}</span>}
+                </button>
+              ))}
+            </div>
             <button onClick={() => { if (r.bookmarked) bookmark.mutate({ id: r.id, on: false }); else { const label = prompt('Bookmark this run for the team — optional label:', '') ?? ''; bookmark.mutate({ id: r.id, on: true, label, by: op || 'anon' }); } }} title={r.bookmarked ? 'remove bookmark' : 'bookmark this run for the team'} className={`flex h-[34px] items-center rounded-md border px-[13px] font-display text-[12.5px] font-semibold ${r.bookmarked ? 'border-brand/50 bg-brand/10 text-brand-soft' : 'border-line bg-surface-2 text-dim hover:border-hair hover:text-t2'}`}>{r.bookmarked ? '★ saved' : '☆ save'}</button>
             <a href={`/api/runs/${r.id}/bundle`} download={`${r.id}.json`} title="Download the full run bundle (event, output, trace, metrics)" className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-dim hover:border-hair hover:text-t2">JSON ↓</a>
             {r.status === 'succeeded' && <button onClick={() => setBaseline.mutate(r.id)} disabled={setBaseline.isPending} title="Pin this output as the routine's golden baseline; future runs report drift from it" className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-dim hover:border-hair hover:text-t2">{setBaseline.isPending ? 'Pinning…' : '◎ Set baseline'}</button>}

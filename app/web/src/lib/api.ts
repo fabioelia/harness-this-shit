@@ -176,6 +176,10 @@ export interface Triage { items: { id: string; slug: string; assignee: string; t
 export const useTriage = () => useQuery({ queryKey: ['triage'], queryFn: () => get<Triage>('/api/triage'), refetchInterval: 15000 });
 export interface Bookmarks { bookmarks: { id: string; slug: string; label: string; by: string; ago: string }[] }
 export const useBookmarks = () => useQuery({ queryKey: ['bookmarks'], queryFn: () => get<Bookmarks>('/api/bookmarks'), refetchInterval: 20000 });
+export function useReactRun() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ id, emoji, by }: { id: string; emoji: string; by: string }) => post(`/api/runs/${id}/react`, { emoji, by }), onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['run', v.id] }) });
+}
 export function useBookmarkRun() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: ({ id, label, by, on }: { id: string; label?: string; by?: string; on: boolean }) => on ? post(`/api/runs/${id}/bookmark`, { label, by }) : del(`/api/runs/${id}/bookmark`), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['run', v.id] }); qc.invalidateQueries({ queryKey: ['bookmarks'] }); } });
@@ -192,10 +196,10 @@ export interface RunDiff { current: { id: string; output: string; cost: number |
 export const useRunDiff = (id: string, enabled: boolean) => useQuery({ queryKey: ['rundiff', id], enabled, queryFn: () => get<RunDiff>(`/api/runs/${id}/diff`) });
 export interface RunCompare { a: { id: string; slug: string; output: string; cost: number | null; turns: number | null; status: string; ago: string }; b: RunCompare['a'] }
 export const useRunCompare = (a: string, b: string) => useQuery({ queryKey: ['runcompare', a, b], enabled: !!a && b.trim().length > 3, queryFn: () => get<RunCompare>(`/api/runs/compare?a=${a}&b=${encodeURIComponent(b.trim())}`), retry: false });
-export const useRun = (id?: string) =>
+export const useRun = (id?: string, me = '') =>
   useQuery({
     queryKey: ['run', id],
-    queryFn: () => get<RunDetail>(`/api/runs/${id}`),
+    queryFn: () => get<RunDetail>(`/api/runs/${id}?me=${encodeURIComponent(me)}`),
     enabled: !!id,
     retry: false,
     refetchInterval: (q) => (q.state.data?.status === 'running' ? 1500 : false),
