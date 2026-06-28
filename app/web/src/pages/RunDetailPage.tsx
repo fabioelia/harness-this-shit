@@ -261,6 +261,20 @@ export function RunDetailPage() {
               <div className="mt-2 text-[11px] text-dim-2">Events coalesced onto this run instead of spawning another agent. The agent drains these via <span className="font-mono">inbox</span> before finishing.</div>
             </div>
           )}
+          {r.toolBreakdown && r.toolBreakdown.length > 0 && (
+            <div className={CARD}>
+              <div className={`${LABEL} mb-3`}>Tools used · {r.toolBreakdown.reduce((a, t) => a + t.calls, 0)} calls</div>
+              <div className="flex flex-col gap-1.5">
+                {r.toolBreakdown.map((t) => (
+                  <div key={t.tool} className="flex items-center gap-2 font-mono text-[12px]">
+                    <span className="flex-1 truncate text-t2">{t.tool}</span>
+                    <span className="text-muted-2">{t.calls} call{t.calls === 1 ? '' : 's'}</span>
+                    {t.errors > 0 && <span className="rounded bg-bad/15 px-1.5 py-px text-[10.5px] font-semibold text-bad">{t.errors} err</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <DiffCard runId={r.id} />
           {(r.lineage.triggeredBy || r.lineage.downstream.length > 0 || r.lineage.watches.length > 0) && (
             <div className={CARD}>

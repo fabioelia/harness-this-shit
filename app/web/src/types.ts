@@ -99,6 +99,7 @@ export interface RunDetail {
   cost: number | null; turns: number | null; sessionId: string;
   stdout: string; event: Record<string, unknown> | null;
   trace: TraceEvent[];
+  toolBreakdown: { tool: string; calls: number; errors: number }[];
   inbox: { summary: string; ago: string; pending: boolean }[];
   assertResult: { passed: boolean; results: { type: string; value: string; ok: boolean; detail: string }[] } | null;
   lineage: RunLineage;

@@ -1545,11 +1545,13 @@ app.get('/api/runs/:id', (req, res) => {
         .map((t) => ({ summary: t.summary, ago: relTime(t.created_at), pending: !t.handled_by }))
     : [];
 
+  const toolBreakdown = all("SELECT tool, SUM(CASE WHEN type='tool_use' THEN 1 ELSE 0 END) AS calls, SUM(CASE WHEN type='tool_result' AND ok=0 THEN 1 ELSE 0 END) AS errors FROM run_events WHERE run_id=? AND tool IS NOT NULL AND tool != '' GROUP BY tool ORDER BY calls DESC", x.id)
+    .map((t) => ({ tool: t.tool, calls: t.calls, errors: t.errors })).filter((t) => t.calls > 0 || t.errors > 0);
   res.json({
     id: x.id, routine: x.routine_slug, status: x.status, trigger: x.trigger, triggerKind: kindOf(x.trigger),
     started: new Date(x.created_at).toLocaleTimeString(), elapsed: x.dur, model: r?.model || 'claude',
     cost: x.cost_usd, turns: x.num_turns, sessionId: x.session_id,
-    stdout: x.output, event: ev, trace, inbox,
+    stdout: x.output, event: ev, trace, inbox, toolBreakdown,
     assertResult: jObj(x.assert_result) || null,
     lineage: { triggeredBy, downstream, watches },
     awaiting: running ? 'auto-mode session running…' : null,
