@@ -145,6 +145,7 @@ export function RunDetailPage() {
             {r.event && (
               <button onClick={() => setEditEvent(JSON.stringify(r.event, null, 2))} title="Edit this run's event payload and re-run with the tweaks" className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Edit &amp; re-run</button>
             )}
+            <a href={`/api/runs/${r.id}/bundle`} download={`${r.id}.json`} title="Download the full run bundle (event, output, trace, metrics)" className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-dim hover:border-hair hover:text-t2">JSON ↓</a>
             <button
               onClick={() => dispatch.mutate(r.routine, { onSuccess: (res) => navigate(`/runs/${res.runId}`) })}
               disabled={dispatch.isPending}

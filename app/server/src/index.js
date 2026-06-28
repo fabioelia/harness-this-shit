@@ -1269,6 +1269,23 @@ app.get('/api/routines/:slug/export', (req, res) => {
   if (!r) return res.status(404).json({ error: 'not found' });
   res.json({ switchboard: 'routine', version: 1, slug: r.slug, routine: exportBody(r) });
 });
+// Full single-run bundle (event + output + trace + metrics) as JSON.
+app.get('/api/runs/:id/bundle', (req, res) => {
+  const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
+  if (!x) return res.status(404).json({ error: 'not found' });
+  const trace = all('SELECT seq,t_offset,type,tool,ok,payload FROM run_events WHERE run_id=? ORDER BY seq', x.id).map((e) => {
+    let p; try { p = JSON.parse(e.payload); } catch { p = { d: e.payload }; }
+    return { seq: e.seq, ms: e.t_offset, type: e.type, tool: e.tool, ok: e.ok, text: p.d };
+  });
+  const bundle = {
+    id: x.id, routine: x.routine_slug, status: x.status, trigger: x.trigger,
+    created_at: new Date(x.created_at).toISOString(), cost_usd: x.cost_usd, num_turns: x.num_turns,
+    dur: x.dur, session_id: x.session_id, event: jObj(x.event) || null, output: x.output, trace,
+  };
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', `attachment; filename="${x.id}.json"`);
+  res.send(JSON.stringify(bundle, null, 2));
+});
 // Export runs as CSV (all, or one routine) for offline analysis.
 app.get('/api/runs.csv', (req, res) => {
   const slug = req.query.routine ? String(req.query.routine) : '';
