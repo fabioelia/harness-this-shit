@@ -85,6 +85,7 @@ export interface RoutineDetail extends Routine {
   dependents: { slug: string; name: string; enabled: boolean; via: string }[];
   mttr: { value: string; incidents: number; openIncident: boolean; downSince: string | null } | null;
   runsByDay: { date: string; runs: number; fails: number }[];
+  commentCount: number;
 }
 
 export interface RegistryServer {

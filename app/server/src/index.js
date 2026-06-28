@@ -1357,7 +1357,7 @@ app.get('/api/routines/:slug', (req, res) => {
     .map((x) => ({ slug: x.slug, name: x.name, enabled: !!x.enabled, viaChain: j(x.chain).includes(r.slug), viaReaction: j(x.reactions).some((rx) => rx.run === r.slug) }))
     .filter((x) => x.viaChain || x.viaReaction)
     .map((x) => ({ slug: x.slug, name: x.name, enabled: x.enabled, via: x.viaChain && x.viaReaction ? 'chain + reaction' : x.viaChain ? 'chain' : 'reaction' }));
-  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, script: r.script || '', lastError, costTrend, dependents, mttr, runsByDay });
+  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, script: r.script || '', lastError, costTrend, dependents, mttr, runsByDay, commentCount: one('SELECT COUNT(*) AS n FROM comments WHERE slug=?', r.slug).n });
 });
 
 function insertRoutine(b) {
@@ -2250,6 +2250,24 @@ app.post('/api/routines/:slug/enable', (req, res) => {
   run('UPDATE routines SET enabled=?, state=? WHERE slug=?', en, en ? (r.state === 'disabled' ? 'idle' : r.state) : 'disabled', r.slug);
   if (!!r.enabled !== !!en) run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', r.slug, en ? 'enabled' : 'disabled', now());
   res.json({ ok: true, enabled: !!en });
+});
+// Routine discussion — team comments / context that lives with the routine.
+app.get('/api/routines/:slug/comments', (req, res) => {
+  const rows = all('SELECT id, author, body, created_at FROM comments WHERE slug=? ORDER BY id', req.params.slug);
+  res.json({ comments: rows.map((c) => ({ id: c.id, author: c.author || 'anon', body: c.body, ago: relTime(c.created_at) })) });
+});
+app.post('/api/routines/:slug/comments', (req, res) => {
+  if (!one('SELECT 1 FROM routines WHERE slug=?', req.params.slug)) return res.status(404).json({ error: 'not found' });
+  const body = String(req.body?.body || '').trim().slice(0, 2000);
+  if (!body) return res.status(400).json({ error: 'empty comment' });
+  const author = String(req.body?.author || '').trim().slice(0, 40) || 'anon';
+  run('INSERT INTO comments (slug, author, body, created_at) VALUES (?,?,?,?)', req.params.slug, author, body, now());
+  logActivity(`${author} commented on ${req.params.slug}`, 'idle');
+  res.status(201).json({ ok: true });
+});
+app.delete('/api/routines/:slug/comments/:id', (req, res) => {
+  run('DELETE FROM comments WHERE id=? AND slug=?', req.params.id, req.params.slug);
+  res.json({ ok: true });
 });
 app.get('/api/routines/:slug/audit', (req, res) => {
   if (!one('SELECT 1 FROM routines WHERE slug=?', req.params.slug)) return res.status(404).json({ error: 'not found' });

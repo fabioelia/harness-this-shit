@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt, useRoutineAudit, useArchiveRoutine, useUpdateRoutine } from '@/lib/api';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt, useRoutineAudit, useArchiveRoutine, useUpdateRoutine, useComments, useAddComment, useDeleteComment } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { FrontMatter, RoutineDetail } from '@/types';
@@ -154,6 +154,36 @@ function CostTrendCard({ trend }: { trend: number[] }) {
           <polyline points={pts} fill="none" stroke="#5fbf86" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
           {trend.map((v, i) => <circle key={i} cx={(i / Math.max(1, trend.length - 1)) * W} cy={H - ((v - min) / span) * (H - 6) - 3} r={i === trend.length - 1 ? 2.5 : 1} fill="#5fbf86" />)}
         </svg>
+      </div>
+    </div>
+  );
+}
+function CommentsCard({ slug }: { slug: string }) {
+  const { data } = useComments(slug, true);
+  const add = useAddComment();
+  const delc = useDeleteComment();
+  const [body, setBody] = useState('');
+  const [author, setAuthor] = useState(() => { try { return localStorage.getItem('sb-author') || ''; } catch { return ''; } });
+  const submit = () => { if (!body.trim()) return; try { localStorage.setItem('sb-author', author.trim()); } catch { /**/ } add.mutate({ slug, author: author.trim() || 'anon', body: body.trim() }, { onSuccess: () => setBody('') }); };
+  return (
+    <div className={CARD}>
+      <div className={`${LABEL} mb-3`}>Discussion{data && data.comments.length ? ` · ${data.comments.length}` : ''}</div>
+      <div className="flex flex-col gap-2.5">
+        {data?.comments.map((c) => (
+          <div key={c.id} className="rounded-md border border-line-soft bg-surface-2 px-3 py-2">
+            <div className="mb-0.5 flex items-center gap-2 font-mono text-[10.5px]"><span className="font-semibold text-brand-soft">{c.author}</span><span className="text-dim">{c.ago}</span><button onClick={() => delc.mutate({ slug, id: c.id })} className="ml-auto text-dim hover:text-bad">×</button></div>
+            <div className="whitespace-pre-wrap break-words font-sans text-[12.5px] leading-relaxed text-muted-2">{c.body}</div>
+          </div>
+        ))}
+        {data && data.comments.length === 0 && <div className="font-mono text-[11.5px] text-dim">No comments yet — leave context for your team.</div>}
+        <div className="mt-1 flex flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <input value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="your name" className="h-7 w-32 rounded-md border border-line bg-surface-2 px-2 font-mono text-[11px] text-fg focus:border-brand/60 focus:outline-none" />
+            <span className="font-mono text-[10px] text-dim-2">saved locally</span>
+          </div>
+          <textarea value={body} onChange={(e) => setBody(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit(); }} rows={2} placeholder="add a comment… (⌘↵ to post)" className="w-full rounded-md border border-line bg-surface-2 px-2.5 py-1.5 font-sans text-[12.5px] text-fg focus:border-brand/60 focus:outline-none" />
+          <button onClick={submit} disabled={add.isPending || !body.trim()} className="self-start h-7 rounded-md border border-brand/50 bg-brand/10 px-3 font-display text-[12px] font-semibold text-brand-soft hover:bg-brand/20 disabled:opacity-40">Post</button>
+        </div>
       </div>
     </div>
   );
@@ -541,6 +571,7 @@ export function RoutineDetailPage() {
           )}
           <TestFireCard slug={d.slug} triggers={d.triggers} repo={d.repo} />
           <PromptHistoryCard slug={d.slug} />
+          <CommentsCard slug={d.slug} />
           <AuditCard slug={d.slug} />
           {d.dependents && d.dependents.length > 0 && (
             <div className={CARD}>

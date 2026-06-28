@@ -269,6 +269,16 @@ export interface MetricHistory {
 }
 export const useRoutineMetric = (slug: string, enabled = true) => useQuery({ queryKey: ['metric', slug], enabled, queryFn: () => get<MetricHistory>(`/api/routines/${slug}/metric?n=30`), refetchInterval: 15000 });
 export interface RoutinePreview { prompt: string; tools: string[]; agents: string[]; wouldMatch: boolean; leaseKey: string | null; scriptMode: boolean; willCompile: boolean; allowedTools: string[]; promptChars: number; estTokens: number }
+export interface Comments { comments: { id: number; author: string; body: string; ago: string }[] }
+export const useComments = (slug: string, enabled = true) => useQuery({ queryKey: ['comments', slug], enabled, queryFn: () => get<Comments>(`/api/routines/${slug}/comments`) });
+export function useAddComment() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ slug, author, body }: { slug: string; author: string; body: string }) => post(`/api/routines/${slug}/comments`, { author, body }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['comments', v.slug] }); qc.invalidateQueries({ queryKey: ['routine', v.slug] }); } });
+}
+export function useDeleteComment() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ slug, id }: { slug: string; id: number }) => del(`/api/routines/${slug}/comments/${id}`), onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['comments', v.slug] }) });
+}
 export interface Audit { entries: { summary: string; ago: string }[] }
 export const useRoutineAudit = (slug: string, enabled = true) => useQuery({ queryKey: ['audit', slug], enabled, queryFn: () => get<Audit>(`/api/routines/${slug}/audit`) });
 export function useSnooze() {
