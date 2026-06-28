@@ -417,6 +417,7 @@ export function NewRoutinePage() {
   const [alertOnFail, setAlertOnFail] = useState(false);
   const [alertTarget, setAlertTarget] = useState('');
   const [escalation, setEscalation] = useState('');
+  const [linksText, setLinksText] = useState('');
   const [timeoutS, setTimeoutS] = useState(0);
   const [envPairs, setEnvPairs] = useState<{ k: string; v: string }[]>([]);
   const [tags, setTags] = useState('');
@@ -473,7 +474,7 @@ export function NewRoutinePage() {
     setSummary(d.summary); setOwner(d.owner); setTeam(d.team);
     setTriggers(d.triggers); setConnectors(d.connectors);
     setModel(d.model || 'claude-opus-4-8'); setEffort(d.effort || ''); setMemory(!!d.memory); setRepo(d.repo || ''); setBranch(d.branch || 'main');
-    setScriptMode(!!d.scriptMode); setScriptLang(d.scriptLang === 'node' ? 'node' : 'bash'); setRetries(d.retries || 0); setAssertions(d.assertions ?? []); setAlertOnFail(!!d.alertOnFail); setAlertTarget(d.alertTarget || ''); setEscalation(d.escalation || ''); setTimeoutS(d.timeout || 0); setEnvPairs(Object.entries(d.env || {}).map(([k, v]) => ({ k, v: String(v) }))); setTags((d.tags || []).join(', ')); setLifecycle(d.lifecycle || 'active'); setGateReview(!!d.gateReview); setTier(d.tier || 'standard'); setRateLimit(d.rateLimit || 0); setMaxFails(d.maxFails || 0); setSla(d.sla || 0); setNotes(d.notes || ''); setWinStart(d.activeWindow?.start != null ? String(d.activeWindow.start) : ''); setWinEnd(d.activeWindow?.end != null ? String(d.activeWindow.end) : ''); setWinDays(d.activeWindow?.days || []);
+    setScriptMode(!!d.scriptMode); setScriptLang(d.scriptLang === 'node' ? 'node' : 'bash'); setRetries(d.retries || 0); setAssertions(d.assertions ?? []); setAlertOnFail(!!d.alertOnFail); setAlertTarget(d.alertTarget || ''); setEscalation(d.escalation || ''); setLinksText((d.links || []).map((l) => `${l.label} | ${l.url}`).join('\n')); setTimeoutS(d.timeout || 0); setEnvPairs(Object.entries(d.env || {}).map(([k, v]) => ({ k, v: String(v) }))); setTags((d.tags || []).join(', ')); setLifecycle(d.lifecycle || 'active'); setGateReview(!!d.gateReview); setTier(d.tier || 'standard'); setRateLimit(d.rateLimit || 0); setMaxFails(d.maxFails || 0); setSla(d.sla || 0); setNotes(d.notes || ''); setWinStart(d.activeWindow?.start != null ? String(d.activeWindow.start) : ''); setWinEnd(d.activeWindow?.end != null ? String(d.activeWindow.end) : ''); setWinDays(d.activeWindow?.days || []);
     setPrompt(d.prompt || '');
     setChain(d.chain.join(', '));
     if (d.schedule) setSchedule(d.schedule);
@@ -543,7 +544,7 @@ export function NewRoutinePage() {
   }
   function submit() {
     if (!valid) return;
-    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, scriptMode, scriptLang, retries, assertions: assertions.filter((a) => a.type === 'no_tool_errors' || a.value.trim()), alertOnFail, alertTarget, escalation, timeout: timeoutS, env: Object.fromEntries(envPairs.filter((p) => p.k.trim()).map((p) => [p.k.trim(), p.v])), tags: tags.split(',').map((t) => t.trim()).filter(Boolean), rateLimit, maxFails, notes, sla, lifecycle, gateReview, tier, editor: operator, activeWindow: (winStart || winEnd || winDays.length) ? { start: winStart === '' ? null : +winStart, end: winEnd === '' ? null : +winEnd, days: winDays } : null };
+    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, scriptMode, scriptLang, retries, assertions: assertions.filter((a) => a.type === 'no_tool_errors' || a.value.trim()), alertOnFail, alertTarget, escalation, links: linksText.split('\n').map((ln) => { const i = ln.indexOf('|'); return i < 0 ? { label: '', url: ln.trim() } : { label: ln.slice(0, i).trim(), url: ln.slice(i + 1).trim() }; }).filter((l) => l.url), timeout: timeoutS, env: Object.fromEntries(envPairs.filter((p) => p.k.trim()).map((p) => [p.k.trim(), p.v])), tags: tags.split(',').map((t) => t.trim()).filter(Boolean), rateLimit, maxFails, notes, sla, lifecycle, gateReview, tier, editor: operator, activeWindow: (winStart || winEnd || winDays.length) ? { start: winStart === '' ? null : +winStart, end: winEnd === '' ? null : +winEnd, days: winDays } : null };
     if (isEdit) update.mutate({ slug: editSlug!, body }, { onSuccess: () => navigate(`/routines/${editSlug}`) });
     else create.mutate(body, { onSuccess: (r) => navigate(`/routines/${r.slug}`) });
   }
@@ -724,6 +725,7 @@ export function NewRoutinePage() {
                     <div className="mt-1 text-[11px] text-dim-2">When a run finally fails (after retries), Slack-DMs the target so nobody has to watch the dashboard.</div>
                   </div>
                   <div className="col-span-2"><div className={LABEL}>Escalation contact · <span className="font-mono lowercase tracking-normal text-dim-2">CC'd on failure alerts when the owner is out</span></div><input value={escalation} onChange={(e) => setEscalation(e.target.value)} placeholder="@oncall or #incidents" className={cn(inputCls, 'font-mono text-[12px]')} /></div>
+                  <div className="col-span-2"><div className={LABEL}>Reference links · <span className="font-mono lowercase tracking-normal text-dim-2">one per line — "Label | https://url" (runbook, dashboard, design doc)</span></div><textarea value={linksText} onChange={(e) => setLinksText(e.target.value)} rows={3} placeholder={'Runbook | https://wiki/...\nDashboard | https://grafana/...'} className={cn(inputCls, 'font-mono text-[12px]')} /></div>
                   <div className="col-span-2">
                     <label className="flex cursor-pointer items-center gap-2 text-[12px] text-t2"><input type="checkbox" checked={gateReview} onChange={(e) => setGateReview(e.target.checked)} className="h-4 w-4 accent-[#e6b052]" />Require approval to run</label>
                     <div className="mt-1 text-[11px] text-dim-2">When a config change is unreviewed, event/schedule dispatch is blocked until a teammate approves (manual runs still allowed).</div>

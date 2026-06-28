@@ -59,6 +59,7 @@ export interface Routine {
   gateReview: boolean;
   tier: string;
   escalation: string;
+  links: { label: string; url: string }[];
 }
 
 export interface FrontMatter {

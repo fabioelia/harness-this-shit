@@ -600,6 +600,9 @@ export function RoutineDetailPage() {
               {d.escalation && <div className="flex items-center gap-2"><span className="w-[80px] shrink-0 text-dim">escalation</span><span className="text-warn">{d.escalation}</span></div>}
               {d.lastTouched && <div className="flex items-start gap-2"><span className="w-[80px] shrink-0 text-dim">last change</span><span className="text-t2">{d.lastTouched.summary} · {d.lastTouched.ago}</span></div>}
               <div className="flex items-start gap-2"><span className="w-[80px] shrink-0 text-dim">watching</span><span className="flex-1 text-dim-2">{d.watchers.length ? d.watchers.map((w) => <span key={w} className="mr-1 rounded bg-lease/10 px-1.5 py-px text-lease">{w}</span>) : 'nobody yet'}</span></div>
+              {d.links && d.links.length > 0 && (
+                <div className="flex items-start gap-2"><span className="w-[80px] shrink-0 text-dim">links</span><span className="flex flex-1 flex-wrap gap-x-3 gap-y-1">{d.links.map((l, i) => <a key={i} href={l.url} target="_blank" rel="noreferrer" className="text-brand hover:underline">{l.label || l.url} ↗</a>)}</span></div>
+              )}
             </div>
           </div>
           {d.dependents && d.dependents.length > 0 && (
