@@ -896,6 +896,15 @@ app.get('/api/github/labels', async (req, res) => {
   res.json({ labels: r.code === 0 ? r.out.split('\n').map((s) => s.trim()).filter(Boolean) : [] });
 });
 
+// Live concurrency: leases currently held + inbox tasks waiting to be picked up.
+app.get('/api/leases', (_q, res) => {
+  const leases = all('SELECT * FROM leases ORDER BY acquired_at DESC').map((l) => ({
+    key: l.key, runId: l.run_id, slug: l.routine_slug, sha: (l.head_sha || '').slice(0, 7),
+    held: relTime(l.acquired_at), ttl: l.expires_at > now() ? `${Math.round((l.expires_at - now()) / 1000)}s` : 'expired',
+  }));
+  const pending = all("SELECT * FROM run_tasks WHERE handled_by='' ORDER BY created_at DESC LIMIT 40").map((t) => ({ slug: t.routine_slug, key: t.lease_key, summary: t.summary, ago: relTime(t.created_at) }));
+  res.json({ leases, pending });
+});
 // Routine flow: the chain + reaction edges between routines (the fleet's topology).
 app.get('/api/graph', (_q, res) => {
   const rows = all('SELECT slug,name,chain,reactions FROM routines WHERE enabled=1');

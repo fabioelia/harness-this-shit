@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInsights, useSchedule, useSetBudget, useGraph } from '@/lib/api';
+import { useInsights, useSchedule, useSetBudget, useGraph, useLeases } from '@/lib/api';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -13,6 +13,7 @@ export function InsightsPage() {
   const { data: sched } = useSchedule(48);
   const setBudget = useSetBudget();
   const { data: graph } = useGraph();
+  const { data: conc } = useLeases();
   const [capDraft, setCapDraft] = useState('');
   const maxCost = Math.max(0.0001, ...(d?.daily ?? []).map((x) => x.cost));
   const maxRuns = Math.max(1, ...(d?.daily ?? []).map((x) => x.runs));
@@ -102,6 +103,31 @@ export function InsightsPage() {
                 <span className="ml-auto">{d.daily[0]?.date} → {d.daily[d.daily.length - 1]?.date}</span>
               </div>
             </div>
+
+            {conc && (conc.leases.length > 0 || conc.pending.length > 0) && (
+              <div className={`${CARD} mb-[18px]`}>
+                <div className={`${LABEL} mb-3`}>Concurrency · live</div>
+                {conc.leases.length > 0 && (
+                  <div className="mb-2 flex flex-col gap-1 font-mono text-[12px]">
+                    {conc.leases.map((l, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <span className="text-lease">🔒 {l.key}</span>
+                        <Link to={`/runs/${l.runId}`} className="text-dim hover:text-brand">{l.runId}</Link>
+                        {l.sha && <span className="text-dim-2">@{l.sha}</span>}
+                        <span className="ml-auto text-dim">held {l.held} · ttl {l.ttl}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {conc.pending.length > 0 && (
+                  <div className="flex flex-col gap-1 font-mono text-[11.5px]">
+                    {conc.pending.map((t, i) => (
+                      <div key={i} className="flex items-center gap-2 text-dim-2"><span className="text-warn">📥 queued</span><Link to={`/routines/${t.slug}`} className="text-t2 hover:text-brand">{t.slug}</Link><span className="flex-1 truncate">{t.summary}</span><span className="text-dim">{t.ago}</span></div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {graph && graph.edges.length > 0 && (
               <div className={`${CARD} mb-[18px]`}>

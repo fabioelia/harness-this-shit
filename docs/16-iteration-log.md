@@ -44,6 +44,7 @@ dropdowns · Fleet inbox badge.
 | 24 | Routine tags + Fleet tag filter + row chips | organization/UX | ✅ done |
 | 25 | Per-routine rate limit (max runs/hour, drops excess as skipped) | efficiency/eliminating-humans | ✅ done |
 | 26 | Prompt version history + restore (snapshots on edit) | reproducibility | ✅ done |
+| 27 | Live concurrency view — held leases + queued inbox tasks (fleet-wide) | observability | ✅ done |
 
 ## QA backlog (test at iteration 10)
 - [x] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.
