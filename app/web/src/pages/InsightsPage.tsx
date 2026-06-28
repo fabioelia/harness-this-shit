@@ -177,6 +177,19 @@ export function InsightsPage() {
               </div>
             )}
 
+            {d.dispatch && Object.keys(d.dispatch).length > 0 && (
+              <div className={`${CARD} mb-[18px]`}>
+                <div className={`${LABEL} mb-3`}>Dispatch outcomes · {days}d</div>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(d.dispatch).sort((a, b) => b[1] - a[1]).map(([st, n]) => {
+                    const tone = st === 'succeeded' ? 'text-ok border-ok/30' : st === 'failed' ? 'text-bad border-bad/30' : st === 'coalesced' || st === 'waiting' ? 'text-lease border-lease/30' : 'text-dim border-line';
+                    return <span key={st} className={`rounded-md border px-2.5 py-1 font-mono text-[12px] ${tone}`}>{n} <span className="opacity-70">{st}</span></span>;
+                  })}
+                </div>
+                <div className="mt-2 font-mono text-[10.5px] text-dim-2">every run outcome — admitted (succeeded/failed) vs stood-down (skipped/coalesced/waiting).</div>
+              </div>
+            )}
+
             {d.byModel && d.byModel.length > 0 && (
               <div className={`${CARD} mb-[18px]`}>
                 <div className={`${LABEL} mb-3`}>Spend by model</div>

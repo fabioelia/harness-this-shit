@@ -64,6 +64,7 @@ dropdowns · Fleet inbox badge.
 | 44 | Last-success freshness — last ✓ ago + stale (>7d) badge | observability | ✅ done |
 | 45 | Keyboard shortcuts help overlay (? toggles) | UX | ✅ done |
 | 46 | Single-run JSON bundle export (event+output+trace+metrics) | reproducibility | ✅ done |
+| 47 | Dispatch outcome counters (full status mix over window) | observability | ✅ done |
 
 ## QA backlog (test at iteration 10)
 - [x] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.

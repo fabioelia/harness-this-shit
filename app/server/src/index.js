@@ -1007,6 +1007,8 @@ app.get('/api/insights', (req, res) => {
     p.runs++; p.cost += r.cost_usd || 0; p.turns += r.num_turns || 0; if (r.dur_ms) { p.ms += r.dur_ms; p.nMs++; } if (r.status === 'failed') p.fails++;
     T.runs++; T.cost += r.cost_usd || 0; T.turns += r.num_turns || 0; if (r.dur_ms) { T.ms += r.dur_ms; T.nMs++; } if (r.status === 'failed') T.fails++;
   }
+  const dispatch = {};
+  for (const d of all('SELECT status, COUNT(*) AS n FROM runs WHERE created_at > ? GROUP BY status', since)) dispatch[d.status] = d.n;
   const modelOf = Object.fromEntries(all('SELECT slug,model FROM routines').map((x) => [x.slug, x.model]));
   const byM = {};
   for (const r of rows) { const m = modelOf[r.routine_slug] || 'unknown'; const e = (byM[m] ||= { model: m, runs: 0, cost: 0 }); e.runs++; e.cost += r.cost_usd || 0; }
@@ -1019,7 +1021,7 @@ app.get('/api/insights', (req, res) => {
   res.json({
     days,
     daily: Object.values(daily).map((d) => ({ ...d, cost: +d.cost.toFixed(4) })),
-    perRoutine, byModel,
+    perRoutine, byModel, dispatch,
     totals: { runs: T.runs, cost: +T.cost.toFixed(2), turns: T.turns, avgMs: T.nMs ? Math.round(T.ms / T.nMs) : 0, fails: T.fails, failRate: T.runs ? Math.round((100 * T.fails) / T.runs) : 0 },
     budget: { cap: budgetCap(), today: +todaySpend().toFixed(2), over: overBudget() },
     digest: { channel: metaGet('digest_channel', ''), hour: parseInt(metaGet('digest_hour', '-1'), 10) },
