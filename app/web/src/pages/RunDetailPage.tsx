@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRun, useDispatchRoutine } from '@/lib/api';
+import { useRun, useDispatchRoutine, useReplayRun } from '@/lib/api';
 import { Pill, Dot, Empty, stateMeta } from '@/components/sb';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
@@ -25,6 +25,7 @@ export function RunDetailPage() {
   const navigate = useNavigate();
   const { data: r, isLoading } = useRun(id);
   const dispatch = useDispatchRoutine();
+  const replay = useReplayRun();
   const qc = useQueryClient();
   // Live trace over SSE — fills in with no polling lag, then refetches on done.
   const [liveTrace, setLiveTrace] = useState<TE[]>([]);
@@ -57,20 +58,31 @@ export function RunDetailPage() {
             <span className="font-mono text-[22px] font-bold tracking-tight">{r.id}</span>
             <Pill label={m.label} color={m.color} />
           </div>
-          <button
-            onClick={() => dispatch.mutate(r.routine, { onSuccess: (res) => navigate(`/runs/${res.runId}`) })}
-            disabled={dispatch.isPending}
-            className="flex h-[34px] items-center gap-[7px] rounded-md border border-line bg-surface-2 px-3.5 font-display text-[12.5px] font-semibold text-t2 transition-colors hover:border-hair disabled:opacity-40"
-          >
-            <svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M3 9a6 6 0 1 1 1.8 4.3" /><path d="M3 13v-3h3" /></svg>
-            {dispatch.isPending ? 'Re-running…' : 'Re-run'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => replay.mutate(r.id, { onSuccess: (res) => navigate(`/runs/${res.runId}`) })}
+              disabled={replay.isPending}
+              title="Re-run with this run's exact original event payload (reproducible)"
+              className="flex h-[34px] items-center gap-[7px] rounded-md border border-brand/50 bg-brand/10 px-3.5 font-display text-[12.5px] font-semibold text-brand-soft transition-colors hover:bg-brand/20 disabled:opacity-40"
+            >
+              <svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M3 9a6 6 0 1 1 1.8 4.3" /><path d="M3 13v-3h3" /></svg>
+              {replay.isPending ? 'Replaying…' : 'Replay'}
+            </button>
+            <button
+              onClick={() => dispatch.mutate(r.routine, { onSuccess: (res) => navigate(`/runs/${res.runId}`) })}
+              disabled={dispatch.isPending}
+              title="Run the routine fresh (new manual event)"
+              className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-3.5 font-display text-[12.5px] font-semibold text-t2 transition-colors hover:border-hair disabled:opacity-40"
+            >
+              {dispatch.isPending ? 'Running…' : 'Re-run'}
+            </button>
+          </div>
         </div>
         <div className="mt-[11px] flex flex-wrap items-center gap-3.5 font-mono text-[12px] font-medium text-muted-2">
           <span>routine <Link to={`/routines/${r.routine}`} className="text-brand">{r.routine}</Link></span>
           <span className="text-hair">|</span>
-          <span className={r.triggerKind === 'reaction' ? 'text-lease' : r.triggerKind === 'chain' ? 'text-brand-soft' : ''}>
-            {r.triggerKind === 'reaction' ? '⚡ reaction · ' : r.triggerKind === 'chain' ? '↳ chained · ' : 'trigger '}{r.trigger.replace(/^(after|reaction) · /, '')}
+          <span className={r.triggerKind === 'reaction' ? 'text-lease' : r.triggerKind === 'chain' || r.triggerKind === 'replay' ? 'text-brand-soft' : ''}>
+            {r.triggerKind === 'reaction' ? '⚡ reaction · ' : r.triggerKind === 'chain' ? '↳ chained · ' : r.triggerKind === 'replay' ? '⟲ replay of ' : 'trigger '}{r.trigger.replace(/^(after|reaction|replay) · /, '')}
           </span>
           {r.lineage?.triggeredBy && <span className="text-muted-2">from <Link to={`/runs/${r.lineage.triggeredBy.runId}`} className="text-brand">{r.lineage.triggeredBy.routine}</Link></span>}
           <span className="text-hair">|</span><span>started {r.started}</span>

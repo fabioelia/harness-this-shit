@@ -169,6 +169,10 @@ export function useDispatchRoutine() {
     },
   });
 }
+export function useReplayRun() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (id: string) => post<{ ok: boolean; runId: string }>(`/api/runs/${id}/replay`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['runs'] }); } });
+}
 export function useRecompile() {
   const qc = useQueryClient();
   return useMutation({

@@ -1179,6 +1179,18 @@ app.get('/api/runs/:id/stream', (req, res) => {
 // The running agent's inbox — events coalesced onto this run's lease. POST claims them
 // (the `inbox` tool), so the agent fetches new work before wrapping up.
 const runLeaseKey = (x) => { const r = one('SELECT * FROM routines WHERE slug=?', x.routine_slug); return r ? leaseFor(r, jObj(x.event) || {}).key : null; };
+// Reproducibility: re-execute a run with its EXACT original event payload.
+app.post('/api/runs/:id/replay', (req, res) => {
+  const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
+  if (!x) return res.status(404).json({ error: 'not found' });
+  const r = one('SELECT * FROM routines WHERE slug=?', x.routine_slug);
+  if (!r) return res.status(404).json({ error: 'routine no longer exists' });
+  if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
+  const ev = jObj(x.event) || {};
+  delete ev._attempt; delete ev._recompile;
+  const runId = executeRoutine(r, { ...ev, _replay: true, upstream: { routine: r.slug, run: x.id } }, `replay · ${x.id}`);
+  res.json({ ok: true, runId });
+});
 app.post('/api/runs/:id/inbox', (req, res) => {
   const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
   if (!x) return res.status(404).json({ error: 'not found' });
@@ -1204,7 +1216,7 @@ app.get('/api/runs/:id', (req, res) => {
 
   // Lineage: who kicked this run off, and what it kicked off (chains + reactions).
   const ev = jObj(x.event) || {};
-  const kindOf = (trig) => (String(trig).startsWith('reaction') ? 'reaction' : String(trig).startsWith('after') ? 'chain' : 'trigger');
+  const kindOf = (trig) => (String(trig).startsWith('reaction') ? 'reaction' : String(trig).startsWith('after') ? 'chain' : String(trig).startsWith('replay') ? 'replay' : 'trigger');
   const triggeredBy = ev.upstream?.run ? { runId: ev.upstream.run, routine: ev.upstream.routine, kind: kindOf(x.trigger) } : null;
   const downstream = all('SELECT id, routine_slug, trigger, status, dur, event FROM runs WHERE id != ? AND event LIKE ? ORDER BY created_at', x.id, `%${x.id}%`)
     .filter((d) => (jObj(d.event)?.upstream?.run) === x.id)
