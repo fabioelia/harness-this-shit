@@ -1266,11 +1266,18 @@ app.get('/api/routines/:slug', (req, res) => {
   const lf = one("SELECT id, output, created_at FROM runs WHERE routine_slug=? AND status='failed' ORDER BY created_at DESC, ord DESC LIMIT 1", r.slug);
   const lastError = lf ? { runId: lf.id, output: String(lf.output || '').slice(0, 400), ago: relTime(lf.created_at) } : null;
   const costTrend = all("SELECT cost_usd FROM runs WHERE routine_slug=? AND status='succeeded' AND cost_usd IS NOT NULL AND cost_usd > 0 ORDER BY created_at DESC, ord DESC LIMIT 24", r.slug).reverse().map((x) => +x.cost_usd.toFixed(4));
+  const hist = all("SELECT status, created_at FROM runs WHERE routine_slug=? AND status IN ('succeeded','failed') ORDER BY created_at, ord", r.slug);
+  let failStart = null; const gaps = [];
+  for (const h of hist) {
+    if (h.status === 'failed' && failStart == null) failStart = h.created_at;
+    else if (h.status === 'succeeded' && failStart != null) { gaps.push(h.created_at - failStart); failStart = null; }
+  }
+  const mttr = gaps.length ? { value: fmtDur(Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length)), incidents: gaps.length, openIncident: failStart != null } : (failStart != null ? { value: '—', incidents: 0, openIncident: true } : null);
   const dependents = all('SELECT slug,name,chain,reactions,enabled FROM routines WHERE slug != ?', r.slug)
     .map((x) => ({ slug: x.slug, name: x.name, enabled: !!x.enabled, viaChain: j(x.chain).includes(r.slug), viaReaction: j(x.reactions).some((rx) => rx.run === r.slug) }))
     .filter((x) => x.viaChain || x.viaReaction)
     .map((x) => ({ slug: x.slug, name: x.name, enabled: x.enabled, via: x.viaChain && x.viaReaction ? 'chain + reaction' : x.viaChain ? 'chain' : 'reaction' }));
-  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, script: r.script || '', lastError, costTrend, dependents });
+  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, script: r.script || '', lastError, costTrend, dependents, mttr });
 });
 
 function insertRoutine(b) {
