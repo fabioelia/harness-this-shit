@@ -62,7 +62,7 @@ export interface Graph { edges: { from: string; to: string; kind: string; label:
 export const useGraph = () => useQuery({ queryKey: ['graph'], queryFn: () => get<Graph>('/api/graph'), refetchInterval: 30000 });
 export interface Leases { leases: { key: string; runId: string; slug: string; sha: string; held: string; ttl: string }[]; pending: { slug: string; key: string; summary: string; ago: string }[] }
 export const useLeases = () => useQuery({ queryKey: ['leases'], queryFn: () => get<Leases>('/api/leases'), refetchInterval: 4000 });
-export interface Schedule { hours: number; count: number; upcoming: { slug: string; name: string; cron: string; at: number; when: string; in: string }[] }
+export interface Schedule { hours: number; count: number; upcoming: { slug: string; name: string; cron: string; at: number; when: string; in: string }[]; missed: { slug: string; name: string; cron: string; expected: number; ago: string }[] }
 export const useSchedule = (hours = 48) => useQuery({ queryKey: ['schedule', hours], queryFn: () => get<Schedule>(`/api/schedule?hours=${hours}`), refetchInterval: 30000 });
 
 // GitHub webhooks

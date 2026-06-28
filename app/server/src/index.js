@@ -977,7 +977,16 @@ app.get('/api/schedule', (req, res) => {
     }
   }
   upcoming.sort((a, b) => a.at - b.at);
-  res.json({ hours, count: upcoming.length, upcoming });
+  // Missed: a schedule whose most recent expected fire (last 26h) produced no run.
+  const missed = [];
+  for (const r of rows) {
+    let lastExp = null;
+    for (let m = 2; m <= 26 * 60; m++) { const d = new Date(start.getTime() - m * 60_000); if (cronMatches(r.schedule, d)) { lastExp = d.getTime(); break; } }
+    if (!lastExp) continue;
+    const lastRun = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND trigger LIKE 'schedule%'", r.slug)?.t || 0;
+    if (lastRun < lastExp - 60_000) missed.push({ slug: r.slug, name: r.name, cron: r.schedule, expected: lastExp, ago: relTime(lastExp) });
+  }
+  res.json({ hours, count: upcoming.length, upcoming, missed });
 });
 // Observability: cost / runs / turns / latency over time and per routine.
 app.get('/api/insights', (req, res) => {

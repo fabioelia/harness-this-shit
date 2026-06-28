@@ -50,6 +50,7 @@ dropdowns · Fleet inbox badge.
 | 30 | Command palette (⌘K) — fuzzy jump to routines + pages | UX | ✅ done |
 | 31 | Diff a run vs the previous run (LCS line diff + cost/turns deltas) | reproducibility | ✅ done |
 | 32 | Bulk fleet ops — multi-select enable/disable/snooze/wake/delete | efficiency/UX | ✅ done |
+| 33 | Missed-schedule detection — overdue cron fires with no run (26h window) | observability/eliminating-humans | ✅ done |
 
 ## QA backlog (test at iteration 10)
 - [x] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.

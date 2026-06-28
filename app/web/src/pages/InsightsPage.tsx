@@ -88,6 +88,22 @@ export function InsightsPage() {
               <Stat label="Failure rate" value={`${d.totals.failRate}%`} sub={`${d.totals.fails} failed`} />
             </div>
 
+            {sched && sched.missed && sched.missed.length > 0 && (
+              <div className={`${CARD} mb-[18px]`} style={{ borderColor: 'rgba(230,176,82,.4)' }}>
+                <div className="mb-2 font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-warn">⚠ Missed scheduled runs · {sched.missed.length}</div>
+                <div className="flex flex-col gap-1.5 font-mono text-[12px]">
+                  {sched.missed.map((u, i) => (
+                    <div key={i} className="flex items-center gap-3">
+                      <Link to={`/routines/${u.slug}`} className="flex-1 truncate font-sans font-semibold text-t2 hover:text-brand">{u.name}</Link>
+                      <span className="text-dim">{u.cron}</span>
+                      <span className="text-warn">expected {u.ago}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 font-mono text-[10.5px] text-dim-2">A cron fire window passed with no run — the harness was down, paused, or the routine was disabled/snoozed.</div>
+              </div>
+            )}
+
             {sched && sched.upcoming.length > 0 && (
               <div className={`${CARD} mb-[18px]`}>
                 <div className={`${LABEL} mb-3`}>Upcoming scheduled runs · next 48h</div>
