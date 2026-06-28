@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures, useHeatmap, useReleaseLease } from '@/lib/api';
+import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures, useHeatmap, useReleaseLease, usePruneRuns, useSetRetention } from '@/lib/api';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -19,6 +19,9 @@ export function InsightsPage() {
   const { data: failures } = useFailures(7);
   const { data: heat } = useHeatmap(30);
   const releaseLease = useReleaseLease();
+  const prune = usePruneRuns();
+  const setRetention = useSetRetention();
+  const [retDraft, setRetDraft] = useState<string | null>(null);
   const setDigest = useSetDigest();
   const sendDigest = useSendDigest();
   const [capDraft, setCapDraft] = useState('');
@@ -86,6 +89,18 @@ export function InsightsPage() {
                 <button onClick={() => sendDigest.mutate()} className="h-8 rounded-md border border-line bg-surface-2 px-3 font-display text-[12px] font-semibold text-brand-soft hover:border-hair">{sendDigest.isPending ? 'Sending…' : 'Send now'}</button>
               </div>
               {sendDigest.data && <div className="w-full font-mono text-[11px] text-dim-2">{sendDigest.data.sent ? 'sent · ' : 'no channel · '}{sendDigest.data.preview}</div>}
+            </div>
+
+            <div className={`${CARD} mb-[18px] flex flex-wrap items-center gap-3`}>
+              <span className={LABEL}>Run retention</span>
+              <span className="font-mono text-[12px] text-dim">auto-prune after</span>
+              <input type="number" min={0} max={365} value={retDraft ?? (d.retentionDays || '')} onChange={(e) => setRetDraft(e.target.value)} placeholder="off" className="h-8 w-20 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+              <span className="font-mono text-[12px] text-dim">days {d.retentionDays > 0 ? `(on)` : '(off)'}</span>
+              <button onClick={() => setRetention.mutate(parseInt(retDraft ?? String(d.retentionDays)) || 0, { onSuccess: () => setRetDraft(null) })} className="h-8 rounded-md border border-line bg-surface-2 px-3 font-display text-[12px] font-semibold text-t2 hover:border-hair">Save</button>
+              <div className="ml-auto flex items-center gap-2">
+                <button onClick={() => { if (confirm('Prune finished runs older than 30 days?')) prune.mutate(30); }} className="h-8 rounded-md border border-line bg-surface-2 px-3 font-display text-[12px] font-semibold text-dim hover:text-bad">{prune.isPending ? 'Pruning…' : 'Prune >30d now'}</button>
+                {prune.data && <span className="font-mono text-[11px] text-dim-2">pruned {prune.data.pruned}</span>}
+              </div>
             </div>
 
             <div className="mb-[18px] grid grid-cols-2 gap-[14px] md:grid-cols-6">

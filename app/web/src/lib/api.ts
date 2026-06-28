@@ -48,6 +48,15 @@ export interface Insights {
   projection: { perDay: number; monthly: number; runsPerDay: number };
   budget: { cap: number; today: number; over: boolean };
   digest: { channel: string; hour: number };
+  retentionDays: number;
+}
+export function usePruneRuns() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (days: number) => post<{ pruned: number; days: number }>('/api/runs/prune', { days }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['runs'] }); qc.invalidateQueries({ queryKey: ['insights'] }); } });
+}
+export function useSetRetention() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (days: number) => post('/api/runs/retention', { days }), onSuccess: () => qc.invalidateQueries({ queryKey: ['insights'] }) });
 }
 export function useSetDigest() {
   const qc = useQueryClient();

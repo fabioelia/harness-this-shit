@@ -813,6 +813,9 @@ function tickScheduler() {
     const nd = new Date(); const today = nd.toISOString().slice(0, 10);
     if (nd.getHours() === dh && metaGet('last_digest', '') !== today) { setMeta('last_digest', today); sendDigest(); }
   }
+  // Auto-retention: prune old runs once per day.
+  const rd = parseInt(metaGet('retention_days', '0'), 10);
+  if (rd > 0) { const today = new Date().toISOString().slice(0, 10); if (metaGet('last_prune', '') !== today) { setMeta('last_prune', today); const n = pruneRuns(rd); if (n) logActivity(`auto-pruned ${n} runs older than ${rd}d`, 'idle'); } }
   if (meta('kill_switch', 'false') === 'true' || overBudget()) return;
   const d = new Date();
   const stamp = `${d.getFullYear()}/${d.getMonth()}/${d.getDate()} ${d.getHours()}:${d.getMinutes()}`;
@@ -1213,6 +1216,7 @@ app.get('/api/insights', (req, res) => {
     projection: { perDay: +(T.cost / days).toFixed(2), monthly: +((T.cost / days) * 30).toFixed(2), runsPerDay: +(T.runs / days).toFixed(1) },
     budget: { cap: budgetCap(), today: +todaySpend().toFixed(2), over: overBudget() },
     digest: { channel: metaGet('digest_channel', ''), hour: parseInt(metaGet('digest_hour', '-1'), 10) },
+    retentionDays: parseInt(metaGet('retention_days', '0'), 10),
   });
 });
 app.post('/api/budget', (req, res) => {
@@ -1486,6 +1490,26 @@ app.get('/api/runs/:id/bundle', (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Content-Disposition', `attachment; filename="${x.id}.json"`);
   res.send(JSON.stringify(bundle, null, 2));
+});
+// Retention: prune finished runs (+ their trace events) older than N days.
+function pruneRuns(days) {
+  const cutoff = now() - Math.max(1, days) * 86_400_000;
+  const doomed = all("SELECT id FROM runs WHERE created_at < ? AND status NOT IN ('running','waiting')", cutoff).map((x) => x.id);
+  if (!doomed.length) return 0;
+  run("DELETE FROM run_events WHERE run_id IN (SELECT id FROM runs WHERE created_at < ? AND status NOT IN ('running','waiting'))", cutoff);
+  run("DELETE FROM runs WHERE created_at < ? AND status NOT IN ('running','waiting')", cutoff);
+  return doomed.length;
+}
+app.post('/api/runs/prune', (req, res) => {
+  const days = Math.max(1, Math.min(365, parseInt(req.body?.days, 10) || 30));
+  const n = pruneRuns(days);
+  if (n) logActivity(`pruned ${n} run${n === 1 ? '' : 's'} older than ${days}d`, 'idle');
+  res.json({ pruned: n, days });
+});
+app.post('/api/runs/retention', (req, res) => {
+  const days = Math.max(0, Math.min(365, parseInt(req.body?.days, 10) || 0));
+  setMeta('retention_days', String(days));
+  res.json({ retentionDays: days });
 });
 // Export runs as CSV (all, or one routine) for offline analysis.
 app.get('/api/runs.csv', (req, res) => {

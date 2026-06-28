@@ -87,12 +87,14 @@ dropdowns · Fleet inbox badge.
 | 66 | Long-running run indicator on Fleet (run going >8m → ⏱ badge) | observability | ✅ done |
 | 67 | Prompt size estimate in dry-run preview (chars + ~tokens) | efficiency | ✅ done |
 | 68 | Per-routine cost-per-run trend sparkline (last 24, above-avg flag) | observability/efficiency | ✅ done |
+| 69 | Run retention — manual prune + auto-prune old runs (+trace events) | efficiency/ops | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.
 - [x] (iter 55) cancel kills the child session, marks failed + frees lease, labels "canceled by user", and does NOT retry/alert even with retries set.
 - [x] (iter 56) a repeated x-github-delivery id within 10m is dropped (logged as dup, no dispatch); distinct ids + missing id pass through.
 - [ ] (iter 62) event/schedule run outside window → skipped; manual/replay/rerun bypass; midnight-wrap windows; day filter; blank = always.
+- [ ] (iter 69) prune deletes finished runs + their run_events older than N days (keeps running/waiting); auto-prune fires once/day when retention_days set; insights reports it.
 - [x] (iter 59) match explain re-evaluates trigger/repo/each filter condition against the run event; ✓/✗ correct; fired flag matches dispatcher.
 - [x] (iter 51) /api/anomalies flags runs > 3× routine avg (needs ≥4 samples); ratio + avg correct; Insights card renders/empties.
 
