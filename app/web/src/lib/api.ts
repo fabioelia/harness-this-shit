@@ -300,6 +300,10 @@ export const useStandup = (days = 1) => useQuery({ queryKey: ['standup', days], 
 export interface GlobalAudit { entries: { slug: string; summary: string; ago: string }[] }
 export const useGlobalAudit = () => useQuery({ queryKey: ['global-audit'], queryFn: () => get<GlobalAudit>('/api/audit'), refetchInterval: 15000 });
 export const useWatch = (slug: string, who: string) => useQuery({ queryKey: ['watch', slug, who], enabled: !!slug, queryFn: () => get<{ watching: boolean; watchers: number }>(`/api/routines/${slug}/watch?who=${encodeURIComponent(who)}`) });
+export function useHandover() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ slug, to, from, note }: { slug: string; to: string; from: string; note: string }) => post(`/api/routines/${slug}/handover`, { to, from, note }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['routine', v.slug] }); qc.invalidateQueries({ queryKey: ['timeline', v.slug] }); qc.invalidateQueries({ queryKey: ['comments', v.slug] }); } });
+}
 export function useToggleWatch() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: ({ slug, who, on }: { slug: string; who: string; on: boolean }) => post(`/api/routines/${slug}/watch`, { who, on }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['watch', v.slug] }); qc.invalidateQueries({ queryKey: ['inbox'] }); } });

@@ -2450,6 +2450,21 @@ app.get('/api/routines/:slug/timeline', (req, res) => {
   ev.sort((a, b) => b.at - a.at);
   res.json({ events: ev.slice(0, 40).map((e) => ({ kind: e.kind, text: e.text, ago: relTime(e.at) })) });
 });
+// Ownership handover — reassign + carry context (note → comment, mention, audit).
+app.post('/api/routines/:slug/handover', (req, res) => {
+  const r = one('SELECT slug, owner FROM routines WHERE slug=?', req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const to = String(req.body?.to || '').trim().slice(0, 40);
+  if (!to) return res.status(400).json({ error: 'new owner required' });
+  const from = String(req.body?.from || '').trim().slice(0, 40) || r.owner || 'anon';
+  const note = String(req.body?.note || '').trim().slice(0, 500);
+  run('UPDATE routines SET owner=? WHERE slug=?', to, req.params.slug);
+  run('INSERT INTO comments (slug, author, body, created_at) VALUES (?,?,?,?)', req.params.slug, from, `📋 Handover to @${to}${note ? `: ${note}` : ''}`, now());
+  run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', req.params.slug, `handed over ${from} → ${to}`, now());
+  run('INSERT INTO mentions (mentioned, by, slug, snippet, created_at) VALUES (?,?,?,?,?)', to, from, req.params.slug, `handover${note ? ': ' + note : ''}`.slice(0, 100), now());
+  logActivity(`${req.params.slug} handed over ${from} → ${to}`, 'idle');
+  res.json({ ok: true });
+});
 // Watch / subscribe — follow a routine; its changes surface in the watcher's inbox.
 app.get('/api/routines/:slug/watch', (req, res) => {
   const who = String(req.query.who || '').trim();
