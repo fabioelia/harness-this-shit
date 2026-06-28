@@ -1012,6 +1012,13 @@ if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(tickWatches, 45_00
 app.get('/api/health', (_q, res) => res.json({ ok: true }));
 app.get('/api/models', (_q, res) => res.json({ models: MODELS, efforts: EFFORTS, defaultModel: DEFAULT_MODEL }));
 // Live concurrency leases — who's holding what, on which entity/SHA.
+// Sign-off queue: successful runs awaiting human verdict + review coverage.
+app.get('/api/review-queue', (req, res) => {
+  const rows = all("SELECT id, routine_slug, verdict, created_at FROM runs WHERE status='succeeded' AND created_at > ? ORDER BY created_at DESC LIMIT 200", now() - 7 * 86_400_000);
+  const total = rows.length; const reviewed = rows.filter((r) => r.verdict).length;
+  const pending = rows.filter((r) => !r.verdict).slice(0, 20).map((r) => ({ id: r.id, slug: r.routine_slug, ago: relTime(r.created_at) }));
+  res.json({ total, reviewed, coverage: total ? Math.round((100 * reviewed) / total) : 0, pending });
+});
 // Triage queue: recent failed runs not yet resolved — the team's shared work list.
 app.get('/api/triage', (req, res) => {
   const rows = all("SELECT id, routine_slug, output, assignee, triage, created_at FROM runs WHERE status='failed' AND created_at > ? AND triage != 'resolved' ORDER BY created_at DESC LIMIT 50", now() - 14 * 86_400_000);

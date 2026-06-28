@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useRuns, useRunSearch, useRerunFailed, useTriage } from '@/lib/api';
+import { useRuns, useRunSearch, useRerunFailed, useTriage, useReviewQueue } from '@/lib/api';
 import { Dot, Empty, stateMeta } from '@/components/sb';
 import { cn } from '@/lib/utils';
 
@@ -19,6 +19,7 @@ export function RunsPage() {
   const { data: outHits } = useRunSearch(oq, oqDays);
   const rerunFailed = useRerunFailed();
   const { data: triage } = useTriage();
+  const { data: review } = useReviewQueue();
   const failedCount = (runs ?? []).filter((r) => r.status === 'failed').length;
   const filtered = (runs ?? []).filter((r) => {
     if (status !== 'all' && !STATUS_GROUPS[status]?.includes(r.status)) return false;
@@ -39,6 +40,21 @@ export function RunsPage() {
         <div className="mt-1 text-[13px] text-muted-2">Every execution across the fleet — status, trigger, and how long it took.</div>
       </div>
       <div className="px-[26px] py-5 pb-[26px]">
+        {review && review.total > 0 && (
+          <div className="mb-4 overflow-hidden rounded-xl border border-line bg-surface">
+            <div className="flex items-center gap-3 border-b border-line-soft px-4 py-2">
+              <span className="font-display text-[11px] font-semibold uppercase tracking-[0.07em] text-dim-2">Sign-off coverage · 7d</span>
+              <div className="h-2 w-32 overflow-hidden rounded-full bg-surface-2"><div className={`h-full rounded-full ${review.coverage >= 70 ? 'bg-ok/70' : review.coverage >= 30 ? 'bg-warn/70' : 'bg-bad/70'}`} style={{ width: `${review.coverage}%` }} /></div>
+              <span className="font-mono text-[12px] text-t2">{review.coverage}%</span>
+              <span className="font-mono text-[11px] text-dim">{review.reviewed}/{review.total} reviewed · {review.pending.length} awaiting</span>
+            </div>
+            {review.pending.slice(0, 5).map((p) => (
+              <Link key={p.id} to={`/runs/${p.id}`} className="flex items-center gap-3 border-b border-line-soft px-4 py-1.5 last:border-0 font-mono text-[11.5px] hover:bg-white/[0.015]">
+                <span className="shrink-0 text-dim-2">awaiting sign-off</span><span className="w-[140px] shrink-0 truncate text-t2">{p.slug}</span><span className="flex-1 truncate text-dim">{p.id}</span><span className="shrink-0 text-dim">{p.ago}</span>
+              </Link>
+            ))}
+          </div>
+        )}
         {triage && triage.items.length > 0 && (
           <div className="mb-4 overflow-hidden rounded-xl border border-bad/30 bg-bad/[0.04]">
             <div className="border-b border-line-soft px-4 py-2 font-display text-[11px] font-semibold uppercase tracking-[0.07em] text-bad">Triage queue · {triage.items.length} unresolved</div>

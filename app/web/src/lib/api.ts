@@ -174,6 +174,8 @@ export const useRoutine = (slug?: string) =>
 export const useRuns = () => useQuery({ queryKey: ['runs'], queryFn: () => get<RunLite[]>('/api/runs'), refetchInterval: 8000 });
 export interface Triage { items: { id: string; slug: string; assignee: string; triage: string; ago: string; summary: string }[] }
 export const useTriage = () => useQuery({ queryKey: ['triage'], queryFn: () => get<Triage>('/api/triage'), refetchInterval: 15000 });
+export interface ReviewQueue { total: number; reviewed: number; coverage: number; pending: { id: string; slug: string; ago: string }[] }
+export const useReviewQueue = () => useQuery({ queryKey: ['review-queue'], queryFn: () => get<ReviewQueue>('/api/review-queue'), refetchInterval: 15000 });
 export function useRerunFailed() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (hours: number) => post<{ rerun: number }>('/api/runs/rerun-failed', { hours }), onSuccess: () => qc.invalidateQueries({ queryKey: ['runs'] }) });
