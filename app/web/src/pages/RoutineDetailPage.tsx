@@ -427,6 +427,7 @@ export function RoutineDetailPage() {
           <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-warn/30 bg-warn/[0.07] px-3.5 py-2">
             <span className="font-display text-[11px] font-semibold uppercase tracking-[0.06em] text-warn">⚑ Needs review</span>
             <span className="font-mono text-[11.5px] text-dim-2">config changed since last approval</span>
+            {approve.isError && <span className="font-mono text-[11px] text-bad">{(approve.error as Error).message}</span>}
             <button onClick={() => { let rv = ''; try { rv = localStorage.getItem('sb-author') || ''; } catch { /**/ } approve.mutate({ slug: d.slug, reviewer: rv || 'anon' }); }} disabled={approve.isPending} className="ml-auto h-7 rounded-md border border-ok/50 bg-ok/10 px-3 font-display text-[12px] font-semibold text-ok hover:bg-ok/20 disabled:opacity-40">{approve.isPending ? 'Approving…' : '✓ Approve'}</button>
           </div>
         )}

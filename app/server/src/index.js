@@ -467,7 +467,8 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     return id;
   }
   // Approval gate: block dispatch of an unreviewed change (manual run is allowed through).
-  if (r.gate_review && r.review_status === 'needs_review' && !manualish) {
+  // Critical-tier routines always gate (two-person rule), even without the explicit flag.
+  if ((r.gate_review || r.tier === 'critical') && r.review_status === 'needs_review' && !manualish) {
     run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", 'awaiting approval — config changed since last review', id);
     run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
     logActivity(`${r.slug} skipped · awaiting approval`, 'idle');
@@ -2445,9 +2446,15 @@ app.delete('/api/routines/:slug/comments/:id', (req, res) => {
 });
 // Approve a routine's current config — clears the needs-review flag, records the reviewer.
 app.post('/api/routines/:slug/approve', (req, res) => {
-  const r = one('SELECT slug FROM routines WHERE slug=?', req.params.slug);
+  const r = one('SELECT slug, tier FROM routines WHERE slug=?', req.params.slug);
   if (!r) return res.status(404).json({ error: 'not found' });
   const reviewer = String(req.body?.reviewer || '').trim().slice(0, 40) || 'anon';
+  // Two-person rule: a critical routine must be approved by someone other than its last editor.
+  if (r.tier === 'critical') {
+    const le = one("SELECT summary FROM routine_audit WHERE slug=? AND summary LIKE '% edited:%' ORDER BY id DESC LIMIT 1", req.params.slug);
+    const editor = le ? le.summary.split(' edited:')[0] : '';
+    if (editor && editor !== 'anon' && editor === reviewer) return res.status(409).json({ error: 'two-person rule: a critical routine must be approved by someone other than its editor' });
+  }
   run("UPDATE routines SET review_status='approved', reviewed_by=?, reviewed_at=? WHERE slug=?", reviewer, now(), req.params.slug);
   run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', req.params.slug, `approved by ${reviewer}`, now());
   logActivity(`${req.params.slug} approved by ${reviewer}`, 'success');
