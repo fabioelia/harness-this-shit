@@ -257,7 +257,7 @@ const shapeRoutine = (r) => {
     lastAgo: r.last_ago, lastStatus: r.last_status, next: r.next,
     recent, successRate, spend: r.spend, avg: r.avg, runCount: recent.length,
     inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
-    scriptMode: !!r.script_mode, scriptLang: r.script_lang || 'bash', compiled: !!(r.script && r.script.trim()),
+    scriptMode: !!r.script_mode, scriptLang: r.script_lang || 'bash', compiled: !!(r.script && r.script.trim()), scriptStale: !!r.script_stale,
   };
 };
 
@@ -344,9 +344,9 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     id, r.slug, 'running', 'now', '…', triggerLabel, ord, '', JSON.stringify(rawEvent ?? {}), created, '[]');
   run('UPDATE routines SET state=?, last_ago=?, last_status=? WHERE slug=?', 'running', 'now', 'running', r.slug);
 
-  // Script routine that's already compiled → just run the deterministic extractor.
+  // Script routine that's already compiled (and not stale) → just run the extractor.
   const scriptMode = !!r.script_mode;
-  const compiled = scriptMode && r.script && r.script.trim();
+  const compiled = scriptMode && r.script && r.script.trim() && !r.script_stale;
   const recompile = !!rawEvent?._recompile;
   if (compiled && !recompile) {
     runCompiledScript(r, rawEvent ?? {}, id, created).catch((e) => run("UPDATE runs SET status='failed', output=? WHERE id=?", `script error: ${e.message}`, id));
@@ -415,7 +415,8 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     const compile = scriptMode;
     const scriptLang = r.script_lang === 'node' ? 'node' : 'bash';
     const scriptPath = compile ? join(tmpdir(), `sb-build-${id}.${scriptLang === 'node' ? 'mjs' : 'sh'}`) : null;
-    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints(), { memoryDir, agents, coalesce, seedTasks, compile, scriptLang, scriptPath });
+    const priorScript = compile ? (r.script || '') : ''; // current extractor to revise (if any)
+    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints(), { memoryDir, agents, coalesce, seedTasks, compile, scriptLang, scriptPath, priorScript });
     run('UPDATE runs SET prompt=? WHERE id=?', prompt, id);
 
     // Step-level trace: normalize each stream-json event into a run_events row,
@@ -461,8 +462,8 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     if (compile && scriptPath) {
       let built = ''; try { built = readFileSync(scriptPath, 'utf8'); } catch { /* not written */ }
       try { unlinkSync(scriptPath); } catch { /* */ }
-      if (built.trim()) { run('UPDATE routines SET script=? WHERE slug=?', built, r.slug); logActivity(`${r.slug} compiled a ${scriptLang} extractor (${built.length} chars) — future runs are deterministic`, 'success'); }
-      else logActivity(`${r.slug} compile run produced no script — it will retry next run`, 'idle');
+      if (built.trim()) { run("UPDATE routines SET script=?, script_stale=0 WHERE slug=?", built, r.slug); logActivity(`${r.slug} ${priorScript ? 'revised' : 'compiled'} its ${scriptLang} extractor (${built.length} chars) — future runs are deterministic`, 'success'); }
+      else logActivity(`${r.slug} compile run produced no script — keeping the previous one`, 'idle');
     }
     const ok = !res.isError && !!res.finalText;
     const rawOut = ok ? res.finalText
@@ -944,8 +945,13 @@ app.put('/api/routines/:slug', (req, res) => {
   const filters = b.filters != null ? cleanFilters(b.filters) : (jObj(r.filters) || {});
   const reactions = b.reactions != null ? cleanReactions(b.reactions) : j(r.reactions);
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
+  const scriptModeAfter = b.scriptMode != null ? !!b.scriptMode : !!r.script_mode;
+  const promptChanged = b.prompt != null && b.prompt.trim() !== r.prompt;
+  // Editing what to extract on a script routine doesn't throw the script away — it keeps it
+  // as the basis and marks it stale so the LLM regenerates from the current script next.
+  const staleAfter = (scriptModeAfter && promptChanged) ? 1 : r.script_stale;
   run(
-    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script=? WHERE slug=?`,
+    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
     JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
     JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
@@ -956,11 +962,13 @@ app.put('/api/routines/:slug', (req, res) => {
     JSON.stringify(b.concurrency != null ? cleanConcurrency(b.concurrency) : (jObj(r.concurrency) || {})),
     b.scriptMode != null ? (b.scriptMode ? 1 : 0) : r.script_mode,
     b.scriptLang ? (b.scriptLang === 'node' ? 'node' : 'bash') : r.script_lang,
-    // editing the prompt (what to extract) invalidates the compiled script → recompile next run
-    (b.prompt != null && b.prompt.trim() !== r.prompt) ? '' : r.script,
-    r.slug
+    staleAfter, r.slug
   );
-  res.json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', r.slug)));
+  const updated = one('SELECT * FROM routines WHERE slug=?', r.slug);
+  // Fire the LLM to regenerate the extractor when the instruction changed (keeping the
+  // current script as the starting point, passed in via the compile prompt).
+  if (scriptModeAfter && promptChanged) executeRoutine({ ...updated, script_stale: 1 }, { event: 'recompile', _recompile: true, routine: r.slug }, 'recompile · prompt edited');
+  res.json(shapeRoutine(updated));
 });
 
 app.delete('/api/routines/:slug', (req, res) => {
@@ -1361,8 +1369,9 @@ app.post('/api/routines/:slug/recompile', (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
   if (!r) return res.status(404).json({ error: 'not found' });
   if (!r.script_mode) return res.status(400).json({ error: 'not a script routine' });
-  run("UPDATE routines SET script='' WHERE slug=?", r.slug);
-  const runId = executeRoutine({ ...r, script: '' }, { event: 'recompile', _recompile: true, routine: r.slug }, 'recompile');
+  run("UPDATE routines SET script_stale=1 WHERE slug=?", r.slug);
+  // Keep the current script as the basis — the compile prompt revises it.
+  const runId = executeRoutine({ ...r, script_stale: 1 }, { event: 'recompile', _recompile: true, routine: r.slug }, 'recompile');
   res.json({ ok: true, runId });
 });
 

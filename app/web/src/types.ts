@@ -32,6 +32,7 @@ export interface Routine {
   scriptMode: boolean;
   scriptLang: string;
   compiled: boolean;
+  scriptStale: boolean;
 }
 
 export interface FrontMatter {

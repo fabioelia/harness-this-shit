@@ -157,6 +157,7 @@ export function getDb() {
   ensure('routines', 'script_mode', 'script_mode INTEGER NOT NULL DEFAULT 0');
   ensure('routines', 'script', "script TEXT NOT NULL DEFAULT ''");
   ensure('routines', 'script_lang', "script_lang TEXT NOT NULL DEFAULT 'bash'");
+  ensure('routines', 'script_stale', 'script_stale INTEGER NOT NULL DEFAULT 0');
   ensure('runs', 'dur_ms', 'dur_ms INTEGER');
   const n = _db.prepare('SELECT COUNT(*) AS n FROM routines').get();
   if (fresh || n.n === 0) seed(_db);

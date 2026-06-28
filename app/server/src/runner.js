@@ -94,7 +94,7 @@ export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, mo
 /** Assemble the session input: the routine's natural instruction + the live
  *  trigger context + the tools it may use. No output-format contract — the
  *  session does whatever the instruction needs and takes the actions itself. */
-export function buildPrompt(routine, event, constraints = [], { memoryDir, agents = [], coalesce = false, seedTasks = [], compile = false, scriptLang = 'bash', scriptPath = '' } = {}) {
+export function buildPrompt(routine, event, constraints = [], { memoryDir, agents = [], coalesce = false, seedTasks = [], compile = false, scriptLang = 'bash', scriptPath = '', priorScript = '' } = {}) {
   const tools = Array.isArray(routine.connectors)
     ? routine.connectors
     : (() => { try { return JSON.parse(routine.connectors || '[]'); } catch { return []; } })();
@@ -143,6 +143,15 @@ export function buildPrompt(routine, event, constraints = [], { memoryDir, agent
     lines.push('',
       '## Build a reusable extractor (this is a SCRIPT routine)',
       `Your goal this run is NOT just to answer once — it is to BUILD a self-contained ${ext} script that extracts the data the instruction asks for, so every future run executes the script directly (no LLM, deterministic, $0). It will run UNCHANGED days, weeks and months from now, so it must stay correct as time passes.`,
+      ...(priorScript && priorScript.trim() ? [
+        '',
+        '### Current extractor — REVISE this, do not start over',
+        'This routine already has a working extractor from a previous compile. The instruction above may have just been edited. Treat the script below as the current state: make the SMALLEST change that satisfies the (possibly new) instruction — keep what still works, adjust only what changed. Rewrite from scratch only if the change is fundamental. Write the revised script back to SB_SCRIPT_PATH.',
+        '```' + ext,
+        priorScript.trim(),
+        '```',
+        '',
+      ] : []),
       'Steps:',
       `1. Explore to find exactly where the data lives — gh CLI (\`gh workflow list\`, \`gh run list --json …\`, \`gh api …\`) against the target repo. Resolve workflow/job/check NAMES to stable ids now so the script doesn't have to guess later.`,
       `2. Write a self-contained ${ext} script to the path in env var SB_SCRIPT_PATH (use the Write tool). It must:`,
