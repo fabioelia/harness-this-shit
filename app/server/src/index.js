@@ -304,7 +304,7 @@ const shapeRoutine = (r) => {
     longRunning: (() => { const t = one("SELECT MIN(created_at) AS t FROM runs WHERE routine_slug=? AND status IN ('running','waiting')", r.slug)?.t; return !!(t && now() - t > 8 * 60_000); })(),
     lastSuccessAgo: (() => { const t = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND status='succeeded'", r.slug)?.t || 0; return t ? relTime(t) : ''; })(),
     staleSuccess: (() => { const t = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND status='succeeded'", r.slug)?.t || 0; return !!r.enabled && t > 0 && (now() - t) > 7 * 86_400_000; })(),
-    alertOnFail: !!r.alert_on_fail, alertTarget: r.alert_target || '', timeout: r.timeout_s || 0, env: jObj(r.env) || {}, snoozedUntil: r.snooze_until && r.snooze_until > now() ? r.snooze_until : 0,
+    alertOnFail: !!r.alert_on_fail, alertTarget: r.alert_target || '', timeout: r.timeout_s || 0, env: jObj(r.env) || {}, snoozedUntil: r.snooze_until && r.snooze_until > now() ? r.snooze_until : 0, snoozeReason: r.snooze_until && r.snooze_until > now() ? (r.snooze_reason || '') : '',
   };
 };
 
@@ -1648,8 +1648,9 @@ app.post('/api/routines/:slug/snooze', (req, res) => {
   if (!r) return res.status(404).json({ error: 'not found' });
   const hours = Math.max(0, Math.min(720, parseFloat(req.body?.hours) || 0));
   const until = hours > 0 ? now() + hours * 3_600_000 : 0;
-  run('UPDATE routines SET snooze_until=? WHERE slug=?', until, req.params.slug);
-  logActivity(`${req.params.slug} ${until ? `snoozed for ${hours}h` : 'snooze cleared'}`, 'idle');
+  const reason = String(req.body?.reason || '').trim().slice(0, 200);
+  run('UPDATE routines SET snooze_until=?, snooze_reason=? WHERE slug=?', until, until ? reason : '', req.params.slug);
+  logActivity(`${req.params.slug} ${until ? `snoozed for ${hours}h${reason ? ` · ${reason}` : ''}` : 'snooze cleared'}`, 'idle');
   res.json({ ok: true, snoozedUntil: until });
 });
 // Dry-run preview: the exact prompt the agent would get + whether an event matches — $0.

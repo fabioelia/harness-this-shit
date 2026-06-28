@@ -330,7 +330,7 @@ export interface Audit { entries: { summary: string; ago: string }[] }
 export const useRoutineAudit = (slug: string, enabled = true) => useQuery({ queryKey: ['audit', slug], enabled, queryFn: () => get<Audit>(`/api/routines/${slug}/audit`) });
 export function useSnooze() {
   const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ slug, hours }: { slug: string; hours: number }) => post<{ ok: boolean; snoozedUntil: number }>(`/api/routines/${slug}/snooze`, { hours }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['routine', v.slug] }); qc.invalidateQueries({ queryKey: ['routines'] }); } });
+  return useMutation({ mutationFn: ({ slug, hours, reason }: { slug: string; hours: number; reason?: string }) => post<{ ok: boolean; snoozedUntil: number }>(`/api/routines/${slug}/snooze`, { hours, reason }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['routine', v.slug] }); qc.invalidateQueries({ queryKey: ['routines'] }); } });
 }
 export function useFireEvent() {
   const qc = useQueryClient();

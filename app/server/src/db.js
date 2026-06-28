@@ -164,6 +164,7 @@ export function getDb() {
   ensure('routines', 'alert_target', "alert_target TEXT NOT NULL DEFAULT ''");
   ensure('routines', 'timeout_s', 'timeout_s INTEGER NOT NULL DEFAULT 0');
   ensure('routines', 'snooze_until', 'snooze_until INTEGER NOT NULL DEFAULT 0');
+  ensure('routines', 'snooze_reason', "snooze_reason TEXT NOT NULL DEFAULT ''");
   ensure('routines', 'env', "env TEXT NOT NULL DEFAULT '{}'");
   ensure('routines', 'tags', "tags TEXT NOT NULL DEFAULT '[]'");
   ensure('routines', 'rate_limit', 'rate_limit INTEGER NOT NULL DEFAULT 0');

@@ -163,6 +163,7 @@ dropdowns · Fleet inbox badge.
 | 138 | Discussion indicator on Fleet (💬 comment count badge) | collaboration | ✅ done |
 | 139 | "Mine" Fleet quick-filter (one-click owner=operator) | collaboration/personal | ✅ done |
 | 140 | Mid-loop QA checkpoint — 13 endpoints + 11 routes + run detail | quality | ✅ done — 0 bugs |
+| 141 | Snooze with a reason (shown to the team on Fleet + detail) | collaboration | ✅ done |
 
 ### Loop-3 QA backlog (test at iteration 110)
 - [x] (iter 107) substantive edit (prompt/triggers/etc) flags needs_review; approve records reviewer + clears it; non-substantive edits (name) do not flag; Fleet badge.

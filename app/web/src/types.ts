@@ -39,6 +39,7 @@ export interface Routine {
   alertTarget: string;
   timeout: number;
   snoozedUntil: number;
+  snoozeReason: string;
   env: Record<string, string>;
   tags: string[];
   rateLimit: number;
