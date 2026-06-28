@@ -1524,6 +1524,21 @@ app.post('/api/runs/:id/replay', (req, res) => {
   const runId = executeRoutine(r, { ...ev, _replay: true, upstream: { routine: r.slug, run: x.id } }, `replay · ${x.id}`);
   res.json({ ok: true, runId });
 });
+// Re-run with an EDITED event payload — reproduce with tweaks (vs replay's verbatim).
+app.post('/api/runs/:id/rerun', (req, res) => {
+  const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
+  if (!x) return res.status(404).json({ error: 'not found' });
+  const r = one('SELECT * FROM routines WHERE slug=?', x.routine_slug);
+  if (!r) return res.status(404).json({ error: 'routine no longer exists' });
+  if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
+  if (overBudget()) return res.status(409).json({ error: `daily budget $${budgetCap()} reached — dispatch paused` });
+  let ev;
+  try { ev = req.body?.event && typeof req.body.event === 'object' ? req.body.event : JSON.parse(req.body?.event || '{}'); }
+  catch { return res.status(400).json({ error: 'event is not valid JSON' }); }
+  delete ev._attempt; delete ev._recompile; delete ev._replay;
+  const runId = executeRoutine(r, { ...ev, _rerun: true, upstream: { routine: r.slug, run: x.id } }, `edited rerun · ${x.id}`);
+  res.json({ ok: true, runId });
+});
 app.post('/api/runs/:id/inbox', (req, res) => {
   const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
   if (!x) return res.status(404).json({ error: 'not found' });
@@ -1549,7 +1564,7 @@ app.get('/api/runs/:id', (req, res) => {
 
   // Lineage: who kicked this run off, and what it kicked off (chains + reactions).
   const ev = jObj(x.event) || {};
-  const kindOf = (trig) => (String(trig).startsWith('reaction') ? 'reaction' : String(trig).startsWith('after') ? 'chain' : String(trig).startsWith('replay') ? 'replay' : 'trigger');
+  const kindOf = (trig) => (String(trig).startsWith('reaction') ? 'reaction' : String(trig).startsWith('after') ? 'chain' : String(trig).startsWith('replay') ? 'replay' : String(trig).startsWith('edited rerun') ? 'replay' : 'trigger');
   const triggeredBy = ev.upstream?.run ? { runId: ev.upstream.run, routine: ev.upstream.routine, kind: kindOf(x.trigger) } : null;
   const downstream = all('SELECT id, routine_slug, trigger, status, dur, event FROM runs WHERE id != ? AND event LIKE ? ORDER BY created_at', x.id, `%${x.id}%`)
     .filter((d) => (jObj(d.event)?.upstream?.run) === x.id)

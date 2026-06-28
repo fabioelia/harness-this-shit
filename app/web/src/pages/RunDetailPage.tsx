@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRun, useDispatchRoutine, useReplayRun, useRunDiff } from '@/lib/api';
+import { useRun, useDispatchRoutine, useReplayRun, useRunDiff, useRerunRun } from '@/lib/api';
 import { Pill, Dot, Empty, stateMeta } from '@/components/sb';
 import { cn } from '@/lib/utils';
 
@@ -74,6 +74,8 @@ export function RunDetailPage() {
   const { data: r, isLoading } = useRun(id);
   const dispatch = useDispatchRoutine();
   const replay = useReplayRun();
+  const rerun = useRerunRun();
+  const [editEvent, setEditEvent] = useState<string | null>(null);
   const qc = useQueryClient();
   // Live trace over SSE — fills in with no polling lag, then refetches on done.
   const [liveTrace, setLiveTrace] = useState<TE[]>([]);
@@ -108,6 +110,21 @@ export function RunDetailPage() {
 
   return (
     <div className="font-sans text-fg animate-fade-up">
+      {editEvent !== null && (
+        <div className="fixed inset-0 z-[100] flex items-start justify-center bg-black/55 p-8" onClick={() => setEditEvent(null)}>
+          <div className="mt-[10vh] w-full max-w-[640px] overflow-hidden rounded-xl border border-line bg-surface shadow-pop" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-line-soft px-4 py-2.5">
+              <span className="font-mono text-[12px] font-medium text-t2">Edit event &amp; re-run</span>
+              <button onClick={() => setEditEvent(null)} className="font-mono text-[12px] text-dim hover:text-fg">esc ✕</button>
+            </div>
+            <textarea value={editEvent} onChange={(e) => setEditEvent(e.target.value)} spellCheck={false} className="h-[44vh] w-full resize-none bg-code px-4 py-3 font-mono text-[12px] leading-[1.5] text-muted focus:outline-none" />
+            <div className="flex items-center justify-between gap-2 border-t border-line-soft px-4 py-2.5">
+              {rerun.isError ? <span className="font-mono text-[11px] text-bad">{(rerun.error as Error).message}</span> : <span className="font-mono text-[11px] text-dim-2">Tweak the payload, then re-run through the matcher.</span>}
+              <button onClick={() => rerun.mutate({ id: r.id, event: editEvent }, { onSuccess: (res) => { setEditEvent(null); navigate(`/runs/${res.runId}`); } })} disabled={rerun.isPending} className="h-8 rounded-md border border-brand/50 bg-brand/10 px-3.5 font-display text-[12px] font-semibold text-brand-soft hover:bg-brand/20 disabled:opacity-40">{rerun.isPending ? 'Running…' : 'Re-run'}</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="border-b border-line-soft bg-head px-[26px] py-[22px]">
         <div className="mb-3 font-mono text-[12px] font-medium text-dim"><Link to="/runs" className="text-brand">Runs</Link> › {r.id}</div>
         <div className="flex items-center justify-between gap-4">
@@ -125,6 +142,9 @@ export function RunDetailPage() {
               <svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M3 9a6 6 0 1 1 1.8 4.3" /><path d="M3 13v-3h3" /></svg>
               {replay.isPending ? 'Replaying…' : 'Replay'}
             </button>
+            {r.event && (
+              <button onClick={() => setEditEvent(JSON.stringify(r.event, null, 2))} title="Edit this run's event payload and re-run with the tweaks" className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Edit &amp; re-run</button>
+            )}
             <button
               onClick={() => dispatch.mutate(r.routine, { onSuccess: (res) => navigate(`/runs/${res.runId}`) })}
               disabled={dispatch.isPending}
