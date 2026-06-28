@@ -149,6 +149,7 @@ const cleanFilters = (f) => {
   }
   return { actions: arr(o.actions), branches: arr(o.branches), labels: arr(o.labels), mode: o.mode === 'or' ? 'or' : 'and' };
 };
+const normRetries = (n) => Math.max(0, Math.min(3, parseInt(n, 10) || 0));
 const cleanConcurrency = (c) => {
   const o = c && typeof c === 'object' ? c : {};
   return { scope: ['auto', 'pr', 'repo', 'routine', 'off'].includes(o.scope) ? o.scope : 'auto', onConflict: ['wait', 'drop', 'coalesce'].includes(o.onConflict) ? o.onConflict : 'wait' };
@@ -258,6 +259,7 @@ const shapeRoutine = (r) => {
     recent, successRate, spend: r.spend, avg: r.avg, runCount: recent.length,
     inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
     scriptMode: !!r.script_mode, scriptLang: r.script_lang || 'bash', compiled: !!(r.script && r.script.trim()), scriptStale: !!r.script_stale,
+    retries: r.retries || 0,
   };
 };
 
@@ -331,7 +333,21 @@ async function runCompiledScript(r, event, id, t0) {
   run('UPDATE routines SET state=?, last_ago=?, last_status=?, success=?, spend=?, avg=? WHERE slug=?',
     'idle', 'just now', ok ? 'success' : 'failing', ok ? 100 : 0, `$${Number(agg.spend || 0).toFixed(2)}`, agg.avgms ? fmtDur(agg.avgms) : '—', r.slug);
   logActivity(`${r.slug} ran extractor · ${ok ? (output.split('\n').pop() || '').slice(0, 50) : 'failed — recompile?'}`, ok ? 'success' : 'failing');
+  if (!ok) maybeRetry(r, event, `script · ${r.slug}`, event?._attempt || 0);
   if (ok) for (const slug of j(r.chain)) { const dr = one('SELECT * FROM routines WHERE slug=? AND enabled=1', slug); if (dr) executeRoutine(dr, { ...(event ?? {}), upstream: { routine: r.slug, run: id, output } }, `after · ${r.slug}`); }
+}
+
+// Auto-retry a failed run (transient: claude/gh/timeout) with backoff, up to r.retries.
+const RETRY_DELAYS = [5_000, 20_000, 60_000];
+function maybeRetry(r, rawEvent, triggerLabel, attempt) {
+  const max = r.retries || 0;
+  if (attempt >= max) return false;
+  const next = attempt + 1;
+  const delay = RETRY_DELAYS[attempt] || 60_000;
+  const base = String(triggerLabel || '').replace(/^retry \d+\/\d+ · /, '');
+  logActivity(`${r.slug} failed — auto-retry ${next}/${max} in ${Math.round(delay / 1000)}s`, 'queued');
+  setTimeout(() => executeRoutine(r, { ...(rawEvent || {}), _attempt: next }, `retry ${next}/${max} · ${base}`), delay).unref?.();
+  return true;
 }
 
 // ── Execution: build prompt → run an auto-mode session → capture trace → chain ─
@@ -479,6 +495,7 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       'idle', 'just now', ok ? 'success' : 'failing', ok ? 100 : 0,
       `$${Number(agg.spend || 0).toFixed(2)}`, agg.avgms ? fmtDur(agg.avgms) : '—', r.slug);
     logActivity(`${r.slug} ${ok ? 'ran · ' + output.split('\n').pop().slice(0, 60) : 'failed'} · ${triggerLabel}`, ok ? 'success' : 'failing');
+    if (!ok) maybeRetry(r, rawEvent, triggerLabel, rawEvent?._attempt || 0);
 
     // reactions: arm watches on the entity this run touched (PR checks/review/merge, timeout…)
     try { await armReactions(r, rawEvent ?? {}, id); } catch (e) { logActivity(`reactions error · ${r.slug}: ${e.message}`, 'failing'); }
@@ -872,15 +889,15 @@ function insertRoutine(b) {
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
   run(
     `INSERT INTO routines
-      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,script_mode,script_lang)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,script_mode,script_lang,retries)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     slug, (b.name || '').trim(), (b.summary || '').trim(), owner, team,
     JSON.stringify(triggers), JSON.stringify(connectors),
     'idle', 'never', 'idle', next, null, '$0.00', enabled, '', '', '—',
     ownerColor(owner), initialsOf(owner), ord,
     (b.prompt || '').trim(), normModel(b.model), (b.repo || '').trim(), (b.branch || 'main').trim(),
     JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions), normEffort(b.effort), b.memory ? 1 : 0, JSON.stringify(cleanConcurrency(b.concurrency)),
-    b.scriptMode ? 1 : 0, b.scriptLang === 'node' ? 'node' : 'bash'
+    b.scriptMode ? 1 : 0, b.scriptLang === 'node' ? 'node' : 'bash', normRetries(b.retries)
   );
   return slug;
 }
@@ -980,7 +997,7 @@ app.put('/api/routines/:slug', (req, res) => {
   // as the basis and marks it stale so the LLM regenerates from the current script next.
   const staleAfter = (scriptModeAfter && promptChanged) ? 1 : r.script_stale;
   run(
-    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=? WHERE slug=?`,
+    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=?,retries=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
     JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
     JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
@@ -991,7 +1008,9 @@ app.put('/api/routines/:slug', (req, res) => {
     JSON.stringify(b.concurrency != null ? cleanConcurrency(b.concurrency) : (jObj(r.concurrency) || {})),
     b.scriptMode != null ? (b.scriptMode ? 1 : 0) : r.script_mode,
     b.scriptLang ? (b.scriptLang === 'node' ? 'node' : 'bash') : r.script_lang,
-    staleAfter, r.slug
+    staleAfter,
+    b.retries != null ? normRetries(b.retries) : r.retries,
+    r.slug
   );
   const updated = one('SELECT * FROM routines WHERE slug=?', r.slug);
   // Fire the LLM to regenerate the extractor when the instruction changed (keeping the

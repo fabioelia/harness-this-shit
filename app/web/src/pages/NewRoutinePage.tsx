@@ -408,6 +408,7 @@ export function NewRoutinePage() {
   const [memory, setMemory] = useState(false);
   const [scriptMode, setScriptMode] = useState(false);
   const [scriptLang, setScriptLang] = useState<'bash' | 'node'>('bash');
+  const [retries, setRetries] = useState(0);
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('main');
   const [prompt, setPrompt] = useState('');
@@ -451,7 +452,7 @@ export function NewRoutinePage() {
     setSummary(d.summary); setOwner(d.owner); setTeam(d.team);
     setTriggers(d.triggers); setConnectors(d.connectors);
     setModel(d.model || 'claude-opus-4-8'); setEffort(d.effort || ''); setMemory(!!d.memory); setRepo(d.repo || ''); setBranch(d.branch || 'main');
-    setScriptMode(!!d.scriptMode); setScriptLang(d.scriptLang === 'node' ? 'node' : 'bash');
+    setScriptMode(!!d.scriptMode); setScriptLang(d.scriptLang === 'node' ? 'node' : 'bash'); setRetries(d.retries || 0);
     setPrompt(d.prompt || '');
     setChain(d.chain.join(', '));
     if (d.schedule) setSchedule(d.schedule);
@@ -510,7 +511,7 @@ export function NewRoutinePage() {
   const valid = name.trim().length > 0 && slug.length > 0;
   function submit() {
     if (!valid) return;
-    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, scriptMode, scriptLang };
+    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, scriptMode, scriptLang, retries };
     if (isEdit) update.mutate({ slug: editSlug!, body }, { onSuccess: () => navigate(`/routines/${editSlug}`) });
     else create.mutate(body, { onSuccess: (r) => navigate(`/routines/${r.slug}`) });
   }
@@ -630,6 +631,16 @@ export function NewRoutinePage() {
                   <div><div className={LABEL}>Effort</div><select value={effort} onChange={(e) => setEffort(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')}><option value="">default</option>{EFFORTS.map((e) => <option key={e} value={e}>{e}</option>)}</select></div>
                   <div><div className={LABEL}>Owner</div><input value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="ada" className={inputCls} /></div>
                   <div><div className={LABEL}>Team</div><input value={team} onChange={(e) => setTeam(e.target.value)} placeholder="platform" className={inputCls} /></div>
+                  <div className="col-span-2">
+                    <div className={LABEL}>Auto-retry on failure</div>
+                    <select value={retries} onChange={(e) => setRetries(+e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')}>
+                      <option value={0}>off — a failed run stays failed</option>
+                      <option value={1}>1 retry · +5s</option>
+                      <option value={2}>2 retries · +5s, 20s</option>
+                      <option value={3}>3 retries · +5s, 20s, 60s</option>
+                    </select>
+                    <div className="mt-1 text-[11px] text-dim-2">A failed run (claude/gh/timeout) re-fires automatically with backoff — no human needed to notice and re-run.</div>
+                  </div>
                 </div>
                 <label className="flex cursor-pointer items-start gap-2.5">
                   <input type="checkbox" checked={memory} onChange={(e) => setMemory(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[#5b9ee6]" />

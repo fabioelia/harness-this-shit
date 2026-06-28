@@ -19,9 +19,11 @@ dropdowns · Fleet inbox badge.
 | # | Direction | Theme | Status |
 |---|-----------|-------|--------|
 | 1 | Insights: cost & usage observability (spend/runs/turns over time, per-routine) | observability/efficiency | ✅ done |
+| 2 | Auto-retry on failure (per-routine 0–3, backoff 5/20/60s) | eliminating-humans/resilience | ✅ done |
 
 ## QA backlog (test at iteration 10)
 - [ ] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.
+- [ ] (iter 2) A failed agent run AND a failed script run each auto-retry up to `retries` with backoff, label "retry N/M", then stop; success on a retry doesn't keep retrying; retries=0 never retries; coalesced/skipped runs don't retry.
 
 ## Per-iteration notes
 ### Iteration 1

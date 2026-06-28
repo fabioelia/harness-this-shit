@@ -213,6 +213,7 @@ export interface CreateRoutineInput {
   filters?: { actions?: string[]; branches?: string[]; labels?: string[]; mode?: string; match?: string; groups?: { match: string; conditions: { field: string; op: string; values: string[] }[] }[] };
   scriptMode?: boolean;
   scriptLang?: string;
+  retries?: number;
   reactions?: { source: string; kind: string; when: string; run: string; check?: string }[];
   memory?: boolean;
 }
