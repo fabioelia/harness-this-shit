@@ -73,6 +73,8 @@ function FleetRow({ r, i, selected, onSelect }: { r: Routine; i: number; selecte
           <input type="checkbox" checked={selected} onChange={() => onSelect(r.slug)} className="h-3.5 w-3.5 shrink-0 accent-[#5b9ee6]" title="select" />
           <button onClick={() => pin.mutate(r.slug)} title={r.pinned ? 'unpin' : 'pin to top'} className={`shrink-0 text-[13px] leading-none ${r.pinned ? 'text-brand' : 'text-faint hover:text-dim'}`}>{r.pinned ? '★' : '☆'}</button>
           <Link to={`/routines/${r.slug}`} className="truncate font-display text-[14px] font-semibold text-fg-2 hover:text-brand">{r.name}</Link>
+          {r.lifecycle === 'draft' && <span className="shrink-0 rounded border border-brand/40 bg-brand/10 px-1.5 py-px font-mono text-[10px] font-semibold text-brand-soft">draft</span>}
+          {r.lifecycle === 'deprecated' && <span className="shrink-0 rounded border border-warn/40 bg-warn/10 px-1.5 py-px font-mono text-[10px] font-semibold text-warn">deprecated</span>}
           {r.longRunning && <span title="a run has been going over 8 minutes — possibly stuck" className="shrink-0 animate-sbpulse rounded-full border border-bad/40 bg-bad/10 px-1.5 py-px font-mono text-[10px] font-semibold text-bad">⏱ long-run</span>}
           {r.staleSuccess && <span title={`last success was ${r.lastSuccessAgo} — over a week ago`} className="shrink-0 rounded-full border border-warn/40 bg-warn/10 px-1.5 py-px font-mono text-[10px] font-semibold text-warn">stale</span>}
           {r.snoozedUntil > 0 && <span title={`snoozed until ${new Date(r.snoozedUntil).toLocaleString()}`} className="shrink-0 rounded-full border border-lease/40 bg-lease/10 px-1.5 py-px font-mono text-[10px] font-semibold text-lease">💤</span>}

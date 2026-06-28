@@ -52,6 +52,7 @@ export interface Routine {
   activeWindow: { start: number | null; end: number | null; days: number[] } | null;
   sla: number;
   archived: boolean;
+  lifecycle: string;
 }
 
 export interface FrontMatter {

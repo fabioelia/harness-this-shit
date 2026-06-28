@@ -126,6 +126,7 @@ dropdowns · Fleet inbox badge.
 | 101 | Ownership visibility — Fleet owner filter + quick owner/team reassign | collaboration | ✅ done |
 | 102 | Per-team rollup (routines/owners/runs/spend/fail-rate by team) | collaboration | ✅ done |
 | 103 | Routine discussion — team comment threads (author + body) per routine | collaboration | ✅ done |
+| 104 | Routine lifecycle status (draft/active/deprecated) + Fleet badges | collaboration | ✅ done |
 
 ### Loop-3 QA backlog (test at iteration 110)
 - [ ] (iter 103) comment post/list/delete; commentCount on detail; author persists in localStorage.

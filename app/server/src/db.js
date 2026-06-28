@@ -175,6 +175,7 @@ export function getDb() {
   ensure('routines', 'baseline', "baseline TEXT NOT NULL DEFAULT ''");
   ensure('routines', 'sla_s', 'sla_s INTEGER NOT NULL DEFAULT 0');
   ensure('routines', 'archived', 'archived INTEGER NOT NULL DEFAULT 0');
+  ensure('routines', 'lifecycle', "lifecycle TEXT NOT NULL DEFAULT 'active'");
   _db.exec('CREATE TABLE IF NOT EXISTS prompt_history (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, prompt TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)');
   _db.exec('CREATE TABLE IF NOT EXISTS routine_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, summary TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)');
   _db.exec('CREATE TABLE IF NOT EXISTS comments (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, author TEXT NOT NULL DEFAULT \'\', body TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)');
