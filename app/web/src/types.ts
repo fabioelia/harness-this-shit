@@ -10,7 +10,7 @@ export interface Routine {
   connectors: string[];
   chain: string[];
   schedule: string;
-  filters: { actions?: string[]; branches?: string[]; labels?: string[] };
+  filters: { actions?: string[]; branches?: string[]; labels?: string[]; mode?: string; match?: 'all' | 'any'; groups?: { match: 'all' | 'any'; conditions: { field: string; op: string; values: string[] }[] }[] };
   reactions: Reaction[];
   concurrency: { scope?: string; onConflict?: string };
   model: string;

@@ -195,7 +195,7 @@ export interface CreateRoutineInput {
   prompt?: string;
   chain?: string[];
   schedule?: string;
-  filters?: { actions?: string[]; branches?: string[] };
+  filters?: { actions?: string[]; branches?: string[]; labels?: string[]; mode?: string; match?: string; groups?: { match: string; conditions: { field: string; op: string; values: string[] }[] }[] };
   reactions?: { source: string; kind: string; when: string; run: string; check?: string }[];
   memory?: boolean;
 }

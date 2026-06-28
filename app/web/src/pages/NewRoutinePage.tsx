@@ -51,6 +51,76 @@ function TokenPicker({ value, onChange, suggestions, placeholder }: { value: str
   );
 }
 
+type Cond = { field: string; op: string; values: string[] };
+type FilterGroup = { match: 'all' | 'any'; conditions: Cond[] };
+const FILTER_FIELDS = [
+  { v: 'action', label: 'action / conclusion' }, { v: 'label', label: 'label' },
+  { v: 'branch', label: 'head branch' }, { v: 'base', label: 'base branch' },
+  { v: 'author', label: 'author' }, { v: 'title', label: 'title' }, { v: 'draft', label: 'draft' },
+];
+const FILTER_OPS = [
+  { v: 'is', label: 'is any of' }, { v: 'is_not', label: 'is none of' },
+  { v: 'contains', label: 'contains' }, { v: 'matches', label: 'matches /regex/' },
+];
+const AndOr = ({ value, onChange, labels }: { value: 'all' | 'any'; onChange: (v: 'all' | 'any') => void; labels?: [string, string] }) => (
+  <span className="inline-flex overflow-hidden rounded-md border border-line text-[11px] font-semibold">
+    {(['all', 'any'] as const).map((m, i) => <button key={m} type="button" onClick={() => onChange(m)} className={cn('px-2 py-0.5 font-mono', value === m ? 'bg-brand/15 text-brand-soft' : 'text-dim hover:text-t2')}>{labels ? labels[i] : m}</button>)}
+  </span>
+);
+
+function FilterBuilder({ top, setTop, groups, setGroups, actionSuggestions, labelSuggestions }: {
+  top: 'all' | 'any'; setTop: (v: 'all' | 'any') => void; groups: FilterGroup[]; setGroups: (g: FilterGroup[]) => void;
+  actionSuggestions: string[]; labelSuggestions: string[];
+}) {
+  const setGroup = (gi: number, g: FilterGroup) => setGroups(groups.map((x, i) => (i === gi ? g : x)));
+  const addGroup = () => setGroups([...groups, { match: 'all', conditions: [{ field: 'action', op: 'is', values: [] }] }]);
+  const removeGroup = (gi: number) => setGroups(groups.filter((_, i) => i !== gi));
+  const setCond = (gi: number, ci: number, c: Cond) => setGroup(gi, { ...groups[gi], conditions: groups[gi].conditions.map((x, i) => (i === ci ? c : x)) });
+  const addCond = (gi: number) => setGroup(gi, { ...groups[gi], conditions: [...groups[gi].conditions, { field: 'action', op: 'is', values: [] }] });
+  const removeCond = (gi: number, ci: number) => setGroup(gi, { ...groups[gi], conditions: groups[gi].conditions.filter((_, i) => i !== ci) });
+  const suggFor = (field: string) => (field === 'action' ? actionSuggestions : field === 'label' ? labelSuggestions : field === 'draft' ? ['true', 'false'] : []);
+  const sel = 'h-7 shrink-0 rounded-md border border-line bg-surface-2 px-1.5 font-mono text-[11px] text-fg focus:border-brand/60 focus:outline-none';
+  if (!groups.length) return (
+    <button type="button" onClick={addGroup} className="rounded-md border border-dashed border-line px-3 py-1.5 font-mono text-[11.5px] text-dim hover:border-hair hover:text-t2">+ add a filter</button>
+  );
+  return (
+    <div className="flex flex-col gap-2">
+      {groups.length > 1 && (
+        <div className="flex items-center gap-2 text-[11px] text-dim-2">match <AndOr value={top} onChange={setTop} labels={['all', 'any']} /> of the groups below</div>
+      )}
+      {groups.map((g, gi) => (
+        <div key={gi}>
+          {gi > 0 && <div className="my-1 text-center font-mono text-[10px] font-semibold uppercase tracking-wide text-brand-soft">{top === 'all' ? 'and' : 'or'}</div>}
+          <div className="rounded-md border border-line-soft bg-surface-2/40 p-2">
+            <div className="mb-1.5 flex items-center gap-2">
+              <span className="font-mono text-[10px] text-dim-2">match</span><AndOr value={g.match} onChange={(v) => setGroup(gi, { ...g, match: v })} />
+              <span className="font-mono text-[10px] text-dim-2">of</span>
+              <button type="button" onClick={() => removeGroup(gi)} className="ml-auto text-dim hover:text-bad" aria-label="remove group">✕</button>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              {g.conditions.map((c, ci) => (
+                <div key={ci}>
+                  {ci > 0 && <div className="mb-1 ml-1 font-mono text-[9px] font-semibold uppercase text-dim-3">{g.match === 'all' ? 'and' : 'or'}</div>}
+                  <div className="flex items-start gap-1.5">
+                    <select value={c.field} onChange={(e) => setCond(gi, ci, { ...c, field: e.target.value, values: [] })} className={sel}>{FILTER_FIELDS.map((f) => <option key={f.v} value={f.v}>{f.label}</option>)}</select>
+                    <select value={c.op} onChange={(e) => setCond(gi, ci, { ...c, op: e.target.value })} className={sel}>{FILTER_OPS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}</select>
+                    <div className="min-w-0 flex-1">
+                      <TokenPicker value={c.values.join(', ')} onChange={(v) => setCond(gi, ci, { ...c, values: v.split(',').map((s) => s.trim()).filter(Boolean) })} suggestions={suggFor(c.field)} placeholder={c.op === 'matches' ? 'regex…' : 'value…'} />
+                    </div>
+                    <button type="button" onClick={() => removeCond(gi, ci)} className="mt-1 shrink-0 text-dim hover:text-bad" aria-label="remove condition">✕</button>
+                  </div>
+                </div>
+              ))}
+              <button type="button" onClick={() => addCond(gi)} className="self-start font-mono text-[11px] text-brand-soft hover:underline">+ condition</button>
+            </div>
+          </div>
+        </div>
+      ))}
+      <button type="button" onClick={addGroup} className="self-start rounded-md border border-dashed border-line px-2.5 py-1 font-mono text-[11px] text-dim hover:border-hair hover:text-t2">+ {top === 'all' ? 'AND' : 'OR'} group</button>
+    </div>
+  );
+}
+
 const TRIGGER_GROUPS: { label: string; items: string[] }[] = [
   { label: 'Control', items: ['schedule', 'manual', 'api', 'webhook'] },
   { label: 'GitHub', items: ['push', 'pull_request', 'pull_request_review', 'issues', 'issue_comment', 'label', 'release'] },
@@ -291,10 +361,8 @@ export function NewRoutinePage() {
   const [prompt, setPrompt] = useState('');
   const [chain, setChain] = useState('');
   const [schedule, setSchedule] = useState('0 9 * * *');
-  const [filterActions, setFilterActions] = useState('');
-  const [filterBranches, setFilterBranches] = useState('');
-  const [filterLabels, setFilterLabels] = useState('');
-  const [filterMode, setFilterMode] = useState<'and' | 'or'>('and');
+  const [filterTop, setFilterTop] = useState<'all' | 'any'>('all');
+  const [filterGroups, setFilterGroups] = useState<FilterGroup[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [reactions, setReactions] = useState<{ source: string; kind: string; when: string; run: string; check?: string }[]>([]);
   const [concScope, setConcScope] = useState('auto');
@@ -306,13 +374,11 @@ export function NewRoutinePage() {
   const labelable = triggers.some((t) => ['label', 'pull_request', 'pull_request_target', 'issues'].includes(t));
   const actionSuggestions = [...new Set(triggers.flatMap((t) => ACTION_SUGGESTIONS[t] || []))];
   const { data: labelsData } = useGithubLabels(repo.split(',')[0]?.trim() || '');
-  const filtersObj = {
-    actions: filterActions.split(',').map((s) => s.trim()).filter(Boolean),
-    branches: filterBranches.split(',').map((s) => s.trim()).filter(Boolean),
-    labels: filterLabels.split(',').map((s) => s.trim()).filter(Boolean),
-    mode: filterMode,
-  };
-  const hasFilters = filtersObj.actions.length > 0 || filtersObj.branches.length > 0 || filtersObj.labels.length > 0;
+  const cleanGroups = filterGroups
+    .map((g) => ({ match: g.match, conditions: g.conditions.filter((c) => c.values.length || c.op === 'is_not') }))
+    .filter((g) => g.conditions.length);
+  const filtersObj = cleanGroups.length ? { match: filterTop, groups: cleanGroups } : {};
+  const hasFilters = cleanGroups.length > 0;
   const toggle = (set: React.Dispatch<React.SetStateAction<string[]>>, v: string) =>
     set((arr) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]));
   const chainArr = chain.split(',').map((s) => slugify(s)).filter(Boolean);
@@ -328,10 +394,18 @@ export function NewRoutinePage() {
     setPrompt(d.prompt || '');
     setChain(d.chain.join(', '));
     if (d.schedule) setSchedule(d.schedule);
-    setFilterActions((d.filters?.actions ?? []).join(', '));
-    setFilterBranches((d.filters?.branches ?? []).join(', '));
-    setFilterLabels(((d.filters as { labels?: string[] })?.labels ?? []).join(', '));
-    setFilterMode((d.filters as { mode?: 'and' | 'or' })?.mode === 'or' ? 'or' : 'and');
+    const fl = (d.filters ?? {}) as { groups?: FilterGroup[]; match?: 'all' | 'any'; actions?: string[]; branches?: string[]; labels?: string[]; mode?: 'and' | 'or' };
+    if (Array.isArray(fl.groups)) {
+      setFilterTop(fl.match === 'any' ? 'any' : 'all');
+      setFilterGroups(fl.groups);
+    } else {
+      const conds: Cond[] = [];
+      if (fl.actions?.length) conds.push({ field: 'action', op: 'is', values: fl.actions });
+      if (fl.branches?.length) conds.push({ field: 'branch', op: 'is', values: fl.branches });
+      if (fl.labels?.length) conds.push({ field: 'label', op: 'is', values: fl.labels });
+      setFilterTop('all');
+      setFilterGroups(conds.length ? [{ match: fl.mode === 'or' ? 'any' : 'all', conditions: conds }] : []);
+    }
     setReactions(d.reactions ?? []);
     setConcScope(d.concurrency?.scope || 'auto');
     setConcConflict(d.concurrency?.onConflict === 'drop' ? 'drop' : 'wait');
@@ -348,12 +422,12 @@ export function NewRoutinePage() {
     L.push(`team: ${team || 'general'}`);
     L.push('on:');
     if (!triggers.length) L.push('  # no triggers selected — run-now / API only');
-    triggers.forEach((t) => {
-      if (t === 'schedule') L.push(`  - schedule: { cron: "${schedule}" }`);
-      else if (t === 'push' && filtersObj.branches.length) L.push(`  - push: { branches: [${filtersObj.branches.join(', ')}] }`);
-      else if ((t === 'label' || actionable) && (filtersObj.actions.length || filtersObj.labels.length) && t !== 'push') L.push(`  - ${t}: {${filtersObj.actions.length ? ` actions: [${filtersObj.actions.join(', ')}]` : ''}${filtersObj.labels.length ? ` labels: [${filtersObj.labels.join(', ')}]` : ''} }`);
-      else L.push(`  - ${t}: {}`);
-    });
+    triggers.forEach((t) => L.push(t === 'schedule' ? `  - schedule: { cron: "${schedule}" }` : `  - ${t}: {}`));
+    if (cleanGroups.length) {
+      const condStr = (c: Cond) => `${c.field} ${c.op.replace('_', ' ')} [${c.values.join(', ')}]`;
+      if (cleanGroups.length === 1) { L.push(`filter: ${cleanGroups[0].match} of`); cleanGroups[0].conditions.forEach((c) => L.push(`  - ${condStr(c)}`)); }
+      else { L.push(`filter: ${filterTop} of`); cleanGroups.forEach((g) => { L.push(`  - ${g.match} of:`); g.conditions.forEach((c) => L.push(`      - ${condStr(c)}`)); }); }
+    }
     if (connectors.length) { L.push('tools:'); L.push(`  grant: [${connectors.join(', ')}]`); }
     L.push('runtime:');
     L.push(`  model: ${model || 'claude-opus-4-8'}`);
@@ -370,7 +444,7 @@ export function NewRoutinePage() {
     L.push('');
     L.push(prompt.trim() || '## Prompt\nDescribe what this routine should do, step by step.');
     return L.join('\n');
-  }, [name, slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain, schedule, filterActions, filterBranches, filterLabels, reactions, concScope, concConflict]);
+  }, [name, slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain, schedule, filterTop, filterGroups, reactions, concScope, concConflict]);
 
   const valid = name.trim().length > 0 && slug.length > 0;
   function submit() {
@@ -459,32 +533,12 @@ export function NewRoutinePage() {
 
             {(triggers.includes('push') || actionable) && (
               <div className="mt-3.5 border-t border-line-soft pt-3">
-                {(() => { const rows = [triggers.includes('push'), actionable, labelable].filter(Boolean).length; return (
                 <div className="mb-2 flex items-center gap-2">
                   <span className={LABEL.replace('mb-1.5', '')}>Refine · run only when the event matches</span>
-                  {rows >= 2 && (
-                    <span className="inline-flex overflow-hidden rounded-md border border-line text-[11px] font-semibold">
-                      {(['all', 'any'] as const).map((m) => {
-                        const v = m === 'all' ? 'and' : 'or';
-                        return <button key={m} type="button" onClick={() => setFilterMode(v)} className={cn('px-2 py-0.5 font-mono', filterMode === v ? 'bg-brand/15 text-brand-soft' : 'text-dim hover:text-t2')}>{m}</button>;
-                      })}
-                    </span>
-                  )}
+                  {!filterGroups.length && <span className="font-mono text-[10.5px] text-dim-3">optional — blank = every event</span>}
                 </div>
-                ); })()}
-                {triggers.includes('push') && (
-                  <div className="mb-2"><div className="mb-1 font-mono text-[10.5px] text-dim-2">push branch is any of</div>
-                    <input value={filterBranches} onChange={(e) => setFilterBranches(e.target.value)} placeholder="main, develop  ·  blank = any branch" className={cn(inputCls, 'h-8 font-mono text-[12px]')} /></div>
-                )}
-                {actionable && (
-                  <div className="mb-2"><div className="mb-1 font-mono text-[10.5px] text-dim-2">action / conclusion is any of <span className="text-dim-3">· pick or type · blank = all</span></div>
-                    <TokenPicker value={filterActions} onChange={setFilterActions} suggestions={actionSuggestions} placeholder="opened, synchronize, success…" /></div>
-                )}
-                {labelable && (
-                  <div><div className="mb-1 font-mono text-[10.5px] text-dim-2">label is any of <span className="text-dim-3">· {labelsData?.labels?.length ? `${labelsData.labels.length} in repo` : 'pick or type'} · blank = any</span></div>
-                    <TokenPicker value={filterLabels} onChange={setFilterLabels} suggestions={labelsData?.labels ?? []} placeholder="jira-ticket, needs-review…" /></div>
-                )}
-                <div className="mt-1.5 text-[11px] text-dim-2">Values in a row are OR'd; multiple rows combine by <span className="font-semibold text-t2">{filterMode === 'and' ? 'all (AND)' : 'any (OR)'}</span>. The <span className="font-mono">label</span> trigger fires on a PR/issue being labeled.</div>
+                <FilterBuilder top={filterTop} setTop={setFilterTop} groups={filterGroups} setGroups={setFilterGroups} actionSuggestions={actionSuggestions} labelSuggestions={labelsData?.labels ?? []} />
+                <div className="mt-1.5 text-[11px] text-dim-2">Build conditions on the event — <span className="font-mono">action</span>, <span className="font-mono">label</span>, <span className="font-mono">branch</span>, <span className="font-mono">author</span>, <span className="font-mono">title</span>… Group them with <span className="font-semibold text-t2">all (AND)</span> / <span className="font-semibold text-t2">any (OR)</span> for logic like <span className="font-mono">(opened AND jira-ticket) OR (push to main)</span>.</div>
               </div>
             )}
             <div className="mt-3 border-t border-line-soft pt-3"><div className={LABEL}>Repositories · <span className="font-mono lowercase tracking-normal text-dim-2">scope GitHub/CI triggers</span></div>

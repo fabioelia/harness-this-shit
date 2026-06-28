@@ -134,6 +134,19 @@ function ensureMemory(slug) {
 const cleanFilters = (f) => {
   const o = f && typeof f === 'object' ? f : {};
   const arr = (x) => (Array.isArray(x) ? x.map((s) => String(s).trim()).filter(Boolean) : []);
+  if (Array.isArray(o.groups)) {
+    const FIELDS = ['action', 'branch', 'base', 'label', 'author', 'title', 'draft'];
+    const OPS = ['is', 'is_not', 'contains', 'matches'];
+    const groups = o.groups.map((g) => ({
+      match: g && g.match === 'any' ? 'any' : 'all',
+      conditions: (Array.isArray(g?.conditions) ? g.conditions : []).map((c) => ({
+        field: FIELDS.includes(c?.field) ? c.field : 'action',
+        op: OPS.includes(c?.op) ? c.op : 'is',
+        values: arr(c?.values),
+      })).filter((c) => c.values.length || c.op === 'is_not'),
+    })).filter((g) => g.conditions.length);
+    return { match: o.match === 'any' ? 'any' : 'all', groups };
+  }
   return { actions: arr(o.actions), branches: arr(o.branches), labels: arr(o.labels), mode: o.mode === 'or' ? 'or' : 'and' };
 };
 const cleanConcurrency = (c) => {
@@ -424,14 +437,48 @@ const labelsOf = (e) => [...new Set([
 // A "labeled"/"unlabeled" pull_request/issues delivery also satisfies the `label` trigger.
 const LABEL_TYPES = new Set(['pull_request', 'pull_request_target', 'issues']);
 const isLabelEvent = (type, e) => LABEL_TYPES.has(type) && (e?.action === 'labeled' || e?.action === 'unlabeled');
+// A condition's field → the event's value(s) for it (always an array).
+const FILTER_FIELDS = {
+  action: (e) => eventStates(e),
+  branch: (e) => [branchOf(e)].filter(Boolean),
+  base: (e) => [e?.pull_request?.base?.ref].filter(Boolean),
+  label: (e) => labelsOf(e),
+  author: (e) => [e?.pull_request?.user?.login || e?.issue?.user?.login || e?.sender?.login].filter(Boolean),
+  title: (e) => [e?.pull_request?.title || e?.issue?.title].filter(Boolean),
+  draft: (e) => (e?.pull_request ? [String(!!e.pull_request.draft)] : []),
+};
+function evalCondition(c, e) {
+  const vals = (FILTER_FIELDS[c.field]?.(e) || []).map(String);
+  const want = (Array.isArray(c.values) ? c.values : []).map(String);
+  if (!want.length && c.op !== 'is_not') return true; // empty = no constraint
+  const lc = (s) => s.toLowerCase();
+  switch (c.op) {
+    case 'is_not': return !vals.some((v) => want.includes(v));
+    case 'contains': return vals.some((v) => want.some((w) => lc(v).includes(lc(w))));
+    case 'matches': return vals.some((v) => want.some((w) => { try { return new RegExp(w).test(v); } catch { return false; } }));
+    default: return vals.some((v) => want.includes(v)); // 'is'
+  }
+}
 function filtersMatch(r, event) {
   let f; try { f = JSON.parse(r.filters || '{}'); } catch { f = {}; }
+  // New shape: groups of conditions, combined AND/OR at two levels.
+  if (Array.isArray(f.groups)) {
+    if (!f.groups.length) return true;
+    const groupOk = (g) => {
+      const conds = Array.isArray(g.conditions) ? g.conditions : [];
+      if (!conds.length) return true;
+      const res = conds.map((c) => evalCondition(c, event));
+      return g.match === 'any' ? res.some(Boolean) : res.every(Boolean);
+    };
+    const gr = f.groups.map(groupOk);
+    return f.match === 'any' ? gr.some(Boolean) : gr.every(Boolean);
+  }
+  // Legacy shape: { actions, branches, labels, mode }.
   const actions = Array.isArray(f.actions) ? f.actions : [];
   const branches = Array.isArray(f.branches) ? f.branches : [];
   const labels = Array.isArray(f.labels) ? f.labels : [];
   const mode = f.mode === 'or' ? 'or' : 'and';
   const checks = [];
-  // Within a filter, the listed values are OR'd; across filters they combine by `mode`.
   if (actions.length) { const vals = eventStates(event); checks.push(!vals.length || vals.some((v) => actions.includes(v))); }
   if (branches.length) { const br = branchOf(event); checks.push(!br || branches.includes(br)); }
   if (labels.length) { const labs = labelsOf(event); checks.push(!labs.length || labs.some((l) => labels.includes(l))); }
