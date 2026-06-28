@@ -1272,6 +1272,10 @@ app.get('/api/routines/:slug', (req, res) => {
   const lf = one("SELECT id, output, created_at FROM runs WHERE routine_slug=? AND status='failed' ORDER BY created_at DESC, ord DESC LIMIT 1", r.slug);
   const lastError = lf ? { runId: lf.id, output: String(lf.output || '').slice(0, 400), ago: relTime(lf.created_at) } : null;
   const costTrend = all("SELECT cost_usd FROM runs WHERE routine_slug=? AND status='succeeded' AND cost_usd IS NOT NULL AND cost_usd > 0 ORDER BY created_at DESC, ord DESC LIMIT 24", r.slug).reverse().map((x) => +x.cost_usd.toFixed(4));
+  const tpDays = 14; const tp = {};
+  for (let i = tpDays - 1; i >= 0; i--) { const k = new Date(now() - i * 86_400_000).toISOString().slice(0, 10); tp[k] = { date: k, runs: 0, fails: 0 }; }
+  for (const x of all('SELECT status, created_at FROM runs WHERE routine_slug=? AND created_at > ?', r.slug, now() - tpDays * 86_400_000)) { const k = new Date(x.created_at).toISOString().slice(0, 10); if (tp[k]) { tp[k].runs++; if (x.status === 'failed') tp[k].fails++; } }
+  const runsByDay = Object.values(tp);
   const hist = all("SELECT status, created_at FROM runs WHERE routine_slug=? AND status IN ('succeeded','failed') ORDER BY created_at, ord", r.slug);
   let failStart = null; const gaps = [];
   for (const h of hist) {
@@ -1283,7 +1287,7 @@ app.get('/api/routines/:slug', (req, res) => {
     .map((x) => ({ slug: x.slug, name: x.name, enabled: !!x.enabled, viaChain: j(x.chain).includes(r.slug), viaReaction: j(x.reactions).some((rx) => rx.run === r.slug) }))
     .filter((x) => x.viaChain || x.viaReaction)
     .map((x) => ({ slug: x.slug, name: x.name, enabled: x.enabled, via: x.viaChain && x.viaReaction ? 'chain + reaction' : x.viaChain ? 'chain' : 'reaction' }));
-  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, script: r.script || '', lastError, costTrend, dependents, mttr });
+  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, script: r.script || '', lastError, costTrend, dependents, mttr, runsByDay });
 });
 
 function insertRoutine(b) {

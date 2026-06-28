@@ -89,6 +89,25 @@ function ReactiveFlowCard({ d }: { d: RoutineDetail }) {
   );
 }
 
+function ThroughputCard({ data }: { data: { date: string; runs: number; fails: number }[] }) {
+  if (!data || data.every((d) => d.runs === 0)) return null;
+  const max = Math.max(1, ...data.map((d) => d.runs));
+  const total = data.reduce((a, d) => a + d.runs, 0);
+  return (
+    <div className={CARD}>
+      <div className={`${LABEL} mb-3`}>Throughput · {total} runs / 14d</div>
+      <div className="flex items-end gap-[3px]" style={{ height: 56 }}>
+        {data.map((d) => (
+          <div key={d.date} className="group relative flex flex-1 flex-col justify-end" title={`${d.date} · ${d.runs} runs${d.fails ? ` · ${d.fails} failed` : ''}`}>
+            {d.fails > 0 && <div className="w-full rounded-t-[2px] bg-bad/70" style={{ height: `${(d.fails / max) * 50}px` }} />}
+            <div className={`w-full ${d.fails > 0 ? '' : 'rounded-t-[2px]'} bg-brand/60`} style={{ height: `${((d.runs - d.fails) / max) * 50}px` }} />
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 flex justify-between font-mono text-[10px] text-dim-3"><span>{data[0]?.date.slice(5)}</span><span>{data[data.length - 1]?.date.slice(5)}</span></div>
+    </div>
+  );
+}
 function CostTrendCard({ trend }: { trend: number[] }) {
   if (!trend || trend.length < 3) return null;
   const last = trend[trend.length - 1];
@@ -506,6 +525,7 @@ export function RoutineDetailPage() {
               <div className="mt-1.5 font-mono text-[10.5px] text-dim-2">mean time from a failure to the next success.</div>
             </div>
           )}
+          <ThroughputCard data={d.runsByDay} />
           <CostTrendCard trend={d.costTrend} />
           <MetricCard slug={d.slug} />
           {d.scriptMode && <ScriptCard slug={d.slug} lang={d.scriptLang} compiled={d.compiled} stale={d.scriptStale} script={d.script} />}
