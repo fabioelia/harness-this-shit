@@ -129,8 +129,10 @@ dropdowns · Fleet inbox badge.
 | 104 | Routine lifecycle status (draft/active/deprecated) + Fleet badges | collaboration | ✅ done |
 | 105 | Run handoff — assign a run to a teammate + triage status (open/investigating/resolved) | collaboration | ✅ done |
 | 106 | Triage queue — shared list of unresolved failed runs (assignee + status) | collaboration | ✅ done |
+| 107 | Change review / approval — edits flag needs-review, reviewer approves (recorded) | collaboration | ✅ done |
 
 ### Loop-3 QA backlog (test at iteration 110)
+- [ ] (iter 107) substantive edit (prompt/triggers/etc) flags needs_review; approve records reviewer + clears it; non-substantive edits (name) do not flag; Fleet badge.
 - [ ] (iter 103) comment post/list/delete; commentCount on detail; author persists in localStorage.
 - [ ] (iter 101) Fleet owner filter; routine-detail inline owner/team reassign persists via PUT.
 

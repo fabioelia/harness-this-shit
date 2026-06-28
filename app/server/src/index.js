@@ -291,6 +291,7 @@ const shapeRoutine = (r) => {
     inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
     scriptMode: !!r.script_mode, scriptLang: r.script_lang || 'bash', compiled: !!(r.script && r.script.trim()), scriptStale: !!r.script_stale,
     retries: r.retries || 0, assertions: j(r.assertions), tags: j(r.tags), rateLimit: r.rate_limit || 0, maxFails: r.max_fails || 0, failStreak: r.fail_streak || 0, notes: r.notes || '', pinned: !!r.pinned, activeWindow: jObj(r.active_window) || null, sla: r.sla_s || 0, archived: !!r.archived, lifecycle: r.lifecycle || 'active',
+    reviewStatus: r.review_status || '', reviewedBy: r.reviewed_by || '', reviewedAgo: r.reviewed_at ? relTime(r.reviewed_at) : '',
     longRunning: (() => { const t = one("SELECT MIN(created_at) AS t FROM runs WHERE routine_slug=? AND status IN ('running','waiting')", r.slug)?.t; return !!(t && now() - t > 8 * 60_000); })(),
     lastSuccessAgo: (() => { const t = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND status='succeeded'", r.slug)?.t || 0; return t ? relTime(t) : ''; })(),
     staleSuccess: (() => { const t = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND status='succeeded'", r.slug)?.t || 0; return !!r.enabled && t > 0 && (now() - t) > 7 * 86_400_000; })(),
@@ -1506,7 +1507,11 @@ app.put('/api/routines/:slug', (req, res) => {
   for (const [f, nv, ov] of arr) if (nv != null && JSON.stringify(nv) !== ov) changed.push(f);
   if (b.filters != null && JSON.stringify(cleanFilters(b.filters)) !== r.filters) changed.push('filters');
   if (promptChanged) changed.push('prompt');
-  if (changed.length) run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', r.slug, `edited: ${changed.join(', ')}`, now());
+  if (changed.length) {
+    run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', r.slug, `edited: ${changed.join(', ')}`, now());
+    // Substantive change → flag for review (was previously approved or has a reviewer).
+    if (changed.some((f) => ['prompt', 'triggers', 'connectors', 'filters', 'reactions', 'chain', 'model'].includes(f))) run("UPDATE routines SET review_status='needs_review' WHERE slug=?", r.slug);
+  }
   run(
     `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=?,retries=?,assertions=?,alert_on_fail=?,alert_target=?,timeout_s=?,env=?,tags=?,rate_limit=?,max_fails=?,notes=?,active_window=?,sla_s=?,lifecycle=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
@@ -2284,6 +2289,16 @@ app.post('/api/routines/:slug/comments', (req, res) => {
 });
 app.delete('/api/routines/:slug/comments/:id', (req, res) => {
   run('DELETE FROM comments WHERE id=? AND slug=?', req.params.id, req.params.slug);
+  res.json({ ok: true });
+});
+// Approve a routine's current config — clears the needs-review flag, records the reviewer.
+app.post('/api/routines/:slug/approve', (req, res) => {
+  const r = one('SELECT slug FROM routines WHERE slug=?', req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const reviewer = String(req.body?.reviewer || '').trim().slice(0, 40) || 'anon';
+  run("UPDATE routines SET review_status='approved', reviewed_by=?, reviewed_at=? WHERE slug=?", reviewer, now(), req.params.slug);
+  run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', req.params.slug, `approved by ${reviewer}`, now());
+  logActivity(`${req.params.slug} approved by ${reviewer}`, 'success');
   res.json({ ok: true });
 });
 app.get('/api/routines/:slug/audit', (req, res) => {

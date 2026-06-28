@@ -53,6 +53,9 @@ export interface Routine {
   sla: number;
   archived: boolean;
   lifecycle: string;
+  reviewStatus: string;
+  reviewedBy: string;
+  reviewedAgo: string;
 }
 
 export interface FrontMatter {

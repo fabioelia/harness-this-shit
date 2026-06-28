@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt, useRoutineAudit, useArchiveRoutine, useUpdateRoutine, useComments, useAddComment, useDeleteComment } from '@/lib/api';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt, useRoutineAudit, useArchiveRoutine, useUpdateRoutine, useApproveRoutine, useComments, useAddComment, useDeleteComment } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { FrontMatter, RoutineDetail } from '@/types';
@@ -344,6 +344,7 @@ export function RoutineDetailPage() {
   const snooze = useSnooze();
   const archive = useArchiveRoutine();
   const update = useUpdateRoutine();
+  const approve = useApproveRoutine();
   const [reassign, setReassign] = useState(false);
   const [ownerDraft, setOwnerDraft] = useState("");
   const [teamDraft, setTeamDraft] = useState("");
@@ -416,6 +417,16 @@ export function RoutineDetailPage() {
         </div>
         {msg && (
           <div className={`mt-3 inline-block rounded-md border px-3 py-1.5 text-[12px] ${msg.tone === 'bad' ? 'border-bad/30 bg-bad/10 text-bad' : 'border-warn/30 bg-warn/10 text-warn'}`}>{msg.text}</div>
+        )}
+        {d.reviewStatus === 'needs_review' && (
+          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-warn/30 bg-warn/[0.07] px-3.5 py-2">
+            <span className="font-display text-[11px] font-semibold uppercase tracking-[0.06em] text-warn">⚑ Needs review</span>
+            <span className="font-mono text-[11.5px] text-dim-2">config changed since last approval</span>
+            <button onClick={() => { let rv = ''; try { rv = localStorage.getItem('sb-author') || ''; } catch { /**/ } approve.mutate({ slug: d.slug, reviewer: rv || 'anon' }); }} disabled={approve.isPending} className="ml-auto h-7 rounded-md border border-ok/50 bg-ok/10 px-3 font-display text-[12px] font-semibold text-ok hover:bg-ok/20 disabled:opacity-40">{approve.isPending ? 'Approving…' : '✓ Approve'}</button>
+          </div>
+        )}
+        {d.reviewStatus === 'approved' && d.reviewedBy && (
+          <div className="mt-3 inline-flex items-center gap-2 rounded-md border border-ok/25 bg-ok/[0.05] px-3 py-1.5 font-mono text-[11.5px] text-ok">✓ approved by {d.reviewedBy} · {d.reviewedAgo}</div>
         )}
         {d.lastStatus === 'failing' && d.lastError && (
           <Link to={`/runs/${d.lastError.runId}`} className="mt-3 block rounded-md border border-bad/30 bg-bad/[0.07] px-3.5 py-2.5 hover:border-bad/50">

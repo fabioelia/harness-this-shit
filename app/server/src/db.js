@@ -176,6 +176,9 @@ export function getDb() {
   ensure('routines', 'sla_s', 'sla_s INTEGER NOT NULL DEFAULT 0');
   ensure('routines', 'archived', 'archived INTEGER NOT NULL DEFAULT 0');
   ensure('routines', 'lifecycle', "lifecycle TEXT NOT NULL DEFAULT 'active'");
+  ensure('routines', 'review_status', "review_status TEXT NOT NULL DEFAULT ''");
+  ensure('routines', 'reviewed_by', "reviewed_by TEXT NOT NULL DEFAULT ''");
+  ensure('routines', 'reviewed_at', 'reviewed_at INTEGER NOT NULL DEFAULT 0');
   _db.exec('CREATE TABLE IF NOT EXISTS prompt_history (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, prompt TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)');
   _db.exec('CREATE TABLE IF NOT EXISTS routine_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, summary TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)');
   _db.exec('CREATE TABLE IF NOT EXISTS comments (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, author TEXT NOT NULL DEFAULT \'\', body TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)');

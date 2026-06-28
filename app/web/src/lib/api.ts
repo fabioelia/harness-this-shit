@@ -155,6 +155,10 @@ export function useBulkRoutines() {
   return useMutation({ mutationFn: (b: { slugs: string[]; action: string; hours?: number; tag?: string }) => post<{ ok: boolean; affected: number }>('/api/routines/bulk', b), onSuccess: () => { qc.invalidateQueries({ queryKey: ['routines'] }); qc.invalidateQueries({ queryKey: ['stats'] }); } });
 }
 export const useRoutines = (archived = false) => useQuery({ queryKey: ['routines', archived], queryFn: () => get<Routine[]>(`/api/routines${archived ? '?archived=1' : ''}`), refetchInterval: 10000 });
+export function useApproveRoutine() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ slug, reviewer }: { slug: string; reviewer: string }) => post(`/api/routines/${slug}/approve`, { reviewer }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['routine', v.slug] }); qc.invalidateQueries({ queryKey: ['routines'] }); } });
+}
 export function useArchiveRoutine() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: ({ slug, archived }: { slug: string; archived: boolean }) => post<{ ok: boolean; archived: boolean }>(`/api/routines/${slug}/archive`, { archived }), onSuccess: () => qc.invalidateQueries({ queryKey: ['routines'] }) });
