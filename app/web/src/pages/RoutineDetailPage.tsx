@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt, useRoutineAudit, useArchiveRoutine, useUpdateRoutine, useApproveRoutine, useComments, useAddComment, useDeleteComment } from '@/lib/api';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt, useRoutineAudit, useArchiveRoutine, useUpdateRoutine, useApproveRoutine, useComments, useAddComment, useDeleteComment, useWatch, useToggleWatch } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import { cn } from '@/lib/utils';
+import { useOperator } from '@/lib/operator';
 import type { FrontMatter, RoutineDetail } from '@/types';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
@@ -345,6 +346,9 @@ export function RoutineDetailPage() {
   const archive = useArchiveRoutine();
   const update = useUpdateRoutine();
   const approve = useApproveRoutine();
+  const [op2] = useOperator();
+  const watch = useWatch(slug || '', op2);
+  const toggleWatch = useToggleWatch();
   const [reassign, setReassign] = useState(false);
   const [ownerDraft, setOwnerDraft] = useState("");
   const [teamDraft, setTeamDraft] = useState("");
@@ -468,7 +472,8 @@ export function RoutineDetailPage() {
           {d.connectors.slice(0, 2).map((c) => <Chip key={c}>{c}</Chip>)}
           {d.lastTouched && <span className="ml-auto font-mono text-[11px] text-dim-2" title="most recent config change / approval">✎ {d.lastTouched.summary} · {d.lastTouched.ago}</span>}
           {d.lastSuccessAgo && <span className={`${d.lastTouched ? '' : 'ml-auto'} font-mono text-[11.5px] ${d.staleSuccess ? 'text-warn' : 'text-dim'}`} title="when this routine last produced a successful run">last ✓ {d.lastSuccessAgo}</span>}
-          <button onClick={() => preview.mutate(d.slug)} className={`font-mono text-[12px] font-medium text-dim hover:text-brand ${d.lastSuccessAgo ? '' : 'ml-auto'}`}>Preview prompt ▸</button>
+          <button onClick={() => toggleWatch.mutate({ slug: d.slug, who: op2 || 'anon', on: !watch.data?.watching })} title={watch.data?.watching ? 'unwatch' : 'watch — changes land in your inbox'} className={`font-mono text-[12px] font-medium hover:text-brand ${watch.data?.watching ? 'text-brand-soft' : 'text-dim'} ${d.lastSuccessAgo || d.lastTouched ? '' : 'ml-auto'}`}>{watch.data?.watching ? '👁 watching' : '👁 watch'}{watch.data?.watchers ? ` ${watch.data.watchers}` : ''}</button>
+          <button onClick={() => preview.mutate(d.slug)} className="font-mono text-[12px] font-medium text-dim hover:text-brand">Preview prompt ▸</button>
           <a href={`/api/routines/${d.slug}/export`} download={`${d.slug}.routine.json`} className="font-mono text-[12px] font-medium text-dim hover:text-brand">Export JSON ↓</a>
           <button onClick={() => setShowRaw(true)} className="font-mono text-[12px] font-medium text-brand hover:underline">View raw {d.file} ›</button>
         </div>

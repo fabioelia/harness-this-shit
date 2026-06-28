@@ -45,6 +45,12 @@ export function ActivityPage() {
                 <span className="text-dim">{mn.by} on {mn.slug}:</span><span className="flex-1 truncate text-dim-2">“{mn.snippet}”</span><span className="shrink-0 text-dim">{mn.ago}</span>
               </Link>
             ))}
+            {inbox.watched.map((w, i) => (
+              <Link key={'w' + i} to={`/routines/${w.slug}`} className="flex items-center gap-3 border-b border-line-soft px-4 py-2 last:border-0 font-mono text-[11.5px] hover:bg-white/[0.015]">
+                <span className="shrink-0 rounded bg-lease/15 px-1.5 py-px text-[10px] font-semibold text-lease">👁 watching</span>
+                <span className="w-[120px] shrink-0 truncate text-t2">{w.slug}</span><span className="flex-1 truncate text-dim-2">{w.summary}</span><span className="shrink-0 text-dim">{w.ago}</span>
+              </Link>
+            ))}
           </div>
         )}
         {standup && Object.values(standup.counts).some((n) => n > 0) && (

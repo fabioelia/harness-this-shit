@@ -2376,7 +2376,14 @@ app.get('/api/inbox', (req, res) => {
     .map((x) => ({ id: x.id, slug: x.routine_slug, triage: x.triage || 'open', ago: relTime(x.created_at) }));
   const mentions = all('SELECT by, slug, snippet, created_at FROM mentions WHERE mentioned=? ORDER BY id DESC LIMIT 20', who)
     .map((m) => ({ by: m.by || 'anon', slug: m.slug, snippet: m.snippet, ago: relTime(m.created_at) }));
-  res.json({ who, assigned, mentions, count: assigned.length + mentions.length });
+  const watchSlugs = all('SELECT slug FROM routine_watch WHERE who=?', who).map((x) => x.slug);
+  let watched = [];
+  if (watchSlugs.length) {
+    const ph = watchSlugs.map(() => '?').join(',');
+    watched = all(`SELECT slug, summary, created_at FROM routine_audit WHERE slug IN (${ph}) AND created_at > ? ORDER BY id DESC LIMIT 15`, ...watchSlugs, now() - 3 * 86_400_000)
+      .map((a) => ({ slug: a.slug, summary: a.summary, ago: relTime(a.created_at) }));
+  }
+  res.json({ who, assigned, mentions, watched, count: assigned.length + mentions.length + watched.length });
 });
 // Team standup — a rollup of recent people-activity (changes, approvals, comments, sign-offs).
 app.get('/api/standup', (req, res) => {
@@ -2399,6 +2406,18 @@ app.get('/api/audit', (req, res) => {
 app.get('/api/mentions', (req, res) => {
   const rows = all('SELECT mentioned, by, slug, snippet, created_at FROM mentions ORDER BY id DESC LIMIT 30');
   res.json({ mentions: rows.map((m) => ({ mentioned: m.mentioned, by: m.by || 'anon', slug: m.slug, snippet: m.snippet, ago: relTime(m.created_at) })) });
+});
+// Watch / subscribe — follow a routine; its changes surface in the watcher's inbox.
+app.get('/api/routines/:slug/watch', (req, res) => {
+  const who = String(req.query.who || '').trim();
+  res.json({ watching: who ? !!one('SELECT 1 FROM routine_watch WHERE who=? AND slug=?', who, req.params.slug) : false, watchers: one('SELECT COUNT(*) AS n FROM routine_watch WHERE slug=?', req.params.slug).n });
+});
+app.post('/api/routines/:slug/watch', (req, res) => {
+  const who = String(req.body?.who || '').trim().slice(0, 40);
+  if (!who) return res.status(400).json({ error: 'who required' });
+  if (req.body?.on) run('INSERT OR IGNORE INTO routine_watch (who, slug, created_at) VALUES (?,?,?)', who, req.params.slug, now());
+  else run('DELETE FROM routine_watch WHERE who=? AND slug=?', who, req.params.slug);
+  res.json({ ok: true, watching: !!req.body?.on });
 });
 // Routine discussion — team comments / context that lives with the routine.
 app.get('/api/routines/:slug/comments', (req, res) => {
