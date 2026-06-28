@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { TooltipProvider, Tip } from '@/components/ui/tooltip';
 import { CommandPalette } from '@/components/CommandPalette';
+import { ShortcutsHelp } from '@/components/ShortcutsHelp';
 import { useKillSwitch, useStats } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -133,6 +134,7 @@ export function AppShell() {
         </main>
       </div>
       <CommandPalette />
+      <ShortcutsHelp />
     </TooltipProvider>
   );
 }
