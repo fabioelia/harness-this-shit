@@ -95,6 +95,7 @@ dropdowns · Fleet inbox badge.
 | 74 | Model efficiency comparison ($/1k tokens + avg latency per model) | efficiency/observability | ✅ done |
 | 75 | Replay a run on a different model (A/B cost/quality on the same event) | efficiency/reproducibility | ✅ done |
 | 76 | Capture the actual model per run (model_used) — accurate run/override model | observability | ✅ done |
+| 77 | Quick-start templates (prefill New form: PR reviewer, daily report, CI watcher, metric) | efficiency/UX | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.

@@ -110,6 +110,8 @@ export function useWebhookActions() {
   };
 }
 export const useModels = () => useQuery({ queryKey: ['models'], queryFn: () => get<{ models: { id: string; label: string }[]; efforts: string[]; defaultModel: string }>('/api/models'), staleTime: Infinity });
+export interface RoutineTemplate { id: string; name: string; desc: string; icon: string; body: { triggers?: string[]; connectors?: string[]; schedule?: string; model?: string; scriptMode?: boolean; scriptLang?: string; prompt?: string } }
+export const useTemplates = () => useQuery({ queryKey: ['templates'], queryFn: () => get<{ templates: RoutineTemplate[] }>('/api/templates'), staleTime: Infinity });
 export const useGithubOrgs = () => useQuery({ queryKey: ['gh-orgs'], queryFn: () => get<{ orgs: string[] }>('/api/github/orgs'), staleTime: 300_000 });
 export const useGithubChecks = (repo: string) =>
   useQuery({ queryKey: ['gh-checks', repo], enabled: !!repo, queryFn: () => get<{ checks: string[] }>(`/api/github/checks?repo=${encodeURIComponent(repo)}`), staleTime: 120_000 });

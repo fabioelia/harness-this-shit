@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useCreateRoutine, useUpdateRoutine, useRoutine, useRoutines, useGithubRepos, useGithubOrgs, useGithubChecks, useGithubLabels, useModels, useMcp } from '@/lib/api';
+import { useCreateRoutine, useUpdateRoutine, useRoutine, useRoutines, useGithubRepos, useGithubOrgs, useGithubChecks, useGithubLabels, useModels, useMcp, useTemplates } from '@/lib/api';
+import type { RoutineTemplate } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 // Dropdown of known values that also accepts free text — selected items become chips.
@@ -385,6 +386,7 @@ export function NewRoutinePage() {
   const navigate = useNavigate();
   const { slug: editSlug } = useParams();
   const isEdit = !!editSlug;
+  const { data: templates } = useTemplates();
   const existing = useRoutine(editSlug);
   const create = useCreateRoutine();
   const update = useUpdateRoutine();
@@ -521,6 +523,17 @@ export function NewRoutinePage() {
   }, [name, slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain, schedule, filterTop, filterGroups, reactions, concScope, concConflict]);
 
   const valid = name.trim().length > 0 && slug.length > 0;
+  function applyTemplate(t: RoutineTemplate) {
+    const b = t.body;
+    if (!name.trim()) setName(t.name);
+    if (b.triggers) setTriggers(b.triggers);
+    if (b.connectors) setConnectors(b.connectors);
+    if (b.model) setModel(b.model);
+    if (b.schedule) setSchedule(b.schedule);
+    if (b.scriptMode != null) setScriptMode(b.scriptMode);
+    if (b.scriptLang === 'bash' || b.scriptLang === 'node') setScriptLang(b.scriptLang);
+    if (b.prompt) setPrompt(b.prompt);
+  }
   function submit() {
     if (!valid) return;
     const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, scriptMode, scriptLang, retries, assertions: assertions.filter((a) => a.type === 'no_tool_errors' || a.value.trim()), alertOnFail, alertTarget, timeout: timeoutS, env: Object.fromEntries(envPairs.filter((p) => p.k.trim()).map((p) => [p.k.trim(), p.v])), tags: tags.split(',').map((t) => t.trim()).filter(Boolean), rateLimit, maxFails, notes, activeWindow: (winStart || winEnd || winDays.length) ? { start: winStart === '' ? null : +winStart, end: winEnd === '' ? null : +winEnd, days: winDays } : null };
@@ -556,6 +569,19 @@ export function NewRoutinePage() {
       <div className="grid gap-[22px] px-[26px] py-[22px] pb-[26px]" style={{ gridTemplateColumns: 'minmax(0,1.35fr) minmax(0,1fr)' }}>
         {/* form */}
         <div className="flex min-w-0 flex-col gap-[18px]">
+          {!isEdit && templates && templates.templates.length > 0 && (
+            <div className={CARD}>
+              <div className={`${LABEL.replace('mb-1.5', 'mb-3')}`}>Start from a template</div>
+              <div className="grid grid-cols-2 gap-2">
+                {templates.templates.map((t) => (
+                  <button key={t.id} type="button" onClick={() => applyTemplate(t)} className="flex items-start gap-2.5 rounded-md border border-line bg-surface-2 px-3 py-2.5 text-left hover:border-brand/50">
+                    <span className="text-[16px] leading-none">{t.icon}</span>
+                    <span className="min-w-0"><span className="block font-display text-[12.5px] font-semibold text-t2">{t.name}</span><span className="block truncate font-mono text-[10.5px] text-dim-2">{t.desc}</span></span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {/* 1 — what it is + does (the essentials) */}
           <div className={CARD}>
             <div className={`${LABEL.replace('mb-1.5', 'mb-4')}`}>1 · Identity</div>

@@ -1301,6 +1301,14 @@ function insertRoutine(b) {
   );
   return slug;
 }
+// Quick-start templates — common routine shapes that prefill the New form.
+const ROUTINE_TEMPLATES = [
+  { id: 'pr-reviewer', name: 'PR reviewer', desc: 'Review opened/updated PRs and comment', icon: '🔎', body: { triggers: ['pull_request'], connectors: ['github'], model: 'claude-opus-4-8', prompt: 'A pull request was opened or updated. Review the diff for bugs, risky changes, and missing tests, then post a concise review comment with `gh pr comment`.' } },
+  { id: 'daily-report', name: 'Daily report', desc: 'Scheduled standup summary to Slack', icon: '📊', body: { triggers: ['schedule'], schedule: '0 9 * * 1-5', connectors: ['github', 'slack'], model: 'claude-opus-4-8', prompt: 'Summarize yesterday\'s merged PRs and open issues for the repo, then post a short digest to the team channel with `slack-post`.' } },
+  { id: 'ci-watcher', name: 'CI failure watcher', desc: 'Triage failed checks', icon: '🚨', body: { triggers: ['check_run'], connectors: ['github', 'slack'], model: 'claude-opus-4-8', prompt: 'A CI check finished. If it failed, fetch the logs with `gh run view`, summarize the likely cause, and alert the author.' } },
+  { id: 'metric-extractor', name: 'Metric extractor', desc: 'Deterministic number on a schedule (script)', icon: '📈', body: { triggers: ['schedule'], schedule: '0 8 * * *', connectors: ['github'], scriptMode: true, scriptLang: 'bash', model: 'claude-haiku-4-5-20251001', prompt: 'Print the number of open pull requests older than 7 days.' } },
+];
+app.get('/api/templates', (_q, res) => res.json({ templates: ROUTINE_TEMPLATES }));
 // One-click: seed three real developer flows (routines + agents). Idempotent.
 app.get('/api/samples', (_q, res) => res.json({
   scenarios: [...new Set(SAMPLE_ROUTINES.map((r) => r.scenario))].map((s) => ({
