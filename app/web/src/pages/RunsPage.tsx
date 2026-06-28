@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useRuns, useRunSearch, useRerunFailed, useTriage, useReviewQueue, useBookmarks } from '@/lib/api';
+import { useRuns, useRunSearch, useRerunFailed, useTriage, useReviewQueue, useBookmarks, useAssignRun } from '@/lib/api';
+import { useOperator } from '@/lib/operator';
 import { Dot, Empty, stateMeta } from '@/components/sb';
 import { cn } from '@/lib/utils';
 
@@ -21,6 +22,8 @@ export function RunsPage() {
   const { data: triage } = useTriage();
   const { data: review } = useReviewQueue();
   const { data: bookmarks } = useBookmarks();
+  const assign = useAssignRun();
+  const [operator] = useOperator();
   const failedCount = (runs ?? []).filter((r) => r.status === 'failed').length;
   const filtered = (runs ?? []).filter((r) => {
     if (status !== 'all' && !STATUS_GROUPS[status]?.includes(r.status)) return false;
@@ -72,13 +75,15 @@ export function RunsPage() {
           <div className="mb-4 overflow-hidden rounded-xl border border-bad/30 bg-bad/[0.04]">
             <div className="border-b border-line-soft px-4 py-2 font-display text-[11px] font-semibold uppercase tracking-[0.07em] text-bad">Triage queue · {triage.items.length} unresolved</div>
             {triage.items.slice(0, 8).map((t) => (
-              <Link key={t.id} to={`/runs/${t.id}`} className="flex items-center gap-3 border-b border-line-soft px-4 py-2 last:border-0 font-mono text-[11.5px] hover:bg-white/[0.015]">
+              <div key={t.id} className="flex items-center gap-3 border-b border-line-soft px-4 py-2 last:border-0 font-mono text-[11.5px] hover:bg-white/[0.015]">
                 <span className={`shrink-0 rounded px-1.5 py-px text-[10px] font-semibold ${t.triage === 'investigating' ? 'bg-warn/15 text-warn' : 'bg-bad/15 text-bad'}`}>{t.triage}</span>
-                <span className="w-[130px] shrink-0 truncate text-t2">{t.slug}</span>
-                <span className="flex-1 truncate text-dim-2">{t.summary}</span>
+                <Link to={`/runs/${t.id}`} className="w-[130px] shrink-0 truncate text-t2 hover:text-brand">{t.slug}</Link>
+                <Link to={`/runs/${t.id}`} className="flex-1 truncate text-dim-2 hover:text-t2">{t.summary}</Link>
                 <span className="shrink-0 text-brand-soft">{t.assignee || 'unassigned'}</span>
+                <button onClick={() => assign.mutate({ id: t.id, assignee: operator || 'anon', triage: 'investigating' })} title="assign to me + investigating" className="shrink-0 rounded border border-line px-1.5 text-[10px] text-dim hover:text-brand-soft">→ me</button>
+                <button onClick={() => assign.mutate({ id: t.id, assignee: t.assignee, triage: 'resolved' })} title="mark resolved" className="shrink-0 rounded border border-ok/40 px-1.5 text-[10px] text-ok hover:bg-ok/10">resolve</button>
                 <span className="w-[52px] shrink-0 text-right text-dim">{t.ago}</span>
-              </Link>
+              </div>
             ))}
           </div>
         )}

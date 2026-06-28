@@ -353,7 +353,7 @@ export function useVerdictRun() {
 }
 export function useAssignRun() {
   const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ id, assignee, triage }: { id: string; assignee: string; triage: string }) => post<{ ok: boolean }>(`/api/runs/${id}/assign`, { assignee, triage }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['run', v.id] }); qc.invalidateQueries({ queryKey: ['runs'] }); } });
+  return useMutation({ mutationFn: ({ id, assignee, triage }: { id: string; assignee: string; triage: string }) => post<{ ok: boolean }>(`/api/runs/${id}/assign`, { assignee, triage }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['run', v.id] }); qc.invalidateQueries({ queryKey: ['runs'] }); qc.invalidateQueries({ queryKey: ['triage'] }); } });
 }
 export function useCancelRun() {
   const qc = useQueryClient();
