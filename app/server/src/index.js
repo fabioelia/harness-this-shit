@@ -1049,6 +1049,21 @@ app.get('/api/schedule', (req, res) => {
   }
   res.json({ hours, count: upcoming.length, upcoming, missed });
 });
+// Cost anomalies: successful runs that cost far more than their routine's average.
+app.get('/api/anomalies', (req, res) => {
+  const days = Math.min(60, Math.max(1, parseInt(req.query.days, 10) || 14));
+  const since = now() - days * 86_400_000;
+  const runs = all("SELECT id, routine_slug, cost_usd, num_turns, created_at FROM runs WHERE created_at > ? AND status='succeeded' AND cost_usd > 0", since);
+  const byR = {};
+  for (const r of runs) (byR[r.routine_slug] ||= []).push(r.cost_usd);
+  const avg = {};
+  for (const k in byR) avg[k] = byR[k].reduce((a, b) => a + b, 0) / byR[k].length;
+  const anomalies = runs
+    .filter((r) => byR[r.routine_slug].length >= 4 && r.cost_usd > 3 * avg[r.routine_slug])
+    .map((r) => ({ id: r.id, slug: r.routine_slug, cost: +r.cost_usd.toFixed(4), avg: +avg[r.routine_slug].toFixed(4), x: +(r.cost_usd / avg[r.routine_slug]).toFixed(1), turns: r.num_turns, ago: relTime(r.created_at) }))
+    .sort((a, b) => b.x - a.x).slice(0, 20);
+  res.json({ anomalies });
+});
 // Observability: cost / runs / turns / latency over time and per routine.
 app.get('/api/insights', (req, res) => {
   const days = Math.min(60, Math.max(1, parseInt(req.query.days, 10) || 14));

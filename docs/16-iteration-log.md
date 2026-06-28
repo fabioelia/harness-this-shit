@@ -68,6 +68,11 @@ dropdowns · Fleet inbox badge.
 | 48 | Auto-pause on connector down — skip (not fail) when github/slack offline | eliminating-humans/efficiency | ✅ done |
 | 49 | Config lint — flags silent misconfig (no cron, dead chain/reaction, uncompiled) | eliminating-humans | ✅ done |
 | 50 | Auto-generated ops report (markdown) + final QA sweep | observability/eliminating-humans | ✅ done |
+| — | **QA pass** (post-loop-1): found + fixed duplicate /api/leases route crashing Insights | quality | ✅ done |
+| 51 | Cost anomaly detection — flag runs costing ≫ the routine's average | observability/efficiency | ✅ done |
+
+## QA backlog — loop 2 (test at iteration 60)
+- [ ] (iter 51) /api/anomalies flags runs > 3× routine avg (needs ≥4 samples); ratio + avg correct; Insights card renders/empties.
 
 ## QA backlog (test at iteration 10)
 - [x] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.

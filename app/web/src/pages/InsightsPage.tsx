@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint } from '@/lib/api';
+import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies } from '@/lib/api';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -15,6 +15,7 @@ export function InsightsPage() {
   const { data: graph } = useGraph();
   const { data: conc } = useLeases();
   const { data: lint } = useLint();
+  const { data: anom } = useAnomalies(days);
   const setDigest = useSetDigest();
   const sendDigest = useSendDigest();
   const [capDraft, setCapDraft] = useState('');
@@ -91,6 +92,24 @@ export function InsightsPage() {
               <Stat label="Avg latency" value={fmtMs(d.totals.avgMs)} />
               <Stat label="Failure rate" value={`${d.totals.failRate}%`} sub={`${d.totals.fails} failed`} />
             </div>
+
+            {anom && anom.anomalies.length > 0 && (
+              <div className={`${CARD} mb-[18px]`} style={{ borderColor: 'rgba(229,115,107,.35)' }}>
+                <div className="mb-2 font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-bad">⚡ Cost anomalies · {anom.anomalies.length}</div>
+                <div className="flex flex-col gap-1.5 font-mono text-[12px]">
+                  {anom.anomalies.map((a) => (
+                    <div key={a.id} className="flex items-center gap-3">
+                      <Link to={`/runs/${a.id}`} className="w-[110px] shrink-0 truncate text-brand-soft hover:underline">{a.id}</Link>
+                      <Link to={`/routines/${a.slug}`} className="flex-1 truncate font-sans font-semibold text-t2 hover:text-brand">{a.slug}</Link>
+                      <span className="text-bad">${a.cost.toFixed(3)}</span>
+                      <span className="w-[52px] shrink-0 text-right font-semibold text-bad">{a.x}×</span>
+                      <span className="w-[70px] shrink-0 text-right text-dim">avg ${a.avg.toFixed(3)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 font-mono text-[10.5px] text-dim-2">runs that cost over 3× their routine's average — investigate runaway sessions or oversized payloads.</div>
+              </div>
+            )}
 
             {lint && lint.count > 0 && (
               <div className={`${CARD} mb-[18px]`} style={{ borderColor: 'rgba(230,176,82,.4)' }}>
