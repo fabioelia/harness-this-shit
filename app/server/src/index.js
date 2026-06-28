@@ -372,6 +372,9 @@ async function runCompiledScript(r, event, id, t0) {
   if (ok) for (const slug of j(r.chain)) { const dr = one('SELECT * FROM routines WHERE slug=? AND enabled=1', slug); if (dr) executeRoutine(dr, { ...(event ?? {}), upstream: { routine: r.slug, run: id, output } }, `after · ${r.slug}`); }
 }
 
+// Live session processes by run id — so a run can be cancelled mid-flight.
+const liveChildren = new Map();
+const canceledRuns = new Set(); // run ids the user canceled — finalize skips retry/alert
 // Circuit breaker: track consecutive failures; auto-disable a routine that won't stop failing.
 function recordOutcome(r, ok) {
   if (ok) { run('UPDATE routines SET fail_streak=0 WHERE slug=?', r.slug); return; }
@@ -553,7 +556,8 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       } catch { /* one malformed event must not kill the run */ }
     };
 
-    const res = await runClaude(prompt, { tools, onEvent, model: normModel(r.model), effort: normEffort(r.effort), memoryDir, mcpConfig, runId: id, coalesce, scriptPath, compile, timeoutMs: (r.timeout_s || 0) > 0 ? r.timeout_s * 1000 : undefined, extraEnv: jObj(r.env) || {} });
+    const res = await runClaude(prompt, { tools, onEvent, onChild: (c) => liveChildren.set(id, c), model: normModel(r.model), effort: normEffort(r.effort), memoryDir, mcpConfig, runId: id, coalesce, scriptPath, compile, timeoutMs: (r.timeout_s || 0) > 0 ? r.timeout_s * 1000 : undefined, extraEnv: jObj(r.env) || {} });
+    liveChildren.delete(id);
     if (mcpConfig) try { unlinkSync(mcpConfig); } catch { /* ignore */ }
     // Compile: capture the extractor the agent just wrote so future runs are deterministic.
     if (compile && scriptPath) {
@@ -562,8 +566,10 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       if (built.trim()) { run("UPDATE routines SET script=?, script_stale=0 WHERE slug=?", built, r.slug); logActivity(`${r.slug} ${priorScript ? 'revised' : 'compiled'} its ${scriptLang} extractor (${built.length} chars) — future runs are deterministic`, 'success'); }
       else logActivity(`${r.slug} compile run produced no script — keeping the previous one`, 'idle');
     }
-    const ok = !res.isError && !!res.finalText;
-    const rawOut = ok ? res.finalText
+    const canceled = canceledRuns.delete(id);
+    const ok = !canceled && !res.isError && !!res.finalText;
+    const rawOut = canceled ? 'canceled by user'
+      : ok ? res.finalText
       : (res.finalText || (res.code === 124 ? `timed out after ${Math.round(res.ms / 1000)}s` : res.stderr || `claude exited ${res.code}`));
     const output = redact(rawOut); // never persist/log unredacted session output
 
@@ -579,7 +585,7 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       `$${Number(agg.spend || 0).toFixed(2)}`, agg.avgms ? fmtDur(agg.avgms) : '—', r.slug);
     logActivity(`${r.slug} ${ok ? 'ran · ' + output.split('\n').pop().slice(0, 60) : 'failed'} · ${triggerLabel}`, ok ? 'success' : 'failing');
     if (ok) recordOutcome(r, true);
-    else if (!maybeRetry(r, rawEvent, triggerLabel, rawEvent?._attempt || 0)) { alertFailure(r, output, triggerLabel); recordOutcome(r, false); }
+    else if (!canceled && !maybeRetry(r, rawEvent, triggerLabel, rawEvent?._attempt || 0)) { alertFailure(r, output, triggerLabel); recordOutcome(r, false); }
 
     // Output assertions: checked over the result + trace, gate the downstream if they fail.
     const toolErrors = one("SELECT COUNT(*) AS n FROM run_events WHERE run_id=? AND type='tool_result' AND ok=0", id).n;
@@ -1661,6 +1667,20 @@ app.post('/api/runs/:id/rerun', (req, res) => {
   delete ev._attempt; delete ev._recompile; delete ev._replay;
   const runId = executeRoutine(r, { ...ev, _rerun: true, upstream: { routine: r.slug, run: x.id } }, `edited rerun · ${x.id}`);
   res.json({ ok: true, runId });
+});
+// Cancel a running run: kill its live session, mark it failed, free its lease.
+app.post('/api/runs/:id/cancel', (req, res) => {
+  const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
+  if (!x) return res.status(404).json({ error: 'not found' });
+  if (!['running', 'waiting'].includes(x.status)) return res.status(409).json({ error: `run is ${x.status}, not running` });
+  canceledRuns.add(x.id);
+  const child = liveChildren.get(x.id);
+  if (child) { try { child.kill('SIGKILL'); } catch { /* already gone */ } liveChildren.delete(x.id); }
+  run("UPDATE runs SET status='failed', dur='—', output=? WHERE id=?", 'canceled by user', x.id);
+  run('DELETE FROM leases WHERE run_id=?', x.id);
+  run("UPDATE routines SET state='idle', last_status='failing' WHERE slug=? AND state='running'", x.routine_slug);
+  logActivity(`${x.routine_slug} run ${x.id} canceled`, 'failing');
+  res.json({ ok: true, killed: !!child });
 });
 app.post('/api/runs/:id/inbox', (req, res) => {
   const x = one('SELECT * FROM runs WHERE id=?', req.params.id);

@@ -73,9 +73,11 @@ dropdowns · Fleet inbox badge.
 | 52 | Projected spend forecast ($/day + $/month at current rate) | efficiency | ✅ done |
 | 53 | Failure clustering — group fails by normalized error signature | observability/eliminating-humans | ✅ done |
 | 54 | Token usage capture (input/output tokens per run + Insights totals) | observability | ✅ done |
+| 55 | Cancel a running run — kill the live session, free lease, no retry | control/eliminating-humans | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [ ] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.
+- [ ] (iter 55) cancel kills the child session, marks failed + frees lease, labels "canceled by user", and does NOT retry/alert even with retries set.
 - [ ] (iter 51) /api/anomalies flags runs > 3× routine avg (needs ≥4 samples); ratio + avg correct; Insights card renders/empties.
 
 ## QA backlog (test at iteration 10)

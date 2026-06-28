@@ -248,6 +248,10 @@ export function useReplayRun() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (id: string) => post<{ ok: boolean; runId: string }>(`/api/runs/${id}/replay`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['runs'] }); } });
 }
+export function useCancelRun() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (id: string) => post<{ ok: boolean; killed: boolean }>(`/api/runs/${id}/cancel`), onSuccess: (_r, id) => { qc.invalidateQueries({ queryKey: ['run', id] }); qc.invalidateQueries({ queryKey: ['runs'] }); } });
+}
 export function useRerunRun() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: ({ id, event }: { id: string; event: string }) => post<{ ok: boolean; runId: string }>(`/api/runs/${id}/rerun`, { event }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['runs'] }); } });

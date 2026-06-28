@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRun, useDispatchRoutine, useReplayRun, useRunDiff, useRerunRun } from '@/lib/api';
+import { useRun, useDispatchRoutine, useReplayRun, useRunDiff, useRerunRun, useCancelRun } from '@/lib/api';
 import { Pill, Dot, Empty, stateMeta } from '@/components/sb';
 import { cn } from '@/lib/utils';
 
@@ -75,6 +75,7 @@ export function RunDetailPage() {
   const dispatch = useDispatchRoutine();
   const replay = useReplayRun();
   const rerun = useRerunRun();
+  const cancel = useCancelRun();
   const [editEvent, setEditEvent] = useState<string | null>(null);
   const qc = useQueryClient();
   // Live trace over SSE — fills in with no polling lag, then refetches on done.
@@ -133,6 +134,9 @@ export function RunDetailPage() {
             <Pill label={m.label} color={m.color} />
           </div>
           <div className="flex items-center gap-2">
+            {(r.status === 'running' || r.status === 'waiting') && (
+              <button onClick={() => cancel.mutate(r.id)} disabled={cancel.isPending} title="Kill this session now and free its lease" className="flex h-[34px] items-center rounded-md border border-bad/50 bg-bad/10 px-[13px] font-display text-[12.5px] font-semibold text-bad hover:bg-bad/20 disabled:opacity-40">{cancel.isPending ? 'Canceling…' : '■ Cancel'}</button>
+            )}
             <button
               onClick={() => replay.mutate(r.id, { onSuccess: (res) => navigate(`/runs/${res.runId}`) })}
               disabled={replay.isPending}

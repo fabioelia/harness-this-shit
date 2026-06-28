@@ -24,7 +24,7 @@ export function allowedToolsFor(connectors = []) {
   return allow;
 }
 
-export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, model, effort, memoryDir, mcpConfig, runId, coalesce, scriptPath, compile, extraEnv = {} } = {}) {
+export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, onChild, model, effort, memoryDir, mcpConfig, runId, coalesce, scriptPath, compile, extraEnv = {} } = {}) {
   return new Promise((resolve) => {
     const start = Date.now();
     const allow = allowedToolsFor(coalesce ? [...tools, '__inbox'] : tools);
@@ -50,6 +50,7 @@ export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, mo
     let child;
     try {
       child = spawn(CLAUDE_BIN, args, { cwd: memoryDir || tmpdir(), env, stdio: ['pipe', 'pipe', 'pipe'] });
+      try { onChild?.(child); } catch { /* never let registration kill the run */ }
       child.stdin.write(prompt);
       child.stdin.end();
     } catch (e) {
