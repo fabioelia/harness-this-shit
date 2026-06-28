@@ -2427,8 +2427,12 @@ app.post('/api/routines/:slug/watch', (req, res) => {
 });
 // Routine discussion — team comments / context that lives with the routine.
 app.get('/api/routines/:slug/comments', (req, res) => {
-  const rows = all('SELECT id, author, body, created_at FROM comments WHERE slug=? ORDER BY id', req.params.slug);
-  res.json({ comments: rows.map((c) => ({ id: c.id, author: c.author || 'anon', body: c.body, ago: relTime(c.created_at) })) });
+  const rows = all('SELECT id, author, body, pinned, created_at FROM comments WHERE slug=? ORDER BY pinned DESC, id', req.params.slug);
+  res.json({ comments: rows.map((c) => ({ id: c.id, author: c.author || 'anon', body: c.body, pinned: !!c.pinned, ago: relTime(c.created_at) })) });
+});
+app.post('/api/routines/:slug/comments/:id/pin', (req, res) => {
+  run('UPDATE comments SET pinned=? WHERE id=? AND slug=?', req.body?.pinned ? 1 : 0, req.params.id, req.params.slug);
+  res.json({ ok: true });
 });
 app.post('/api/routines/:slug/comments', (req, res) => {
   if (!one('SELECT 1 FROM routines WHERE slug=?', req.params.slug)) return res.status(404).json({ error: 'not found' });

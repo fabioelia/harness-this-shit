@@ -302,11 +302,15 @@ export function useToggleWatch() {
 }
 export interface Mentions { mentions: { mentioned: string; by: string; slug: string; snippet: string; ago: string }[] }
 export const useMentions = () => useQuery({ queryKey: ['mentions'], queryFn: () => get<Mentions>('/api/mentions'), refetchInterval: 15000 });
-export interface Comments { comments: { id: number; author: string; body: string; ago: string }[] }
+export interface Comments { comments: { id: number; author: string; body: string; pinned: boolean; ago: string }[] }
 export const useComments = (slug: string, enabled = true) => useQuery({ queryKey: ['comments', slug], enabled, queryFn: () => get<Comments>(`/api/routines/${slug}/comments`) });
 export function useAddComment() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: ({ slug, author, body }: { slug: string; author: string; body: string }) => post(`/api/routines/${slug}/comments`, { author, body }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['comments', v.slug] }); qc.invalidateQueries({ queryKey: ['routine', v.slug] }); } });
+}
+export function usePinComment() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ slug, id, pinned }: { slug: string; id: number; pinned: boolean }) => post(`/api/routines/${slug}/comments/${id}/pin`, { pinned }), onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['comments', v.slug] }) });
 }
 export function useDeleteComment() {
   const qc = useQueryClient();

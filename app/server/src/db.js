@@ -186,6 +186,7 @@ export function getDb() {
   _db.exec('CREATE TABLE IF NOT EXISTS routine_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, summary TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)');
   _db.exec('CREATE TABLE IF NOT EXISTS comments (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, author TEXT NOT NULL DEFAULT \'\', body TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)');
   _db.exec('CREATE INDEX IF NOT EXISTS idx_comments_slug ON comments(slug, id)');
+  ensure('comments', 'pinned', 'pinned INTEGER NOT NULL DEFAULT 0');
   _db.exec('CREATE TABLE IF NOT EXISTS mentions (id INTEGER PRIMARY KEY AUTOINCREMENT, mentioned TEXT NOT NULL, by TEXT NOT NULL DEFAULT \'\', slug TEXT NOT NULL, snippet TEXT NOT NULL DEFAULT \'\', created_at INTEGER NOT NULL DEFAULT 0)');
   _db.exec('CREATE TABLE IF NOT EXISTS bookmarks (run_id TEXT PRIMARY KEY, slug TEXT NOT NULL, label TEXT NOT NULL DEFAULT \'\', by TEXT NOT NULL DEFAULT \'\', created_at INTEGER NOT NULL DEFAULT 0)');
   _db.exec('CREATE TABLE IF NOT EXISTS routine_watch (who TEXT NOT NULL, slug TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(who, slug))');
