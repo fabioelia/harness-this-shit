@@ -46,6 +46,7 @@ dropdowns · Fleet inbox badge.
 | 26 | Prompt version history + restore (snapshots on edit) | reproducibility | ✅ done |
 | 27 | Live concurrency view — held leases + queued inbox tasks (fleet-wide) | observability | ✅ done |
 | 28 | Daily digest to Slack (scheduled rollup: runs/spend/failures/busiest) | eliminating-humans | ✅ done |
+| 29 | Circuit breaker — auto-disable after N consecutive failures (+ alert) | eliminating-humans/safety | ✅ done |
 
 ## QA backlog (test at iteration 10)
 - [x] (iter 1) /api/insights aggregates cost/turns/latency/failRate correctly over the day window; per-routine sort; page renders + empty-data state; day toggle (7/14/30) refetches.

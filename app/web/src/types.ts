@@ -42,6 +42,8 @@ export interface Routine {
   env: Record<string, string>;
   tags: string[];
   rateLimit: number;
+  maxFails: number;
+  failStreak: number;
 }
 
 export interface FrontMatter {
