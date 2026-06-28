@@ -917,10 +917,14 @@ if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(tickWatches, 45_00
 app.get('/api/health', (_q, res) => res.json({ ok: true }));
 app.get('/api/models', (_q, res) => res.json({ models: MODELS, efforts: EFFORTS, defaultModel: DEFAULT_MODEL }));
 // Live concurrency leases — who's holding what, on which entity/SHA.
-app.get('/api/leases', (_q, res) => res.json(
-  all('SELECT * FROM leases WHERE expires_at > ? ORDER BY acquired_at DESC', now())
-    .map((l) => ({ key: l.key, runId: l.run_id, routine: l.routine_slug, sha: l.head_sha ? l.head_sha.slice(0, 7) : '', held: relTime(l.acquired_at), ttl: fmtDur(Math.max(0, l.expires_at - now())) }))
-));
+// Live concurrency: leases currently held + inbox tasks waiting to be picked up.
+app.get('/api/leases', (_q, res) => {
+  const leases = all('SELECT * FROM leases WHERE expires_at > ? ORDER BY acquired_at DESC', now())
+    .map((l) => ({ key: l.key, runId: l.run_id, slug: l.routine_slug, sha: l.head_sha ? l.head_sha.slice(0, 7) : '', held: relTime(l.acquired_at), ttl: fmtDur(Math.max(0, l.expires_at - now())) }));
+  const pending = all("SELECT * FROM run_tasks WHERE handled_by='' ORDER BY created_at DESC LIMIT 40")
+    .map((t) => ({ slug: t.routine_slug, key: t.lease_key, summary: t.summary, ago: relTime(t.created_at) }));
+  res.json({ leases, pending });
+});
 
 // The user's real GitHub repos — so the UI can see & target repositories.
 // ?owner=<org|*> & ?q=<search> for cross-org browse / GitHub-wide search.
@@ -1003,15 +1007,6 @@ app.get('/api/lint', (_q, res) => {
   const slugSet = new Set(rows.map((r) => r.slug));
   const issues = rows.map((r) => ({ slug: r.slug, name: r.name, warnings: lintRoutine(r, slugSet) })).filter((x) => x.warnings.length);
   res.json({ count: issues.reduce((a, x) => a + x.warnings.length, 0), issues });
-});
-// Live concurrency: leases currently held + inbox tasks waiting to be picked up.
-app.get('/api/leases', (_q, res) => {
-  const leases = all('SELECT * FROM leases ORDER BY acquired_at DESC').map((l) => ({
-    key: l.key, runId: l.run_id, slug: l.routine_slug, sha: (l.head_sha || '').slice(0, 7),
-    held: relTime(l.acquired_at), ttl: l.expires_at > now() ? `${Math.round((l.expires_at - now()) / 1000)}s` : 'expired',
-  }));
-  const pending = all("SELECT * FROM run_tasks WHERE handled_by='' ORDER BY created_at DESC LIMIT 40").map((t) => ({ slug: t.routine_slug, key: t.lease_key, summary: t.summary, ago: relTime(t.created_at) }));
-  res.json({ leases, pending });
 });
 // Routine flow: the chain + reaction edges between routines (the fleet's topology).
 app.get('/api/graph', (_q, res) => {

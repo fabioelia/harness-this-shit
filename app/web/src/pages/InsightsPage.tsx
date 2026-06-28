@@ -155,7 +155,7 @@ export function InsightsPage() {
               </div>
             </div>
 
-            {conc && (conc.leases.length > 0 || conc.pending.length > 0) && (
+            {conc && conc.leases && conc.pending && (conc.leases.length > 0 || conc.pending.length > 0) && (
               <div className={`${CARD} mb-[18px]`}>
                 <div className={`${LABEL} mb-3`}>Concurrency · live</div>
                 {conc.leases.length > 0 && (
