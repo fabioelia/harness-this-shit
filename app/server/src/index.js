@@ -1262,6 +1262,19 @@ app.get('/api/routines/:slug/export', (req, res) => {
   if (!r) return res.status(404).json({ error: 'not found' });
   res.json({ switchboard: 'routine', version: 1, slug: r.slug, routine: exportBody(r) });
 });
+// Full-text search across all run outputs (and routine slug).
+app.get('/api/runs/search', (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return res.json({ results: [], q });
+  const like = `%${q}%`;
+  const rows = all('SELECT id, routine_slug, status, output, created_at FROM runs WHERE output LIKE ? OR routine_slug LIKE ? ORDER BY created_at DESC LIMIT 40', like, like);
+  const snip = (out) => {
+    const s = String(out || ''); const i = s.toLowerCase().indexOf(q.toLowerCase());
+    if (i < 0) return s.slice(0, 120).replace(/\s+/g, ' ');
+    return `${i > 30 ? '…' : ''}${s.slice(Math.max(0, i - 30), i + q.length + 70).replace(/\s+/g, ' ')}…`;
+  };
+  res.json({ q, results: rows.map((x) => ({ id: x.id, slug: x.routine_slug, status: x.status, ago: relTime(x.created_at), snippet: snip(x.output) })) });
+});
 // Diff a run against the previous run of the same routine (output + metric deltas).
 app.get('/api/runs/:id/diff', (req, res) => {
   const cur = one('SELECT * FROM runs WHERE id=?', req.params.id);

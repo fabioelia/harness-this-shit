@@ -105,6 +105,8 @@ export const useRoutines = () => useQuery({ queryKey: ['routines'], queryFn: () 
 export const useRoutine = (slug?: string) =>
   useQuery({ queryKey: ['routine', slug], queryFn: () => get<RoutineDetail>(`/api/routines/${slug}`), enabled: !!slug, retry: false });
 export const useRuns = () => useQuery({ queryKey: ['runs'], queryFn: () => get<RunLite[]>('/api/runs'), refetchInterval: 8000 });
+export interface RunSearch { q: string; results: { id: string; slug: string; status: string; ago: string; snippet: string }[] }
+export const useRunSearch = (q: string) => useQuery({ queryKey: ['runsearch', q], enabled: q.trim().length >= 2, queryFn: () => get<RunSearch>(`/api/runs/search?q=${encodeURIComponent(q)}`) });
 export interface RunDiff { current: { id: string; output: string; cost: number | null; turns: number | null; status: string; ago: string } | null; previous: { id: string; output: string; cost: number | null; turns: number | null; status: string; ago: string } | null }
 export const useRunDiff = (id: string, enabled: boolean) => useQuery({ queryKey: ['rundiff', id], enabled, queryFn: () => get<RunDiff>(`/api/runs/${id}/diff`) });
 export const useRun = (id?: string) =>
