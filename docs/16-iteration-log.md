@@ -142,6 +142,7 @@ dropdowns · Fleet inbox badge.
 | 117 | Sign-off queue + review coverage (succeeded runs awaiting verdict, %) | collaboration/quality | ✅ done |
 | 118 | Routine criticality tier (critical/standard/experimental) + Fleet filter + critical-failing attention | collaboration/governance | ✅ done |
 | 119 | Escalation contact — CC a secondary on failure alerts | collaboration/on-call | ✅ done |
+| 120 | Team standup digest (edits/approvals/comments/sign-offs/resolved over 24h) | collaboration | ✅ done |
 
 ### Loop-3 QA backlog (test at iteration 110)
 - [x] (iter 107) substantive edit (prompt/triggers/etc) flags needs_review; approve records reviewer + clears it; non-substantive edits (name) do not flag; Fleet badge.

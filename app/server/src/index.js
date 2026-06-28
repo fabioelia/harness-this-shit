@@ -2361,6 +2361,18 @@ app.get('/api/inbox', (req, res) => {
     .map((m) => ({ by: m.by || 'anon', slug: m.slug, snippet: m.snippet, ago: relTime(m.created_at) }));
   res.json({ who, assigned, mentions, count: assigned.length + mentions.length });
 });
+// Team standup — a rollup of recent people-activity (changes, approvals, comments, sign-offs).
+app.get('/api/standup', (req, res) => {
+  const days = Math.min(30, Math.max(1, parseInt(req.query.days, 10) || 1));
+  const since = now() - days * 86_400_000;
+  const audit = all('SELECT slug, summary, created_at FROM routine_audit WHERE created_at > ? ORDER BY id DESC', since);
+  const approvals = audit.filter((a) => a.summary.startsWith('approved by')).length;
+  const changes = audit.filter((a) => a.summary.startsWith('edited')).length;
+  const comments = one('SELECT COUNT(*) AS n FROM comments WHERE created_at > ?', since).n;
+  const signoffs = one("SELECT COUNT(*) AS n FROM runs WHERE verdict != '' AND created_at > ?", since).n;
+  const resolved = one("SELECT COUNT(*) AS n FROM runs WHERE triage='resolved' AND created_at > ?", since).n;
+  res.json({ days, counts: { changes, approvals, comments, signoffs, resolved }, recent: audit.slice(0, 12).map((a) => ({ slug: a.slug, summary: a.summary, ago: relTime(a.created_at) })) });
+});
 // Global change log — every routine config change + approval across the fleet.
 app.get('/api/audit', (req, res) => {
   const rows = all('SELECT slug, summary, created_at FROM routine_audit ORDER BY id DESC LIMIT 60');
