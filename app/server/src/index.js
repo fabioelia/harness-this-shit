@@ -1049,6 +1049,24 @@ app.get('/api/schedule', (req, res) => {
   }
   res.json({ hours, count: upcoming.length, upcoming, missed });
 });
+// Failure clustering: group recent failed runs by a normalized error signature.
+app.get('/api/failures', (req, res) => {
+  const days = Math.min(30, Math.max(1, parseInt(req.query.days, 10) || 7));
+  const rows = all("SELECT id, routine_slug, output, created_at FROM runs WHERE created_at > ? AND status='failed'", now() - days * 86_400_000);
+  const sig = (out) => {
+    let s = String(out || '').split('\n').map((l) => l.trim()).filter(Boolean).pop() || 'no output';
+    s = s.replace(/\b[0-9a-f]{7,}\b/gi, '#').replace(/\d+/g, 'N').replace(/(['"`]).*?\1/g, '…').replace(/\s+/g, ' ').trim().slice(0, 90);
+    return s || 'no output';
+  };
+  const groups = {};
+  for (const r of rows) {
+    const k = sig(r.output);
+    const g = (groups[k] ||= { signature: k, count: 0, routines: new Set(), latest: 0, sampleRun: r.id });
+    g.count++; g.routines.add(r.routine_slug); if (r.created_at > g.latest) { g.latest = r.created_at; g.sampleRun = r.id; }
+  }
+  const clusters = Object.values(groups).map((g) => ({ signature: g.signature, count: g.count, routines: [...g.routines], sampleRun: g.sampleRun, ago: relTime(g.latest) })).sort((a, b) => b.count - a.count).slice(0, 12);
+  res.json({ total: rows.length, clusters });
+});
 // Cost anomalies: successful runs that cost far more than their routine's average.
 app.get('/api/anomalies', (req, res) => {
   const days = Math.min(60, Math.max(1, parseInt(req.query.days, 10) || 14));

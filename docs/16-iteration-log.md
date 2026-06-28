@@ -71,6 +71,7 @@ dropdowns · Fleet inbox badge.
 | — | **QA pass** (post-loop-1): found + fixed duplicate /api/leases route crashing Insights | quality | ✅ done |
 | 51 | Cost anomaly detection — flag runs costing ≫ the routine's average | observability/efficiency | ✅ done |
 | 52 | Projected spend forecast ($/day + $/month at current rate) | efficiency | ✅ done |
+| 53 | Failure clustering — group fails by normalized error signature | observability/eliminating-humans | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [ ] (iter 51) /api/anomalies flags runs > 3× routine avg (needs ≥4 samples); ratio + avg correct; Insights card renders/empties.

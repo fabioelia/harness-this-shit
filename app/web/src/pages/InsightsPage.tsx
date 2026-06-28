@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies } from '@/lib/api';
+import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures } from '@/lib/api';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -16,6 +16,7 @@ export function InsightsPage() {
   const { data: conc } = useLeases();
   const { data: lint } = useLint();
   const { data: anom } = useAnomalies(days);
+  const { data: failures } = useFailures(7);
   const setDigest = useSetDigest();
   const sendDigest = useSendDigest();
   const [capDraft, setCapDraft] = useState('');
@@ -92,6 +93,23 @@ export function InsightsPage() {
               <Stat label="Avg latency" value={fmtMs(d.totals.avgMs)} />
               <Stat label="Failure rate" value={`${d.totals.failRate}%`} sub={`${d.totals.fails} failed`} />
             </div>
+
+            {failures && failures.clusters.length > 0 && (
+              <div className={`${CARD} mb-[18px]`} style={{ borderColor: 'rgba(229,115,107,.3)' }}>
+                <div className="mb-2 font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-bad">Failure clusters · {failures.total} fails / 7d</div>
+                <div className="flex flex-col gap-1.5">
+                  {failures.clusters.map((c, i) => (
+                    <div key={i} className="flex items-center gap-3 font-mono text-[12px]">
+                      <span className="w-[34px] shrink-0 text-right font-semibold text-bad">{c.count}×</span>
+                      <Link to={`/runs/${c.sampleRun}`} className="flex-1 truncate text-muted-2 hover:text-brand" title={c.signature}>{c.signature}</Link>
+                      <span className="shrink-0 text-dim">{c.routines.slice(0, 2).join(', ')}{c.routines.length > 2 ? ` +${c.routines.length - 2}` : ''}</span>
+                      <span className="w-[56px] shrink-0 text-right text-dim">{c.ago}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 font-mono text-[10.5px] text-dim-2">recent failures grouped by normalized error — fix the top signature to clear the most runs.</div>
+              </div>
+            )}
 
             {anom && anom.anomalies.length > 0 && (
               <div className={`${CARD} mb-[18px]`} style={{ borderColor: 'rgba(229,115,107,.35)' }}>

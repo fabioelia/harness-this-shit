@@ -63,6 +63,8 @@ export const useInsights = (days = 14) => useQuery({ queryKey: ['insights', days
 
 export interface Graph { edges: { from: string; to: string; kind: string; label: string; fromName: string; toName: string; toExists: boolean }[] }
 export const useGraph = () => useQuery({ queryKey: ['graph'], queryFn: () => get<Graph>('/api/graph'), refetchInterval: 30000 });
+export interface Failures { total: number; clusters: { signature: string; count: number; routines: string[]; sampleRun: string; ago: string }[] }
+export const useFailures = (days = 7) => useQuery({ queryKey: ['failures', days], queryFn: () => get<Failures>(`/api/failures?days=${days}`), refetchInterval: 20000 });
 export interface Anomalies { anomalies: { id: string; slug: string; cost: number; avg: number; x: number; turns: number; ago: string }[] }
 export const useAnomalies = (days = 14) => useQuery({ queryKey: ['anomalies', days], queryFn: () => get<Anomalies>(`/api/anomalies?days=${days}`), refetchInterval: 20000 });
 export interface Lint { count: number; issues: { slug: string; name: string; warnings: string[] }[] }
