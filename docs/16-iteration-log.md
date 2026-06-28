@@ -102,6 +102,7 @@ dropdowns · Fleet inbox badge.
 | 81 | Cost-per-success metric ($/ok column surfaces failure waste) | efficiency/observability | ✅ done |
 | 82 | Fleet group-by-team view (collapsible team sections + counts) | UX | ✅ done |
 | 83 | Per-routine throughput chart (runs/day, 14d, fails stacked) | observability | ✅ done |
+| 84 | Run output copy + permalink + byte-size indicator | UX | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.

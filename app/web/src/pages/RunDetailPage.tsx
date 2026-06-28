@@ -80,6 +80,7 @@ export function RunDetailPage() {
   const replayModel = useReplayModel();
   const { data: models } = useModels();
   const [editEvent, setEditEvent] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
   const qc = useQueryClient();
   // Live trace over SSE — fills in with no polling lag, then refetches on done.
   const [liveTrace, setLiveTrace] = useState<TE[]>([]);
@@ -192,8 +193,12 @@ export function RunDetailPage() {
           {/* Output — the real claude -p stdout */}
           <div className="rounded-lg border bg-surface p-[18px]" style={{ borderColor: ok ? 'rgba(95,191,134,.3)' : running ? 'var(--line)' : 'rgba(229,115,107,.3)' }}>
             <div className="mb-3 flex items-center justify-between">
-              <span className={LABEL}>Output · session result</span>
-              <Pill label={m.label} color={m.color} />
+              <span className={LABEL}>Output · session result{r.stdout ? ` · ${new Blob([r.stdout]).size.toLocaleString()} B` : ''}</span>
+              <div className="flex items-center gap-2">
+                {r.stdout && <button onClick={() => { navigator.clipboard?.writeText(r.stdout); setCopied('out'); setTimeout(() => setCopied(null), 1200); }} className="font-mono text-[11px] text-dim hover:text-brand">{copied === 'out' ? 'copied ✓' : 'copy'}</button>}
+                <button onClick={() => { navigator.clipboard?.writeText(window.location.href); setCopied('link'); setTimeout(() => setCopied(null), 1200); }} className="font-mono text-[11px] text-dim hover:text-brand">{copied === 'link' ? 'copied ✓' : 'link'}</button>
+                <Pill label={m.label} color={m.color} />
+              </div>
             </div>
             {running ? (
               <div className="flex items-center gap-2.5 rounded-md border border-line-soft bg-code px-4 py-4 font-mono text-[12.5px] text-muted-2">
