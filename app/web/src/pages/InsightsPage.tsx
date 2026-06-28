@@ -353,6 +353,7 @@ export function InsightsPage() {
                         <th className="pb-2 px-3 text-right font-medium">Runs</th>
                         <th className="pb-2 px-3 text-right font-medium">Spend</th>
                         <th className="pb-2 px-3 text-right font-medium">$/run</th>
+                        <th className="pb-2 px-3 text-right font-medium" title="cost per successful run — higher than $/run means failures are wasting spend">$/ok</th>
                         <th className="pb-2 px-3 text-right font-medium">Turns</th>
                         <th className="pb-2 px-3 text-right font-medium">Avg latency</th>
                         <th className="pb-2 pl-3 text-right font-medium">Fail rate</th>
@@ -365,6 +366,7 @@ export function InsightsPage() {
                           <td className="py-2 px-3 text-right text-muted-2">{p.runs}</td>
                           <td className="py-2 px-3 text-right text-t2">${p.cost.toFixed(3)}</td>
                           <td className="py-2 px-3 text-right text-dim-2">${(p.cost / Math.max(1, p.runs)).toFixed(3)}</td>
+                          <td className={`py-2 px-3 text-right ${p.failRate > 0 ? 'text-warn' : 'text-dim-2'}`}>${p.costPerSuccess.toFixed(3)}</td>
                           <td className="py-2 px-3 text-right text-muted-2">{p.turns}</td>
                           <td className="py-2 px-3 text-right text-muted-2">{fmtMs(p.avgMs)}</td>
                           <td className="py-2 pl-3 text-right"><span className={p.failRate > 0 ? 'text-bad' : 'text-dim'}>{p.failRate}%</span></td>

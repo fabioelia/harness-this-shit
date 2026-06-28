@@ -1220,6 +1220,7 @@ app.get('/api/insights', (req, res) => {
   const perRoutine = Object.values(perR).map((p) => ({
     slug: p.slug, name: names[p.slug] || p.slug, runs: p.runs, cost: +p.cost.toFixed(4), turns: p.turns,
     avgMs: p.nMs ? Math.round(p.ms / p.nMs) : 0, fails: p.fails, failRate: p.runs ? Math.round((100 * p.fails) / p.runs) : 0,
+    costPerSuccess: +(p.cost / Math.max(1, p.runs - p.fails)).toFixed(4),
   })).sort((a, b) => b.cost - a.cost || b.runs - a.runs);
   res.json({
     days,
