@@ -150,6 +150,32 @@ const cleanFilters = (f) => {
   return { actions: arr(o.actions), branches: arr(o.branches), labels: arr(o.labels), mode: o.mode === 'or' ? 'or' : 'and' };
 };
 const normRetries = (n) => Math.max(0, Math.min(3, parseInt(n, 10) || 0));
+// Output assertions: checked harness-side over the run result + trace (not self-reported).
+const ASSERT_TYPES = ['contains', 'not_contains', 'matches', 'max_cost', 'max_turns', 'min_length', 'no_tool_errors'];
+const cleanAssertions = (a) => (Array.isArray(a) ? a : [])
+  .map((x) => ({ type: ASSERT_TYPES.includes(x?.type) ? x.type : 'contains', value: String(x?.value ?? '').trim() }))
+  .filter((x) => x.type === 'no_tool_errors' || x.value);
+function evalAssertions(routine, ctx) {
+  let list; try { list = JSON.parse(routine.assertions || '[]'); } catch { list = []; }
+  if (!Array.isArray(list) || !list.length) return null;
+  const out = String(ctx.output || '');
+  const lc = out.toLowerCase();
+  const results = list.map((a) => {
+    const v = a.value; let ok = true; let detail = '';
+    switch (a.type) {
+      case 'contains': ok = lc.includes(String(v).toLowerCase()); detail = ok ? `contains "${v}"` : `"${v}" not in output`; break;
+      case 'not_contains': ok = !lc.includes(String(v).toLowerCase()); detail = ok ? `no "${v}"` : `"${v}" present`; break;
+      case 'matches': try { ok = new RegExp(v).test(out); } catch { ok = false; } detail = ok ? `matches /${v}/` : `/${v}/ no match`; break;
+      case 'max_cost': ok = (ctx.costUsd || 0) <= Number(v); detail = `$${(ctx.costUsd || 0).toFixed(4)} ${ok ? '≤' : '>'} $${v}`; break;
+      case 'max_turns': ok = (ctx.numTurns || 0) <= Number(v); detail = `${ctx.numTurns || 0} ${ok ? '≤' : '>'} ${v} turns`; break;
+      case 'min_length': ok = out.length >= Number(v); detail = `${out.length} ${ok ? '≥' : '<'} ${v} chars`; break;
+      case 'no_tool_errors': ok = (ctx.toolErrors || 0) === 0; detail = ctx.toolErrors ? `${ctx.toolErrors} tool error(s)` : 'no tool errors'; break;
+      default: ok = true;
+    }
+    return { type: a.type, value: v, ok, detail };
+  });
+  return { passed: results.every((r) => r.ok), results };
+}
 const cleanConcurrency = (c) => {
   const o = c && typeof c === 'object' ? c : {};
   return { scope: ['auto', 'pr', 'repo', 'routine', 'off'].includes(o.scope) ? o.scope : 'auto', onConflict: ['wait', 'drop', 'coalesce'].includes(o.onConflict) ? o.onConflict : 'wait' };
@@ -259,7 +285,7 @@ const shapeRoutine = (r) => {
     recent, successRate, spend: r.spend, avg: r.avg, runCount: recent.length,
     inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
     scriptMode: !!r.script_mode, scriptLang: r.script_lang || 'bash', compiled: !!(r.script && r.script.trim()), scriptStale: !!r.script_stale,
-    retries: r.retries || 0,
+    retries: r.retries || 0, assertions: j(r.assertions),
   };
 };
 
@@ -497,11 +523,20 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     logActivity(`${r.slug} ${ok ? 'ran · ' + output.split('\n').pop().slice(0, 60) : 'failed'} · ${triggerLabel}`, ok ? 'success' : 'failing');
     if (!ok) maybeRetry(r, rawEvent, triggerLabel, rawEvent?._attempt || 0);
 
+    // Output assertions: checked over the result + trace, gate the downstream if they fail.
+    const toolErrors = one("SELECT COUNT(*) AS n FROM run_events WHERE run_id=? AND type='tool_result' AND ok=0", id).n;
+    const assertResult = ok ? evalAssertions(r, { output, costUsd: res.costUsd, numTurns: res.numTurns, toolErrors }) : null;
+    if (assertResult) {
+      run('UPDATE runs SET assert_result=? WHERE id=?', JSON.stringify(assertResult), id);
+      if (!assertResult.passed) logActivity(`${r.slug} assertions FAILED (${assertResult.results.filter((x) => !x.ok).length}/${assertResult.results.length}) — chain & reactions gated`, 'failing');
+    }
+    const gatePass = !assertResult || assertResult.passed;
+
     // reactions: arm watches on the entity this run touched (PR checks/review/merge, timeout…)
-    try { await armReactions(r, rawEvent ?? {}, id); } catch (e) { logActivity(`reactions error · ${r.slug}: ${e.message}`, 'failing'); }
+    if (gatePass) try { await armReactions(r, rawEvent ?? {}, id); } catch (e) { logActivity(`reactions error · ${r.slug}: ${e.message}`, 'failing'); }
 
     // chain: kick off downstream routines, guarding against cycles + runaway depth.
-    if (ok) {
+    if (ok && gatePass) {
       const path = Array.isArray(rawEvent?._chainPath) ? rawEvent._chainPath : [];
       const nextPath = [...path, r.slug];
       if (nextPath.length > 8) {
@@ -889,15 +924,15 @@ function insertRoutine(b) {
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
   run(
     `INSERT INTO routines
-      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,script_mode,script_lang,retries)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,script_mode,script_lang,retries,assertions)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     slug, (b.name || '').trim(), (b.summary || '').trim(), owner, team,
     JSON.stringify(triggers), JSON.stringify(connectors),
     'idle', 'never', 'idle', next, null, '$0.00', enabled, '', '', '—',
     ownerColor(owner), initialsOf(owner), ord,
     (b.prompt || '').trim(), normModel(b.model), (b.repo || '').trim(), (b.branch || 'main').trim(),
     JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions), normEffort(b.effort), b.memory ? 1 : 0, JSON.stringify(cleanConcurrency(b.concurrency)),
-    b.scriptMode ? 1 : 0, b.scriptLang === 'node' ? 'node' : 'bash', normRetries(b.retries)
+    b.scriptMode ? 1 : 0, b.scriptLang === 'node' ? 'node' : 'bash', normRetries(b.retries), JSON.stringify(cleanAssertions(b.assertions))
   );
   return slug;
 }
@@ -997,7 +1032,7 @@ app.put('/api/routines/:slug', (req, res) => {
   // as the basis and marks it stale so the LLM regenerates from the current script next.
   const staleAfter = (scriptModeAfter && promptChanged) ? 1 : r.script_stale;
   run(
-    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=?,retries=? WHERE slug=?`,
+    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=?,retries=?,assertions=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
     JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
     JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
@@ -1010,6 +1045,7 @@ app.put('/api/routines/:slug', (req, res) => {
     b.scriptLang ? (b.scriptLang === 'node' ? 'node' : 'bash') : r.script_lang,
     staleAfter,
     b.retries != null ? normRetries(b.retries) : r.retries,
+    JSON.stringify(b.assertions != null ? cleanAssertions(b.assertions) : j(r.assertions)),
     r.slug
   );
   const updated = one('SELECT * FROM routines WHERE slug=?', r.slug);
@@ -1235,6 +1271,7 @@ app.get('/api/runs/:id', (req, res) => {
     started: new Date(x.created_at).toLocaleTimeString(), elapsed: x.dur, model: r?.model || 'claude',
     cost: x.cost_usd, turns: x.num_turns, sessionId: x.session_id,
     stdout: x.output, event: ev, trace, inbox,
+    assertResult: jObj(x.assert_result) || null,
     lineage: { triggeredBy, downstream, watches },
     awaiting: running ? 'auto-mode session running…' : null,
     summary: {

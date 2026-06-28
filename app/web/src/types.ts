@@ -34,6 +34,7 @@ export interface Routine {
   compiled: boolean;
   scriptStale: boolean;
   retries: number;
+  assertions: { type: string; value: string }[];
 }
 
 export interface FrontMatter {
@@ -89,6 +90,7 @@ export interface RunDetail {
   stdout: string; event: Record<string, unknown> | null;
   trace: TraceEvent[];
   inbox: { summary: string; ago: string; pending: boolean }[];
+  assertResult: { passed: boolean; results: { type: string; value: string; ok: boolean; detail: string }[] } | null;
   lineage: RunLineage;
   awaiting: string | null;
   summary: { result: string; surface: string };

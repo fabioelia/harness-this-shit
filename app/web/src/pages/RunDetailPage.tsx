@@ -168,6 +168,24 @@ export function RunDetailPage() {
             </div>
           </div>
 
+          {r.assertResult && (
+            <div className={CARD} style={{ borderColor: r.assertResult.passed ? 'rgba(95,191,134,.3)' : 'rgba(229,115,107,.3)' }}>
+              <div className="mb-3 flex items-center justify-between">
+                <span className={LABEL}>Assertions</span>
+                <span className={`rounded-full border px-2 py-0.5 font-display text-[10px] font-semibold ${r.assertResult.passed ? 'border-ok/30 bg-ok/10 text-ok' : 'border-bad/30 bg-bad/10 text-bad'}`}>{r.assertResult.passed ? 'all passed' : `${r.assertResult.results.filter((x) => !x.ok).length} failed`}</span>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                {r.assertResult.results.map((a, i) => (
+                  <div key={i} className="flex items-center gap-2 font-mono text-[11.5px]">
+                    <span className={a.ok ? 'text-ok' : 'text-bad'}>{a.ok ? '✓' : '✗'}</span>
+                    <span className="text-dim-2">{a.type}{a.value ? ` ${a.value}` : ''}</span>
+                    <span className="ml-auto text-dim">{a.detail}</span>
+                  </div>
+                ))}
+              </div>
+              {!r.assertResult.passed && <div className="mt-2 text-[11px] text-dim-2">Failed assertions gated this run's chains and reactions.</div>}
+            </div>
+          )}
           {r.inbox.length > 0 && (
             <div className={CARD}>
               <div className={`${LABEL} mb-3`}>Inbox · also on its plate <span className="font-mono lowercase tracking-normal text-dim">{r.inbox.length} coalesced</span></div>

@@ -409,6 +409,7 @@ export function NewRoutinePage() {
   const [scriptMode, setScriptMode] = useState(false);
   const [scriptLang, setScriptLang] = useState<'bash' | 'node'>('bash');
   const [retries, setRetries] = useState(0);
+  const [assertions, setAssertions] = useState<{ type: string; value: string }[]>([]);
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('main');
   const [prompt, setPrompt] = useState('');
@@ -452,7 +453,7 @@ export function NewRoutinePage() {
     setSummary(d.summary); setOwner(d.owner); setTeam(d.team);
     setTriggers(d.triggers); setConnectors(d.connectors);
     setModel(d.model || 'claude-opus-4-8'); setEffort(d.effort || ''); setMemory(!!d.memory); setRepo(d.repo || ''); setBranch(d.branch || 'main');
-    setScriptMode(!!d.scriptMode); setScriptLang(d.scriptLang === 'node' ? 'node' : 'bash'); setRetries(d.retries || 0);
+    setScriptMode(!!d.scriptMode); setScriptLang(d.scriptLang === 'node' ? 'node' : 'bash'); setRetries(d.retries || 0); setAssertions(d.assertions ?? []);
     setPrompt(d.prompt || '');
     setChain(d.chain.join(', '));
     if (d.schedule) setSchedule(d.schedule);
@@ -511,7 +512,7 @@ export function NewRoutinePage() {
   const valid = name.trim().length > 0 && slug.length > 0;
   function submit() {
     if (!valid) return;
-    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, scriptMode, scriptLang, retries };
+    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, scriptMode, scriptLang, retries, assertions: assertions.filter((a) => a.type === 'no_tool_errors' || a.value.trim()) };
     if (isEdit) update.mutate({ slug: editSlug!, body }, { onSuccess: () => navigate(`/routines/${editSlug}`) });
     else create.mutate(body, { onSuccess: (r) => navigate(`/routines/${r.slug}`) });
   }
@@ -661,6 +662,24 @@ export function NewRoutinePage() {
                       <div className="text-[11px] text-dim-2">The <span className="text-t2">first run</span> is an agent that explores the repo and <span className="text-t2">writes a reusable {scriptLang} extractor</span> from your prompt. Every run after just executes that script — deterministic, fast, $0. Edit the prompt to recompile.</div>
                     </div>
                   </label>
+                </div>
+                <div className="border-t border-line-soft pt-3.5">
+                  <div className={LABEL}>Assertions · <span className="font-mono lowercase tracking-normal text-dim-2">checked over the result — fail = gate chain & reactions</span></div>
+                  {assertions.length > 0 && (
+                    <div className="mb-2 mt-1 flex flex-col gap-1.5">
+                      {assertions.map((a, i) => (
+                        <div key={i} className="flex items-center gap-1.5">
+                          <select value={a.type} onChange={(e) => setAssertions(assertions.map((x, j) => (j === i ? { ...x, type: e.target.value } : x)))} className="h-8 shrink-0 rounded-md border border-line bg-surface-2 px-1.5 font-mono text-[11px] text-fg">
+                            {[['contains', 'output contains'], ['not_contains', "output doesn't contain"], ['matches', 'output matches /regex/'], ['max_cost', 'cost ≤ ($)'], ['max_turns', 'turns ≤'], ['min_length', 'output length ≥'], ['no_tool_errors', 'no tool errors']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                          </select>
+                          {a.type !== 'no_tool_errors' && <input value={a.value} onChange={(e) => setAssertions(assertions.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} placeholder={a.type === 'max_cost' ? '0.50' : a.type === 'max_turns' || a.type === 'min_length' ? '10' : 'value…'} className={cn(inputCls, 'h-8 flex-1 font-mono text-[12px]')} />}
+                          <button type="button" onClick={() => setAssertions(assertions.filter((_, j) => j !== i))} className="shrink-0 text-dim hover:text-bad" aria-label="remove">✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <button type="button" onClick={() => setAssertions([...assertions, { type: 'contains', value: '' }])} className="font-mono text-[11px] text-brand-soft hover:underline">+ assertion</button>
+                  <div className="mt-1.5 text-[11px] text-dim-2">Checked harness-side over the run's output, cost, turns and trace — the agent can't fake a pass. A failed assertion blocks chains and reactions, catching silent regressions.</div>
                 </div>
                 <div className="border-t border-line-soft pt-3.5">
                   <div className={LABEL}>Concurrency · <span className="font-mono lowercase tracking-normal text-dim-2">no two routines touch the same thing at once</span></div>
