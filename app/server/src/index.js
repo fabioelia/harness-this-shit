@@ -1646,7 +1646,9 @@ app.get('/api/runs/search', (req, res) => {
   const q = String(req.query.q || '').trim();
   if (q.length < 2) return res.json({ results: [], q });
   const like = `%${q}%`;
-  const rows = all('SELECT id, routine_slug, status, output, created_at FROM runs WHERE output LIKE ? OR routine_slug LIKE ? ORDER BY created_at DESC LIMIT 40', like, like);
+  const days = Math.max(0, parseInt(req.query.days, 10) || 0);
+  const since = days ? now() - days * 86_400_000 : 0;
+  const rows = all('SELECT id, routine_slug, status, output, created_at FROM runs WHERE (output LIKE ? OR routine_slug LIKE ?) AND created_at > ? ORDER BY created_at DESC LIMIT 40', like, like, since);
   const snip = (out) => {
     const s = String(out || ''); const i = s.toLowerCase().indexOf(q.toLowerCase());
     if (i < 0) return s.slice(0, 120).replace(/\s+/g, ' ');

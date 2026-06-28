@@ -15,7 +15,8 @@ export function RunsPage() {
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('all');
   const [oq, setOq] = useState('');
-  const { data: outHits } = useRunSearch(oq);
+  const [oqDays, setOqDays] = useState(0);
+  const { data: outHits } = useRunSearch(oq, oqDays);
   const rerunFailed = useRerunFailed();
   const failedCount = (runs ?? []).filter((r) => r.status === 'failed').length;
   const filtered = (runs ?? []).filter((r) => {
@@ -38,7 +39,12 @@ export function RunsPage() {
       </div>
       <div className="px-[26px] py-5 pb-[26px]">
         <div className="mb-3">
-          <input value={oq} onChange={(e) => setOq(e.target.value)} placeholder="🔎 search inside run outputs across all history…" className="h-9 w-full rounded-md border border-line bg-surface-2 px-3 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+          <div className="flex items-center gap-2">
+            <input value={oq} onChange={(e) => setOq(e.target.value)} placeholder="🔎 search inside run outputs…" className="h-9 flex-1 rounded-md border border-line bg-surface-2 px-3 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
+            <span className="inline-flex shrink-0 overflow-hidden rounded-md border border-line text-[11px] font-semibold">
+              {[[0, 'all'], [7, '7d'], [30, '30d']].map(([v, l]) => <button key={v} onClick={() => setOqDays(v as number)} className={`px-2.5 py-2 font-mono ${oqDays === v ? 'bg-brand/15 text-brand-soft' : 'text-dim hover:text-t2'}`}>{l}</button>)}
+            </span>
+          </div>
           {oq.trim().length >= 2 && outHits && (
             <div className="mt-2 overflow-hidden rounded-lg border border-brand/30 bg-surface">
               <div className="border-b border-line-soft bg-surface-2 px-3.5 py-2 font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-dim-2">{outHits.results.length} output match{outHits.results.length === 1 ? '' : 'es'}</div>

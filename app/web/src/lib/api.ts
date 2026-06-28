@@ -165,7 +165,7 @@ export function useRerunFailed() {
   return useMutation({ mutationFn: (hours: number) => post<{ rerun: number }>('/api/runs/rerun-failed', { hours }), onSuccess: () => qc.invalidateQueries({ queryKey: ['runs'] }) });
 }
 export interface RunSearch { q: string; results: { id: string; slug: string; status: string; ago: string; snippet: string }[] }
-export const useRunSearch = (q: string) => useQuery({ queryKey: ['runsearch', q], enabled: q.trim().length >= 2, queryFn: () => get<RunSearch>(`/api/runs/search?q=${encodeURIComponent(q)}`) });
+export const useRunSearch = (q: string, days = 0) => useQuery({ queryKey: ['runsearch', q, days], enabled: q.trim().length >= 2, queryFn: () => get<RunSearch>(`/api/runs/search?q=${encodeURIComponent(q)}${days ? `&days=${days}` : ''}`) });
 export interface RunDiff { current: { id: string; output: string; cost: number | null; turns: number | null; status: string; ago: string } | null; previous: { id: string; output: string; cost: number | null; turns: number | null; status: string; ago: string } | null }
 export const useRunDiff = (id: string, enabled: boolean) => useQuery({ queryKey: ['rundiff', id], enabled, queryFn: () => get<RunDiff>(`/api/runs/${id}/diff`) });
 export interface RunCompare { a: { id: string; slug: string; output: string; cost: number | null; turns: number | null; status: string; ago: string }; b: RunCompare['a'] }
