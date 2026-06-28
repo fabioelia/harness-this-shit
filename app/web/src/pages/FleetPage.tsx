@@ -74,6 +74,7 @@ function FleetRow({ r, i, selected, onSelect }: { r: Routine; i: number; selecte
           <button onClick={() => pin.mutate(r.slug)} title={r.pinned ? 'unpin' : 'pin to top'} className={`shrink-0 text-[13px] leading-none ${r.pinned ? 'text-brand' : 'text-faint hover:text-dim'}`}>{r.pinned ? '★' : '☆'}</button>
           <Link to={`/routines/${r.slug}`} className="truncate font-display text-[14px] font-semibold text-fg-2 hover:text-brand">{r.name}</Link>
           {r.reviewStatus === 'needs_review' && <span title="config changed since last approval" className="shrink-0 rounded border border-warn/40 bg-warn/10 px-1.5 py-px font-mono text-[10px] font-semibold text-warn">⚑ review</span>}
+          {r.tier === 'critical' && <span title="business-critical" className="shrink-0 rounded border border-bad/50 bg-bad/10 px-1.5 py-px font-mono text-[10px] font-semibold text-bad">⬢ critical</span>}
           {r.lifecycle === 'draft' && <span className="shrink-0 rounded border border-brand/40 bg-brand/10 px-1.5 py-px font-mono text-[10px] font-semibold text-brand-soft">draft</span>}
           {r.lifecycle === 'deprecated' && <span className="shrink-0 rounded border border-warn/40 bg-warn/10 px-1.5 py-px font-mono text-[10px] font-semibold text-warn">deprecated</span>}
           {r.longRunning && <span title="a run has been going over 8 minutes — possibly stuck" className="shrink-0 animate-sbpulse rounded-full border border-bad/40 bg-bad/10 px-1.5 py-px font-mono text-[10px] font-semibold text-bad">⏱ long-run</span>}
@@ -141,6 +142,7 @@ export function FleetPage() {
   const [owner, setOwner] = useState('');
   const [trig, setTrig] = useState('');
   const [tag, setTag] = useState('');
+  const [tier, setTier] = useState('');
   const [conn, setConn] = useState('');
   const [needsReview, setNeedsReview] = useState(false);
   const [grouped, setGrouped] = useState(false);
@@ -159,6 +161,7 @@ export function FleetPage() {
     const c = params.get('connector'); if (c) setConn(c);
     const t = params.get('team'); if (t) setTeam(t);
     const g = params.get('trigger'); if (g) setTrig(g);
+    const ti = params.get('tier'); if (ti) setTier(ti);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
@@ -175,6 +178,7 @@ export function FleetPage() {
     if (trig && !r.triggers.includes(trig)) return false;
     if (conn && !r.connectors.includes(conn)) return false;
     if (tag && !(r.tags || []).includes(tag)) return false;
+    if (tier && r.tier !== tier) return false;
     if (needsReview && !(r.state === 'failing' || r.lastStatus === 'failing' || (r.successRate != null && r.successRate < 75))) return false;
     return true;
   });
@@ -251,6 +255,7 @@ export function FleetPage() {
         <FilterSelect value={trig} onChange={setTrig} label="Trigger" options={opts.trigs} />
         <FilterSelect value={conn} onChange={setConn} label="Connector" options={opts.conns} />
         {opts.tags.length > 0 && <FilterSelect value={tag} onChange={setTag} label="Tag" options={opts.tags} />}
+        <FilterSelect value={tier} onChange={setTier} label="Tier" options={['critical', 'standard', 'experimental']} />
         <button
           onClick={() => setNeedsReview((v) => !v)}
           className={cn(
@@ -261,8 +266,8 @@ export function FleetPage() {
           Health: needs review
           {needsReview && <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="#d8b486" strokeWidth="1.4"><path d="M3 3 L7 7 M7 3 L3 7" strokeLinecap="round" /></svg>}
         </button>
-        {(team || owner || trig || conn || tag || needsReview || q) && (
-          <button onClick={() => { setTeam(''); setOwner(''); setTrig(''); setConn(''); setTag(''); setNeedsReview(false); setQ(''); }} className="font-mono text-[11px] text-dim hover:text-fg">clear</button>
+        {(team || owner || trig || conn || tag || tier || needsReview || q) && (
+          <button onClick={() => { setTeam(''); setOwner(''); setTrig(''); setConn(''); setTag(''); setTier(''); setNeedsReview(false); setQ(''); }} className="font-mono text-[11px] text-dim hover:text-fg">clear</button>
         )}
         <button onClick={() => setGrouped((v) => !v)} className={cn('flex h-[34px] items-center gap-[6px] rounded-md border px-2.5 font-mono text-[11.5px] font-medium', grouped ? 'border-brand/50 bg-brand/10 text-brand-soft' : 'border-line text-dim hover:text-t2')} title="group by team">⊞ team</button>
         <button onClick={() => setShowArchived((v) => !v)} className={cn('flex h-[34px] items-center gap-[6px] rounded-md border px-2.5 font-mono text-[11.5px] font-medium', showArchived ? 'border-warn/50 bg-warn/10 text-warn' : 'border-line text-dim hover:text-t2')} title="show archived routines">{showArchived ? '⊟ archived' : '⊞ archived'}</button>
@@ -278,7 +283,7 @@ export function FleetPage() {
             <button onClick={() => deleteView.mutate(v.name)} className="text-dim hover:text-bad" aria-label={`delete ${v.name}`}>×</button>
           </span>
         ))}
-        {(team || owner || trig || conn || tag || needsReview || q) && (
+        {(team || owner || trig || conn || tag || tier || needsReview || q) && (
           <button onClick={() => { const name = prompt('Save current filters as view:'); if (name) saveView.mutate({ name, params: { q, team, trig, conn, tag, needsReview } }); }} className="font-mono text-[11.5px] text-brand-soft hover:underline">+ save current</button>
         )}
         {!(views?.views ?? []).length && !(team || trig || conn || tag || needsReview || q) && <span className="font-mono text-[11px] text-dim">apply filters, then “save current” to pin a preset</span>}
