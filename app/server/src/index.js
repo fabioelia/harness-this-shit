@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path';
 import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { getDb, all, one, run } from './db.js';
-import { runClaude, buildPrompt } from './runner.js';
+import { runClaude, buildPrompt, allowedToolsFor } from './runner.js';
 import { integrationStatus, listRepos, listOrgs, listChecks, claudeAccount, testConnector, bustStatus, gh } from './integrations.js';
 import { SAMPLE_ROUTINES, SAMPLE_AGENTS } from './samples.js';
 
@@ -1138,6 +1138,20 @@ const exportBody = (r) => ({
   concurrency: jObj(r.concurrency) || {}, model: r.model, effort: r.effort, memory: !!r.memory,
   repo: r.repo, prompt: r.prompt, scriptMode: !!r.script_mode, scriptLang: r.script_lang,
   retries: r.retries, assertions: j(r.assertions), alertOnFail: !!r.alert_on_fail, alertTarget: r.alert_target,
+});
+// Dry-run preview: the exact prompt the agent would get + whether an event matches — $0.
+app.post('/api/routines/:slug/preview', (req, res) => {
+  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const event = req.body?.event && Object.keys(req.body.event).length ? req.body.event : { event: 'manual', routine: r.slug };
+  const tools = j(r.connectors);
+  const agents = tools.includes('team') ? all('SELECT name, role, summary FROM agents ORDER BY name') : [];
+  const willCompile = !!r.script_mode && !(r.script && r.script.trim());
+  const prompt = buildPrompt({ ...r, connectors: tools }, event, policyConstraints(), { agents, compile: willCompile, scriptLang: r.script_lang });
+  const triggerType = event.event || event.type || 'manual';
+  const wouldMatch = j(r.triggers).includes(triggerType) && repoMatches(r, event) && filtersMatch(r, event);
+  const { key } = leaseFor(r, event);
+  res.json({ prompt, tools, agents: agents.map((a) => a.name), wouldMatch, leaseKey: key, scriptMode: !!r.script_mode, willCompile, allowedTools: allowedToolsFor(tools) });
 });
 app.get('/api/routines/:slug/export', (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);

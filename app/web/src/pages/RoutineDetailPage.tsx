@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric } from '@/lib/api';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import type { FrontMatter, RoutineDetail } from '@/types';
 
@@ -169,6 +169,7 @@ export function RoutineDetailPage() {
   const validate = useValidateRoutine();
   const del = useDeleteRoutine();
   const [showRaw, setShowRaw] = useState(false);
+  const preview = usePreviewRoutine();
   const [msg, setMsg] = useState<{ text: string; tone: 'bad' | 'warn' } | null>(null);
   const raw = useRoutineRaw(slug, showRaw);
   useEffect(() => {
@@ -255,7 +256,8 @@ export function RoutineDetailPage() {
           <span className="h-[13px] w-px bg-line" />
           <span className="inline-flex items-center gap-[7px]"><Avatar color={d.ownerColor} initials={d.initials} size={20} /><span className="font-sans text-[12px] font-medium text-t2">{d.owner}</span><span className="text-faint">·</span><span className="font-mono text-[11px] font-medium text-dim">{d.team}</span></span>
           {d.connectors.slice(0, 2).map((c) => <Chip key={c}>{c}</Chip>)}
-          <a href={`/api/routines/${d.slug}/export`} download={`${d.slug}.routine.json`} className="ml-auto font-mono text-[12px] font-medium text-dim hover:text-brand">Export JSON ↓</a>
+          <button onClick={() => preview.mutate(d.slug)} className="ml-auto font-mono text-[12px] font-medium text-dim hover:text-brand">Preview prompt ▸</button>
+          <a href={`/api/routines/${d.slug}/export`} download={`${d.slug}.routine.json`} className="font-mono text-[12px] font-medium text-dim hover:text-brand">Export JSON ↓</a>
           <button onClick={() => setShowRaw(true)} className="font-mono text-[12px] font-medium text-brand hover:underline">View raw {d.file} ›</button>
         </div>
       </div>
@@ -272,6 +274,22 @@ export function RoutineDetailPage() {
                 <div key={i} style={line.startsWith('##') ? { color: 'var(--dim-2)' } : line === '---' ? { color: 'var(--faint)' } : undefined}>{line || ' '}</div>
               ))}
             </pre>
+          </div>
+        </div>
+      )}
+
+      {preview.data && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-8" onClick={() => preview.reset()}>
+          <div className="mt-12 w-full max-w-[820px] overflow-hidden rounded-lg border border-line bg-surface shadow-pop" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-line-soft px-4 py-2.5">
+              <span className="font-mono text-[12px] font-medium text-t2">Resolved prompt · what the agent receives{preview.data.willCompile ? ' (compile run)' : ''}</span>
+              <button onClick={() => preview.reset()} className="font-mono text-[12px] text-dim hover:text-fg">esc ✕</button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 border-b border-line-soft px-4 py-2 font-mono text-[11px]">
+              <span className="text-dim">tools:</span>{preview.data.allowedTools.length ? preview.data.allowedTools.map((t) => <span key={t} className="rounded bg-white/[0.05] px-1.5 py-0.5 text-t2">{t}</span>) : <span className="text-dim">none</span>}
+              {preview.data.leaseKey && <span className="text-dim">· lease {preview.data.leaseKey}</span>}
+            </div>
+            <pre className="max-h-[64vh] overflow-auto whitespace-pre-wrap break-words bg-code px-4 py-3.5 font-mono text-[12px] leading-[1.6] text-muted">{preview.data.prompt}</pre>
           </div>
         </div>
       )}
