@@ -1949,6 +1949,15 @@ app.post('/api/routines/:slug/recompile', (req, res) => {
   res.json({ ok: true, runId });
 });
 
+// Idempotency: GitHub retries the same delivery id on timeout — drop repeats within 10m.
+const _recentDeliveries = new Map();
+function isDuplicateDelivery(key) {
+  if (!key) return false;
+  const prev = _recentDeliveries.get(key);
+  _recentDeliveries.set(key, now());
+  if (_recentDeliveries.size > 1000) for (const [k, v] of _recentDeliveries) if (now() - v > 600_000) _recentDeliveries.delete(k);
+  return prev != null && now() - prev < 600_000;
+}
 // Recent inbound deliveries (webhook + API ingress) — a debug log of what arrived.
 const deliveryLog = [];
 function logDelivery(type, event, matched, source) {
@@ -1972,6 +1981,12 @@ app.post('/api/webhooks/github', (req, res) => {
   if (!githubSignatureValid(req)) return res.status(401).json({ error: 'invalid webhook signature' });
   const type = req.get('x-github-event') || 'push';
   if (type === 'ping') { logDelivery('ping', {}, [], 'webhook'); return res.json({ ok: true, pong: true }); }
+  const deliveryId = req.get('x-github-delivery') || '';
+  if (isDuplicateDelivery(deliveryId)) {
+    logDelivery(type, req.body || {}, [], 'webhook·dup');
+    logActivity(`webhook ${type} ${deliveryId.slice(0, 8)} dropped · duplicate delivery`, 'idle');
+    return res.json({ ok: true, duplicate: true });
+  }
   const out = dispatchEvent(type, req.body || {});
   logDelivery(type, req.body || {}, out.matched, 'webhook');
   if (out.error) return res.status(409).json(out);
