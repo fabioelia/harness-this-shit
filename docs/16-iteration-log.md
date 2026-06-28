@@ -81,6 +81,7 @@ dropdowns · Fleet inbox badge.
 | 60 | Loop-2 QA checkpoint — endpoints + all-page render sweep | quality | ✅ done — 0 bugs |
 | 61 | Cost attribution by tag (spend/runs per routine tag) | observability/efficiency | ✅ done |
 | 62 | Active window — restrict event/schedule triggers to allowed hours+weekdays | efficiency/control | ✅ done |
+| 63 | Manual lease release (clear a stuck lease from the concurrency view) | control | ✅ done |
 
 ## QA backlog — loop 2 (test at iteration 60)
 - [x] (iter 54) usage captured from result event; in/out (incl cache) summed; run detail + insights show tokens; null for old runs.

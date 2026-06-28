@@ -971,6 +971,14 @@ if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(tickWatches, 45_00
 app.get('/api/health', (_q, res) => res.json({ ok: true }));
 app.get('/api/models', (_q, res) => res.json({ models: MODELS, efforts: EFFORTS, defaultModel: DEFAULT_MODEL }));
 // Live concurrency leases — who's holding what, on which entity/SHA.
+// Manually release a stuck lease.
+app.delete('/api/leases', (req, res) => {
+  const key = String(req.query.key || '');
+  if (!key) return res.status(400).json({ error: 'key required' });
+  run('DELETE FROM leases WHERE key=?', key);
+  logActivity(`lease ${key} released manually`, 'idle');
+  res.json({ ok: true });
+});
 // Live concurrency: leases currently held + inbox tasks waiting to be picked up.
 app.get('/api/leases', (_q, res) => {
   const leases = all('SELECT * FROM leases WHERE expires_at > ? ORDER BY acquired_at DESC', now())

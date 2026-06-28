@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures, useHeatmap } from '@/lib/api';
+import { useInsights, useSchedule, useSetBudget, useGraph, useLeases, useSetDigest, useSendDigest, useLint, useAnomalies, useFailures, useHeatmap, useReleaseLease } from '@/lib/api';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
@@ -18,6 +18,7 @@ export function InsightsPage() {
   const { data: anom } = useAnomalies(days);
   const { data: failures } = useFailures(7);
   const { data: heat } = useHeatmap(30);
+  const releaseLease = useReleaseLease();
   const setDigest = useSetDigest();
   const sendDigest = useSendDigest();
   const [capDraft, setCapDraft] = useState('');
@@ -205,6 +206,7 @@ export function InsightsPage() {
                         <Link to={`/runs/${l.runId}`} className="text-dim hover:text-brand">{l.runId}</Link>
                         {l.sha && <span className="text-dim-2">@{l.sha}</span>}
                         <span className="ml-auto text-dim">held {l.held} · ttl {l.ttl}</span>
+                        <button onClick={() => releaseLease.mutate(l.key)} title="release this lease" className="text-dim hover:text-bad">release ×</button>
                       </div>
                     ))}
                   </div>
