@@ -1633,6 +1633,13 @@ app.delete('/api/routines/:slug/baseline', (req, res) => {
   run("UPDATE routines SET baseline='' WHERE slug=?", req.params.slug);
   res.json({ ok: true });
 });
+// Compare any two runs by id — arbitrary run-vs-run diff.
+app.get('/api/runs/compare', (req, res) => {
+  const brief = (id) => { const x = one('SELECT * FROM runs WHERE id=?', id); return x ? { id: x.id, slug: x.routine_slug, output: x.output || '', cost: x.cost_usd, turns: x.num_turns, status: x.status, ago: relTime(x.created_at) } : null; };
+  const a = brief(String(req.query.a || '')); const b = brief(String(req.query.b || ''));
+  if (!a || !b) return res.status(404).json({ error: 'one or both runs not found' });
+  res.json({ a, b });
+});
 // Diff a run against the previous run of the same routine (output + metric deltas).
 app.get('/api/runs/:id/diff', (req, res) => {
   const cur = one('SELECT * FROM runs WHERE id=?', req.params.id);

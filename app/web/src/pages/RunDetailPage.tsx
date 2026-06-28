@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRun, useDispatchRoutine, useReplayRun, useRunDiff, useRerunRun, useCancelRun, useSetBaseline, useReplayModel, useModels } from '@/lib/api';
+import { useRun, useDispatchRoutine, useReplayRun, useRunDiff, useRunCompare, useRerunRun, useCancelRun, useSetBaseline, useReplayModel, useModels } from '@/lib/api';
 import { Pill, Dot, Empty, stateMeta } from '@/components/sb';
 import { cn } from '@/lib/utils';
 
@@ -28,13 +28,28 @@ function lineDiff(a: string, b: string): { sign: ' ' | '-' | '+'; text: string }
 
 function DiffCard({ runId }: { runId: string }) {
   const [open, setOpen] = useState(false);
-  const { data } = useRunDiff(runId, open);
+  const [otherId, setOtherId] = useState('');
+  const { data } = useRunDiff(runId, open && !otherId.trim());
+  const cmp = useRunCompare(runId, open ? otherId : '');
   return (
     <div className={CARD}>
       <button onClick={() => setOpen((v) => !v)} className={`${LABEL} flex w-full items-center justify-between hover:text-t2`}>
-        <span>Diff vs previous run</span><span className="font-mono text-dim">{open ? '▾' : '▸'}</span>
+        <span>Diff vs {otherId.trim() ? 'another run' : 'previous run'}</span><span className="font-mono text-dim">{open ? '▾' : '▸'}</span>
       </button>
-      {open && data && (
+      {open && (
+        <div className="mt-2 mb-1 flex items-center gap-2">
+          <input value={otherId} onChange={(e) => setOtherId(e.target.value)} placeholder="compare with run id (blank = previous)" className="h-7 flex-1 rounded-md border border-line bg-surface-2 px-2 font-mono text-[11px] text-fg focus:border-brand/60 focus:outline-none" />
+        </div>
+      )}
+      {open && otherId.trim() && (
+        cmp.isError ? <div className="mt-2 font-mono text-[12px] text-bad">run not found.</div> : cmp.data ? (
+          <div className="mt-2">
+            <div className="mb-2 font-mono text-[11px] text-dim-2">vs <Link to={`/runs/${cmp.data.b.id}`} className="text-brand-soft">{cmp.data.b.id}</Link> ({cmp.data.b.slug} · {cmp.data.b.ago})</div>
+            <pre className="max-h-[320px] overflow-auto rounded-md bg-code px-3 py-2 font-mono text-[11px] leading-[1.55]">{lineDiff(cmp.data.b.output, cmp.data.a.output).map((l, i) => <div key={i} className={l.sign === '+' ? 'text-ok' : l.sign === '-' ? 'text-bad' : 'text-dim-2'}>{l.sign} {l.text || ' '}</div>)}</pre>
+          </div>
+        ) : <div className="mt-2 font-mono text-[12px] text-dim">loading…</div>
+      )}
+      {open && !otherId.trim() && data && (
         !data.previous ? <div className="mt-3 font-mono text-[12px] text-dim">no earlier run of this routine to compare.</div> : (
           <div className="mt-3">
             <div className="mb-2 flex flex-wrap gap-3 font-mono text-[11px] text-dim-2">

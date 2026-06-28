@@ -161,6 +161,8 @@ export interface RunSearch { q: string; results: { id: string; slug: string; sta
 export const useRunSearch = (q: string) => useQuery({ queryKey: ['runsearch', q], enabled: q.trim().length >= 2, queryFn: () => get<RunSearch>(`/api/runs/search?q=${encodeURIComponent(q)}`) });
 export interface RunDiff { current: { id: string; output: string; cost: number | null; turns: number | null; status: string; ago: string } | null; previous: { id: string; output: string; cost: number | null; turns: number | null; status: string; ago: string } | null }
 export const useRunDiff = (id: string, enabled: boolean) => useQuery({ queryKey: ['rundiff', id], enabled, queryFn: () => get<RunDiff>(`/api/runs/${id}/diff`) });
+export interface RunCompare { a: { id: string; slug: string; output: string; cost: number | null; turns: number | null; status: string; ago: string }; b: RunCompare['a'] }
+export const useRunCompare = (a: string, b: string) => useQuery({ queryKey: ['runcompare', a, b], enabled: !!a && b.trim().length > 3, queryFn: () => get<RunCompare>(`/api/runs/compare?a=${a}&b=${encodeURIComponent(b.trim())}`), retry: false });
 export const useRun = (id?: string) =>
   useQuery({
     queryKey: ['run', id],
