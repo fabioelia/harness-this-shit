@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory } from '@/lib/api';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import type { FrontMatter, RoutineDetail } from '@/types';
 
@@ -88,6 +88,25 @@ function ReactiveFlowCard({ d }: { d: RoutineDetail }) {
   );
 }
 
+function ScriptCard({ slug, lang, compiled, script }: { slug: string; lang: string; compiled: boolean; script: string }) {
+  const recompile = useRecompile();
+  return (
+    <div className={CARD}>
+      <div className="mb-3 flex items-center justify-between">
+        <span className={LABEL}>Deterministic extractor · {lang}</span>
+        <button onClick={() => recompile.mutate(slug)} disabled={recompile.isPending} className="h-7 rounded-md border border-line bg-surface-2 px-2.5 font-display text-[11.5px] font-semibold text-t2 hover:border-hair disabled:opacity-40">{recompile.isPending ? 'Rebuilding…' : compiled ? 'Rebuild' : 'Compile now'}</button>
+      </div>
+      {compiled ? (
+        <>
+          <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-ok/30 bg-ok/10 px-2 py-0.5 font-display text-[10px] font-semibold text-ok"><Dot color="#5fbf86" size={6} /> compiled — runs deterministically ($0)</div>
+          <pre className="max-h-[320px] overflow-auto whitespace-pre rounded-md border border-line-soft bg-code px-3.5 py-3 font-mono text-[11px] leading-[1.55] text-muted">{script}</pre>
+        </>
+      ) : (
+        <div className="font-mono text-[12px] text-dim">Not compiled yet — the first run (or <span className="text-t2">Compile now</span>) builds the {lang} extractor from the prompt; every run after executes it verbatim.</div>
+      )}
+    </div>
+  );
+}
 function MemoryCard({ slug }: { slug: string }) {
   const { data } = useRoutineMemory(slug, true);
   return (
@@ -294,6 +313,7 @@ export function RoutineDetailPage() {
               )}
             </div>
           )}
+          {d.scriptMode && <ScriptCard slug={d.slug} lang={d.scriptLang} compiled={d.compiled} script={d.script} />}
           {d.memory && <MemoryCard slug={d.slug} />}
           {d.chain?.length > 0 && (
             <div className={CARD}>

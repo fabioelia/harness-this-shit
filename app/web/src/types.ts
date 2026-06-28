@@ -29,6 +29,9 @@ export interface Routine {
   spend: string;
   avg: string;
   inbox: number;
+  scriptMode: boolean;
+  scriptLang: string;
+  compiled: boolean;
 }
 
 export interface FrontMatter {
@@ -56,6 +59,7 @@ export interface RoutineDetail extends Routine {
   watches: Watch[];
   leases: { key: string; runId: string; sha: string; held: string; ttl: string }[];
   inboxTasks: { summary: string; key: string; ago: string }[];
+  script: string;
 }
 
 export interface RegistryServer {

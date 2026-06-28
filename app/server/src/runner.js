@@ -24,12 +24,14 @@ export function allowedToolsFor(connectors = []) {
   return allow;
 }
 
-export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, model, effort, memoryDir, mcpConfig, runId, coalesce } = {}) {
+export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, model, effort, memoryDir, mcpConfig, runId, coalesce, scriptPath, compile } = {}) {
   return new Promise((resolve) => {
     const start = Date.now();
     const allow = allowedToolsFor(coalesce ? [...tools, '__inbox'] : tools);
     // Memory routines run in their memory dir and may read/update files there.
     if (memoryDir) allow.push('Read', 'Write', 'Edit', 'Glob', 'Grep');
+    // Compile run: the agent builds + tests an extractor script, so it gets file + shell tools.
+    if (compile) { allow.push('Write', 'Read', 'Edit', 'Glob', 'Grep', 'Bash'); }
     // --allowed-tools is variadic, so it must come last (each tool a separate arg)
     // and the prompt is fed via stdin so it isn't swallowed by the variadic.
     // --strict-mcp-config with no --mcp-config = no global MCP servers loaded
@@ -41,8 +43,9 @@ export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, mo
     if (effort) args.push('--effort', effort); // and its reasoning-effort level
     if (allow.length) args.push('--allowed-tools', ...allow);
     // tools dir on PATH so `slack-post` (and future tool scripts) resolve by name;
-    // SB_RUN_ID lets the `inbox` tool fetch tasks coalesced onto this very run.
-    const env = { ...process.env, PATH: `${TOOLS_DIR}:${process.env.PATH}`, ...(runId ? { SB_RUN_ID: runId } : {}) };
+    // SB_RUN_ID lets the `inbox` tool fetch tasks coalesced onto this very run;
+    // SB_SCRIPT_PATH is where a compile run writes its reusable extractor.
+    const env = { ...process.env, PATH: `${TOOLS_DIR}:${process.env.PATH}`, ...(runId ? { SB_RUN_ID: runId } : {}), ...(scriptPath ? { SB_SCRIPT_PATH: scriptPath } : {}) };
     const fail = (msg) => resolve({ finalText: '', output: '', stderr: msg, code: -1, ms: Date.now() - start, isError: true, costUsd: null, numTurns: null, sessionId: '', events: 0 });
     let child;
     try {
@@ -91,7 +94,7 @@ export function runClaude(prompt, { timeoutMs = 240_000, tools = [], onEvent, mo
 /** Assemble the session input: the routine's natural instruction + the live
  *  trigger context + the tools it may use. No output-format contract — the
  *  session does whatever the instruction needs and takes the actions itself. */
-export function buildPrompt(routine, event, constraints = [], { memoryDir, agents = [], coalesce = false, seedTasks = [] } = {}) {
+export function buildPrompt(routine, event, constraints = [], { memoryDir, agents = [], coalesce = false, seedTasks = [], compile = false, scriptLang = 'bash', scriptPath = '' } = {}) {
   const tools = Array.isArray(routine.connectors)
     ? routine.connectors
     : (() => { try { return JSON.parse(routine.connectors || '[]'); } catch { return []; } })();
@@ -134,6 +137,21 @@ export function buildPrompt(routine, event, constraints = [], { memoryDir, agent
       'You are the single agent handling this PR/entity right now. While you work, related events (a new push, another label, a comment) are NOT given to a second agent — they are coalesced onto YOUR plate as tasks.',
       '**Before you finish, RUN the shell command `inbox`** — it prints any new tasks that landed since you started (newest event context included). If it returns tasks, fold them into your work, then run `inbox` again. Only wrap up once `inbox` comes back empty, so nothing handed to you is dropped.');
     if (seedTasks.length) lines.push('', `Tasks already waiting for you:`, ...seedTasks.map((t) => `- ${t}`));
+  }
+  if (compile) {
+    const ext = scriptLang === 'node' ? 'node' : 'bash';
+    lines.push('',
+      '## Build a reusable extractor (this is a SCRIPT routine)',
+      `Your goal this run is NOT just to answer once — it is to BUILD a self-contained ${ext} script that extracts the data the instruction asks for, so every future run executes the script directly (no LLM, deterministic, $0).`,
+      'Steps:',
+      `1. Explore to figure out exactly where the data lives — use the gh CLI (\`gh workflow list\`, \`gh run list --json …\`, \`gh api …\`) against the target repo to find the right workflow / job / check / query. Resolve names to ids now so the script doesn't have to guess.`,
+      `2. Write a self-contained ${ext} script to the file at the path in the env var SB_SCRIPT_PATH (use the Write tool). It must:`,
+      `   - Read its inputs from the environment: SB_REPO (owner/name) and SB_EVENT (the trigger payload as JSON). Don't hardcode anything you can read from these.`,
+      `   - Compute any time window RELATIVE to now (e.g. "this week" = last 7 days from the current date), never a fixed date.`,
+      `   - Depend only on what's already here: ${ext}${ext === 'bash' ? ', gh, jq, and standard unix tools' : ' and gh via child_process'}. No installs.`,
+      `   - Print ONLY the final result to stdout (a number, a short line, or compact JSON) — that stdout becomes the run's output verbatim. Exit non-zero on failure.`,
+      '3. Run the script once yourself to verify it works and produces the right answer; fix it until it does.',
+      'End with the verified result. The harness saves your script from SB_SCRIPT_PATH and runs it verbatim on every future trigger.');
   }
   lines.push('', `Carry out the instruction now using the trigger context and your tools.${coalesce ? ' Drain your `inbox` before finishing.' : ''} End with a one-line summary of what you did.`);
   return lines.join('\n');

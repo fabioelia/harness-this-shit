@@ -406,6 +406,8 @@ export function NewRoutinePage() {
   const [model, setModel] = useState('claude-opus-4-8');
   const [effort, setEffort] = useState('');
   const [memory, setMemory] = useState(false);
+  const [scriptMode, setScriptMode] = useState(false);
+  const [scriptLang, setScriptLang] = useState<'bash' | 'node'>('bash');
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('main');
   const [prompt, setPrompt] = useState('');
@@ -449,6 +451,7 @@ export function NewRoutinePage() {
     setSummary(d.summary); setOwner(d.owner); setTeam(d.team);
     setTriggers(d.triggers); setConnectors(d.connectors);
     setModel(d.model || 'claude-opus-4-8'); setEffort(d.effort || ''); setMemory(!!d.memory); setRepo(d.repo || ''); setBranch(d.branch || 'main');
+    setScriptMode(!!d.scriptMode); setScriptLang(d.scriptLang === 'node' ? 'node' : 'bash');
     setPrompt(d.prompt || '');
     setChain(d.chain.join(', '));
     if (d.schedule) setSchedule(d.schedule);
@@ -507,7 +510,7 @@ export function NewRoutinePage() {
   const valid = name.trim().length > 0 && slug.length > 0;
   function submit() {
     if (!valid) return;
-    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict } };
+    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, scriptMode, scriptLang };
     if (isEdit) update.mutate({ slug: editSlug!, body }, { onSuccess: () => navigate(`/routines/${editSlug}`) });
     else create.mutate(body, { onSuccess: (r) => navigate(`/routines/${r.slug}`) });
   }
@@ -632,6 +635,22 @@ export function NewRoutinePage() {
                   <input type="checkbox" checked={memory} onChange={(e) => setMemory(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[#5b9ee6]" />
                   <div><div className="font-display text-[12.5px] font-semibold text-t2">Persistent memory</div><div className="text-[11px] text-dim-2">A <span className="font-mono text-[var(--code-accent)]">memory.md</span> the session reads at start and updates as it learns.</div></div>
                 </label>
+                <div className="border-t border-line-soft pt-3.5">
+                  <label className="flex cursor-pointer items-start gap-2.5">
+                    <input type="checkbox" checked={scriptMode} onChange={(e) => setScriptMode(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[#5fbf86]" />
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-display text-[12.5px] font-semibold text-t2">Deterministic script</span>
+                        {scriptMode && (
+                          <select value={scriptLang} onChange={(e) => setScriptLang(e.target.value as 'bash' | 'node')} onClick={(e) => e.preventDefault()} className="h-6 rounded border border-line bg-surface-2 px-1.5 font-mono text-[11px] text-fg">
+                            <option value="bash">bash</option><option value="node">node</option>
+                          </select>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-dim-2">The <span className="text-t2">first run</span> is an agent that explores the repo and <span className="text-t2">writes a reusable {scriptLang} extractor</span> from your prompt. Every run after just executes that script — deterministic, fast, $0. Edit the prompt to recompile.</div>
+                    </div>
+                  </label>
+                </div>
                 <div className="border-t border-line-soft pt-3.5">
                   <div className={LABEL}>Concurrency · <span className="font-mono lowercase tracking-normal text-dim-2">no two routines touch the same thing at once</span></div>
                   <div className="mt-1 flex gap-3">

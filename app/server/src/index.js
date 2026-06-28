@@ -257,6 +257,7 @@ const shapeRoutine = (r) => {
     lastAgo: r.last_ago, lastStatus: r.last_status, next: r.next,
     recent, successRate, spend: r.spend, avg: r.avg, runCount: recent.length,
     inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
+    scriptMode: !!r.script_mode, scriptLang: r.script_lang || 'bash', compiled: !!(r.script && r.script.trim()),
   };
 };
 
@@ -294,6 +295,45 @@ function logActivity(text, state) {
     new Date().toISOString().slice(11, 19), text, state, (one('SELECT MAX(ord) AS m FROM activity').m ?? -1) + 1);
 }
 
+// ── Deterministic script routines: the FIRST run is an agent that builds a reusable
+//    extractor script; every run after just executes that script ($0, fast, identical). ─
+const SCRIPT_TOOLS_DIR = join(__dirname, '..', 'tools');
+function execCapture(cmd, args, { env, cwd, timeoutMs = 90_000 } = {}) {
+  return new Promise((resolve) => {
+    let out = '', err = '', done = false, child;
+    const finish = (code) => { if (done) return; done = true; clearTimeout(t); resolve({ code, out, err }); };
+    try { child = spawn(cmd, args, { env, cwd, stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch (e) { return resolve({ code: -1, out: '', err: e.message }); }
+    const t = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* */ } err += '\n(timed out)'; finish(124); }, timeoutMs);
+    child.stdout.on('data', (d) => { out += d; if (out.length > 200_000) out = out.slice(-200_000); });
+    child.stderr.on('data', (d) => { err += d; if (err.length > 50_000) err = err.slice(-50_000); });
+    child.on('error', (e) => { err += e.message; finish(-1); });
+    child.on('close', (code) => finish(code));
+  });
+}
+async function runCompiledScript(r, event, id, t0) {
+  run("UPDATE runs SET status='running' WHERE id=?", id);
+  run('UPDATE routines SET state=?, last_ago=?, last_status=? WHERE slug=?', 'running', 'now', 'running', r.slug);
+  const lang = r.script_lang === 'node' ? 'node' : 'bash';
+  const file = join(tmpdir(), `sb-run-${id}.${lang === 'node' ? 'mjs' : 'sh'}`);
+  writeFileSync(file, r.script);
+  const env = { ...process.env, PATH: `${SCRIPT_TOOLS_DIR}:${process.env.PATH}`, SB_REPO: repoTargets(r)[0] || eventRepo(event) || '', SB_EVENT: JSON.stringify(event || {}), SB_RUN_ID: id };
+  const res = await execCapture(lang, [file], { env, cwd: tmpdir(), timeoutMs: 90_000 });
+  try { unlinkSync(file); } catch { /* */ }
+  const ms = now() - t0;
+  const ok = res.code === 0;
+  const output = redact((res.out.trim() || res.err.trim() || `script exited ${res.code}`)).slice(0, 8000);
+  run('UPDATE runs SET status=?, dur=?, dur_ms=?, output=?, cost_usd=0, num_turns=0 WHERE id=?', ok ? 'succeeded' : 'failed', fmtDur(ms), ms, output, id);
+  run('INSERT INTO run_events (run_id,seq,t_offset,type,tool,ok,payload) VALUES (?,?,?,?,?,?,?)',
+    id, 0, 0, 'tool_result', `${lang} extractor`, ok ? 1 : 0, JSON.stringify({ d: output.slice(0, 3000), truncated: output.length > 3000 }));
+  runBus.emit(id, { kind: 'done', status: ok ? 'succeeded' : 'failed' });
+  const agg = one('SELECT COALESCE(SUM(cost_usd),0) AS spend, AVG(dur_ms) AS avgms FROM runs WHERE routine_slug=?', r.slug);
+  run('UPDATE routines SET state=?, last_ago=?, last_status=?, success=?, spend=?, avg=? WHERE slug=?',
+    'idle', 'just now', ok ? 'success' : 'failing', ok ? 100 : 0, `$${Number(agg.spend || 0).toFixed(2)}`, agg.avgms ? fmtDur(agg.avgms) : '—', r.slug);
+  logActivity(`${r.slug} ran extractor · ${ok ? (output.split('\n').pop() || '').slice(0, 50) : 'failed — recompile?'}`, ok ? 'success' : 'failing');
+  if (ok) for (const slug of j(r.chain)) { const dr = one('SELECT * FROM routines WHERE slug=? AND enabled=1', slug); if (dr) executeRoutine(dr, { ...(event ?? {}), upstream: { routine: r.slug, run: id, output } }, `after · ${r.slug}`); }
+}
+
 // ── Execution: build prompt → run an auto-mode session → capture trace → chain ─
 function executeRoutine(r, rawEvent, triggerLabel) {
   const id = runId();
@@ -303,6 +343,15 @@ function executeRoutine(r, rawEvent, triggerLabel) {
        VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
     id, r.slug, 'running', 'now', '…', triggerLabel, ord, '', JSON.stringify(rawEvent ?? {}), created, '[]');
   run('UPDATE routines SET state=?, last_ago=?, last_status=? WHERE slug=?', 'running', 'now', 'running', r.slug);
+
+  // Script routine that's already compiled → just run the deterministic extractor.
+  const scriptMode = !!r.script_mode;
+  const compiled = scriptMode && r.script && r.script.trim();
+  const recompile = !!rawEvent?._recompile;
+  if (compiled && !recompile) {
+    runCompiledScript(r, rawEvent ?? {}, id, created).catch((e) => run("UPDATE runs SET status='failed', output=? WHERE id=?", `script error: ${e.message}`, id));
+    return id;
+  }
 
   (async () => {
     // Concurrency guard: acquire the routine's lease before doing any work so two
@@ -362,7 +411,11 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     const agents = tools.includes('team') ? all('SELECT name, role, summary FROM agents ORDER BY name') : [];
     const coalesce = onConflict === 'coalesce' && !!leaseK;
     const seedTasks = Array.isArray(rawEvent?.tasks) ? rawEvent.tasks : [];
-    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints(), { memoryDir, agents, coalesce, seedTasks });
+    // Compile mode: this agent run must BUILD a reusable extractor and write it to scriptPath.
+    const compile = scriptMode;
+    const scriptLang = r.script_lang === 'node' ? 'node' : 'bash';
+    const scriptPath = compile ? join(tmpdir(), `sb-build-${id}.${scriptLang === 'node' ? 'mjs' : 'sh'}`) : null;
+    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints(), { memoryDir, agents, coalesce, seedTasks, compile, scriptLang, scriptPath });
     run('UPDATE runs SET prompt=? WHERE id=?', prompt, id);
 
     // Step-level trace: normalize each stream-json event into a run_events row,
@@ -402,8 +455,15 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       } catch { /* one malformed event must not kill the run */ }
     };
 
-    const res = await runClaude(prompt, { tools, onEvent, model: normModel(r.model), effort: normEffort(r.effort), memoryDir, mcpConfig, runId: id, coalesce });
+    const res = await runClaude(prompt, { tools, onEvent, model: normModel(r.model), effort: normEffort(r.effort), memoryDir, mcpConfig, runId: id, coalesce, scriptPath, compile });
     if (mcpConfig) try { unlinkSync(mcpConfig); } catch { /* ignore */ }
+    // Compile: capture the extractor the agent just wrote so future runs are deterministic.
+    if (compile && scriptPath) {
+      let built = ''; try { built = readFileSync(scriptPath, 'utf8'); } catch { /* not written */ }
+      try { unlinkSync(scriptPath); } catch { /* */ }
+      if (built.trim()) { run('UPDATE routines SET script=? WHERE slug=?', built, r.slug); logActivity(`${r.slug} compiled a ${scriptLang} extractor (${built.length} chars) — future runs are deterministic`, 'success'); }
+      else logActivity(`${r.slug} compile run produced no script — it will retry next run`, 'idle');
+    }
     const ok = !res.isError && !!res.finalText;
     const rawOut = ok ? res.finalText
       : (res.finalText || (res.code === 124 ? `timed out after ${Math.round(res.ms / 1000)}s` : res.stderr || `claude exited ${res.code}`));
@@ -764,7 +824,7 @@ app.get('/api/routines/:slug', (req, res) => {
     .map((l) => ({ key: l.key, runId: l.run_id, sha: l.head_sha ? l.head_sha.slice(0, 7) : '', held: relTime(l.acquired_at), ttl: fmtDur(Math.max(0, l.expires_at - now())) }));
   const inboxTasks = all("SELECT * FROM run_tasks WHERE routine_slug=? AND handled_by='' ORDER BY created_at DESC LIMIT 20", r.slug)
     .map((t) => ({ summary: t.summary, key: t.lease_key, ago: relTime(t.created_at) }));
-  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks });
+  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, script: r.script || '' });
 });
 
 function insertRoutine(b) {
@@ -782,14 +842,15 @@ function insertRoutine(b) {
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
   run(
     `INSERT INTO routines
-      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,script_mode,script_lang)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     slug, (b.name || '').trim(), (b.summary || '').trim(), owner, team,
     JSON.stringify(triggers), JSON.stringify(connectors),
     'idle', 'never', 'idle', next, null, '$0.00', enabled, '', '', '—',
     ownerColor(owner), initialsOf(owner), ord,
     (b.prompt || '').trim(), normModel(b.model), (b.repo || '').trim(), (b.branch || 'main').trim(),
-    JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions), normEffort(b.effort), b.memory ? 1 : 0, JSON.stringify(cleanConcurrency(b.concurrency))
+    JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions), normEffort(b.effort), b.memory ? 1 : 0, JSON.stringify(cleanConcurrency(b.concurrency)),
+    b.scriptMode ? 1 : 0, b.scriptLang === 'node' ? 'node' : 'bash'
   );
   return slug;
 }
@@ -884,7 +945,7 @@ app.put('/api/routines/:slug', (req, res) => {
   const reactions = b.reactions != null ? cleanReactions(b.reactions) : j(r.reactions);
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
   run(
-    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=? WHERE slug=?`,
+    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
     JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
     JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
@@ -892,7 +953,12 @@ app.put('/api/routines/:slug', (req, res) => {
     (b.prompt ?? r.prompt).trim(), ownerColor(owner), initialsOf(owner), next, schedule, JSON.stringify(filters), JSON.stringify(reactions),
     b.effort != null ? normEffort(b.effort) : (r.effort || ''),
     b.memory != null ? (b.memory ? 1 : 0) : r.memory,
-    JSON.stringify(b.concurrency != null ? cleanConcurrency(b.concurrency) : (jObj(r.concurrency) || {})), r.slug
+    JSON.stringify(b.concurrency != null ? cleanConcurrency(b.concurrency) : (jObj(r.concurrency) || {})),
+    b.scriptMode != null ? (b.scriptMode ? 1 : 0) : r.script_mode,
+    b.scriptLang ? (b.scriptLang === 'node' ? 'node' : 'bash') : r.script_lang,
+    // editing the prompt (what to extract) invalidates the compiled script → recompile next run
+    (b.prompt != null && b.prompt.trim() !== r.prompt) ? '' : r.script,
+    r.slug
   );
   res.json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', r.slug)));
 });
@@ -1289,6 +1355,15 @@ app.post('/api/routines/:slug/dispatch', (req, res) => {
   if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
   const event = req.body?.event ?? { event: 'manual', routine: r.slug, dispatched_at: new Date().toISOString() };
   res.json({ ok: true, runId: executeRoutine(r, event, 'manual'), status: 'running' });
+});
+// Rebuild a script routine's extractor: an agent run that recompiles the script.
+app.post('/api/routines/:slug/recompile', (req, res) => {
+  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  if (!r.script_mode) return res.status(400).json({ error: 'not a script routine' });
+  run("UPDATE routines SET script='' WHERE slug=?", r.slug);
+  const runId = executeRoutine({ ...r, script: '' }, { event: 'recompile', _recompile: true, routine: r.slug }, 'recompile');
+  res.json({ ok: true, runId });
 });
 
 // Generic event ingress — any trigger type. POST /api/events/push, /pull_request, etc.

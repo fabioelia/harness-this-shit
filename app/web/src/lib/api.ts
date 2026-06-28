@@ -161,6 +161,13 @@ export function useDispatchRoutine() {
     },
   });
 }
+export function useRecompile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (slug: string) => post<{ ok: boolean; runId: string }>(`/api/routines/${slug}/recompile`),
+    onSuccess: (_r, slug) => { qc.invalidateQueries({ queryKey: ['routine', slug] }); qc.invalidateQueries({ queryKey: ['routines'] }); qc.invalidateQueries({ queryKey: ['runs'] }); },
+  });
+}
 
 export interface PushResult {
   matched: string[];
@@ -196,6 +203,8 @@ export interface CreateRoutineInput {
   chain?: string[];
   schedule?: string;
   filters?: { actions?: string[]; branches?: string[]; labels?: string[]; mode?: string; match?: string; groups?: { match: string; conditions: { field: string; op: string; values: string[] }[] }[] };
+  scriptMode?: boolean;
+  scriptLang?: string;
   reactions?: { source: string; kind: string; when: string; run: string; check?: string }[];
   memory?: boolean;
 }
