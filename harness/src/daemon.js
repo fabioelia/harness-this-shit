@@ -11,6 +11,7 @@ import { matchFleet, triggerMatches } from './match.js';
 import { fromSchedule } from './events.js';
 import { cronMatches, minuteStamp, nextCronFire, validTz } from './cron.js';
 import { connectorHealth } from './mcp.js';
+import { resolveSecretRef } from './secrets.js';
 import { startHttp } from './http.js';
 import { renderTemplate, buildContext } from './template.js';
 import { durationMs, now, iso, truncate, rid } from './util.js';
@@ -57,12 +58,28 @@ export class Daemon {
     for (const r of this.routines) r.on.forEach((t) => {
       if (t.type === 'webhook') this.webhookTriggers.set(String(t.config.id), { slug: r.slug, secretRef: t.config.secret ?? null });
     });
+    this.registerSecretsForRedaction();
     this.log.append('harness.reload', { routines: this.routines.length, failures: this.failures.length });
     return { routines: this.routines, failures: this.failures };
   }
 
+  // Register every secret value the harness knows about with the log's redactor
+  // BEFORE any event is written, so a token can never appear in .harness — not in
+  // an event payload, a task payload, or an MCP config trace.
+  registerSecretsForRedaction() {
+    for (const r of this.routines) {
+      for (const sec of r.secrets ?? []) {
+        try { const { value } = resolveSecretRef(sec.from, { dir: this.dir, mapping: this.config.secrets ?? {} }); if (value) this.log.redactSecret(value); }
+        catch { /* unresolved secrets simply aren't registered */ }
+      }
+    }
+    const auth = this.config.getMcpAuth?.() ?? {};
+    for (const a of Object.values(auth)) if (a?.token) this.log.redactSecret(a.token);
+  }
+
   // ── boot ──
   async up() {
+    this.registerSecretsForRedaction();
     // reap runs a dead daemon left "running" so the log stays honest
     for (const r of staleRuns(this.state, 0)) {
       this.log.append('run.done', { run: r.id, slug: r.slug, ok: false, ms: null, summary: 'reaped — previous harness process died mid-run' });
@@ -248,7 +265,10 @@ export class Daemon {
           if (!cronMatches(t.config.cron, d, tz)) continue;
           const stamp = minuteStamp(d, tz);
           if (this.state.lastCron.get(`${r.slug}|${idx}`) === stamp) break;   // already fired for that minute
-          this.log.append('cron.recovered', { slug: r.slug, idx, missed_at: iso(ts) });
+          // Record the fire BEFORE dispatching so the live tickScheduler doesn't
+          // re-fire this same minute if recovery ran within it.
+          this.state.lastCron.set(`${r.slug}|${idx}`, stamp);
+          this.log.append('cron.fired', { slug: r.slug, idx, stamp, cron: t.config.cron, recovered: true });
           this.fireSchedule(r, t, { cron: t.config.cron, fired_at: iso(ts), recovered: true });
           break;                                                             // one catch-up run, not a backfill
         }
@@ -308,6 +328,8 @@ export class Daemon {
       this.log.append('run.done', { run: id, slug: this.state.runs.get(id)?.slug, ok: false, summary: `killed — harness shutdown (${reason})` });
     }
     this.timers.forEach(clearInterval);
+    for (const { timer } of this.debounces.values()) clearTimeout(timer);   // don't fire a debounced run after shutdown
+    this.debounces.clear();
     this.log.append('harness.down', { reason, pid: process.pid });
     this.server?.close();
     if (this.http) setTimeout(() => process.exit(0), 100).unref?.();

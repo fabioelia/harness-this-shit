@@ -25,6 +25,7 @@ import { nextCronFire, validTz } from '@switchboard/harness/src/cron.js';
 import { renderTemplate, buildContext } from '@switchboard/harness/src/template.js';
 import {
   uiToMeta, routineFileText, writeRoutineFile, deleteRoutineFile, patchRoutineMeta,
+  mergeOn, mergeFlow, rebuildBody,
   flowToReactions, readConnectorsFile, upsertConnector, removeConnector, isBuiltinConnector,
 } from '@switchboard/harness/src/writer.js';
 import { rid } from '@switchboard/harness/src/util.js';
@@ -221,9 +222,12 @@ function uiConfig(r) {
     connectors: r.tools.mcp,
     chain: r.chain ?? [],
     reactions: flowToReactions(r.flow),
+    // Only the `scope:` shorthand round-trips through the UI. An explicit lease/
+    // budget block is hand-written richness the form can't edit — report {} so a
+    // save never echoes a synthesized scope back onto it.
     concurrency: r.concurrency.scope
       ? { scope: r.concurrency.scope, onConflict: CONFLICT_BACK[r.concurrency.scopeConflict] ?? 'wait' }
-      : r.concurrency.lease ? { scope: 'pr', onConflict: CONFLICT_BACK[r.concurrency.lease.onConflict] ?? 'wait' } : {},
+      : {},
     model: r.runtime.model || DEFAULT_MODEL,
     effort: r.runtime.effort || '',
     memory: !!r.state.enabled,
@@ -245,7 +249,10 @@ function shapeRoutine(r) {
   const avg = withMs.length ? fmtDur(withMs.reduce((a, x) => a + x.ms, 0) / withMs.length) : '—';
   const cfg = uiConfig(r);
   const cronT = r.on.find((t) => t.type === 'schedule' && t.config.cron);
-  const next = cronT ? (() => { const n = nextCronFire(cronT.config.cron, validTz(cronT.config.tz) ? cronT.config.tz : null); return n ? relFuture(n.getTime()) : cronT.config.cron; })() : (r.on.length ? 'on event' : '—');
+  const everyT = r.on.find((t) => t.type === 'schedule' && (t.config.every != null || t.config.at != null));
+  const next = cronT ? (() => { const n = nextCronFire(cronT.config.cron, validTz(cronT.config.tz) ? cronT.config.tz : null); return n ? relFuture(n.getTime()) : cronT.config.cron; })()
+    : everyT ? (everyT.config.every != null ? `every ${everyT.config.every}` : `at ${everyT.config.at}`)
+    : (r.on.length ? 'on event' : '—');
   const inbox = [...state.tasks.entries()].reduce((a, [, list]) => a + list.filter((t) => t.slug === r.slug && !t.claimedBy).length, 0);
   return {
     slug: r.slug, name: r.name, summary: r.summary,
@@ -338,7 +345,12 @@ function startRun(r, envelope, label) {
 // ── Express ──
 const app = express();
 app.use(cors({ origin: [/^http:\/\/localhost(:\d+)?$/, /^http:\/\/127\.0\.0\.1(:\d+)?$/] }));
-app.use(express.json({ limit: '2mb', verify: (req, _res, buf) => { req.rawBody = buf; } }));
+// Keep every response on the {error} JSON contract — a malformed body must not
+// return Express's default HTML error page.
+app.use((req, res, next) => express.json({ limit: '2mb', verify: (rq, _r, buf) => { rq.rawBody = buf; } })(req, res, (err) => {
+  if (err) return res.status(400).json({ error: `invalid request body: ${err.message}` });
+  next();
+}));
 
 app.get('/api/health', (_q, res) => res.json({ ok: true }));
 app.get('/api/models', (_q, res) => res.json({ models: MODELS, efforts: EFFORTS, defaultModel: DEFAULT_MODEL }));
@@ -393,7 +405,11 @@ app.post('/api/routines', (req, res) => {
   if (!name) return res.status(400).json({ error: 'A routine name is required.' });
   const slug = slugify(b.slug || name);
   if (!slug) return res.status(400).json({ error: 'A valid slug is required.' });
-  if (bySlug(slug) || existsSync(join(ROUTINES_DIR, `${slug}.md`))) return res.status(409).json({ error: `A routine with slug "${slug}" already exists.` });
+  // Guard against a live routine, a same-slug file, OR a currently-failing file
+  // that would otherwise be silently shadowed by a new `${slug}.md`.
+  const fileConflict = existsSync(join(ROUTINES_DIR, `${slug}.md`)) || existsSync(join(ROUTINES_DIR, `${slug}.routine.md`))
+    || daemon.failures.some((f) => f.file.replace(/\.routine\.md$|\.md$/i, '') === slug);
+  if (bySlug(slug) || fileConflict) return res.status(409).json({ error: `A routine with slug "${slug}" already exists (or a same-named file is present).` });
   writeRoutineFile(ROUTINES_DIR, slug, uiToMeta({ ...b, slug }), b.prompt);
   daemon.reload();
   const r = bySlug(slug);
@@ -422,19 +438,24 @@ app.put('/api/routines/:slug', (req, res) => {
     reactions: b.reactions ?? cur.reactions,
   };
   const uiMeta = uiToMeta(merged);
+  const fileHadModel = r.runtime.model !== '';
   patchRoutineMeta(r.path, (meta) => {
     meta.name = uiMeta.name; meta.slug = r.slug; meta.summary = uiMeta.summary;
     meta.owner = uiMeta.owner; meta.team = uiMeta.team;
     if (uiMeta.enabled === false) meta.enabled = false; else delete meta.enabled;
-    meta.on = uiMeta.on;
+    // on: merge — preserve every:/at:/after:/webhook:/connector triggers + guards
+    meta.on = mergeOn(meta.on, uiMeta.on, uiMeta.on.map((e) => (Object.keys(e)[0] === 'github' ? e.github.event : Object.keys(e)[0])));
     if (uiMeta.chain) meta.chain = uiMeta.chain; else delete meta.chain;
     // tools: the mcp grant is UI-owned; capabilities/scopes/deny are preserved
     if (uiMeta.tools?.mcp?.length) meta.tools = { ...(meta.tools ?? {}), mcp: uiMeta.tools.mcp };
     else if (meta.tools) { delete meta.tools.mcp; if (!Object.keys(meta.tools).length) delete meta.tools; }
-    // runtime: UI fields replaced, the rest (timeout, worktree, network…) kept
+    // runtime: UI fields replaced; checkout/timeout/worktree/network preserved
     const rt = { ...(meta.runtime ?? {}) };
-    for (const k of ['model', 'effort', 'repo', 'branch']) { if (uiMeta.runtime?.[k] !== undefined) rt[k] = uiMeta.runtime[k]; else delete rt[k]; }
-    if (uiMeta.runtime?.checkout && !rt.checkout) rt.checkout = uiMeta.runtime.checkout;
+    for (const k of ['effort', 'repo', 'branch']) { if (uiMeta.runtime?.[k] !== undefined) rt[k] = uiMeta.runtime[k]; else delete rt[k]; }
+    // don't pin the default model onto a file that never named one (no-op save)
+    if (uiMeta.runtime?.model && (fileHadModel || uiMeta.runtime.model !== DEFAULT_MODEL)) rt.model = uiMeta.runtime.model;
+    else if (!fileHadModel) delete rt.model;
+    if (uiMeta.runtime?.repo && !rt.checkout) rt.checkout = 'none';   // UI routines use gh CLI, not a clone
     if (Object.keys(rt).length) meta.runtime = rt; else delete meta.runtime;
     // memory toggle
     if (merged.memory) meta.state = { ...(meta.state ?? {}), enabled: true };
@@ -446,14 +467,15 @@ app.put('/api/routines/:slug', (req, res) => {
     // retry policy (other policy keys kept)
     if (uiMeta.policy?.retry) meta.policy = { ...(meta.policy ?? {}), retry: uiMeta.policy.retry };
     else if (meta.policy) { delete meta.policy.retry; if (!Object.keys(meta.policy).length) delete meta.policy; }
-    // flow from UI reactions — only rewritten when the form actually sent them
-    if (b.reactions !== undefined) { if (uiMeta.flow) meta.flow = uiMeta.flow; else delete meta.flow; }
+    // flow: merge UI rows in, preserving handlers/done/budgets/subscribe
+    if (b.reactions !== undefined) { const mf = mergeFlow(meta.flow, b.reactions); if (mf) meta.flow = mf; else delete meta.flow; }
     return meta;
   });
+  // prompt: rebuild preserving the pre-Prompt preamble and every ## handler: section
   if (b.prompt !== undefined && String(b.prompt).trim() !== r.prompt.trim()) {
     const raw = readFileSync(r.path, 'utf8');
-    const m = raw.match(/^(---\r?\n[\s\S]*?\r?\n---\r?\n)/);
-    if (m) writeFileSync(r.path, m[1] + '\n' + (String(b.prompt).trim().startsWith('#') ? String(b.prompt).trim() : `## Prompt\n\n${String(b.prompt).trim()}`) + '\n');
+    const m = raw.match(/^(---\r?\n[\s\S]*?\r?\n---\r?\n?)([\s\S]*)$/);
+    if (m) writeFileSync(r.path, m[1].replace(/\n?$/, '\n') + '\n' + rebuildBody(m[2], b.prompt));
   }
   daemon.reload();
   const fresh = bySlug(r.slug);
@@ -980,4 +1002,10 @@ app.post('/api/settings', (req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(PORT, () => console.log(`Switchboard API on http://localhost:${PORT} · engine: @switchboard/harness (embedded) · routines: ${ROUTINES_DIR} · log: ${join(ROUTINES_DIR, '.harness')}`));
+// Unknown route + uncaught error → the {error} JSON contract, never HTML.
+app.use((req, res) => res.status(404).json({ error: `no such endpoint: ${req.method} ${req.path}` }));
+app.use((err, _req, res, _next) => { console.error('[switchboard]', err); res.status(500).json({ error: err.message || 'internal error' }); });
+
+// Same-machine control surface: bind loopback unless deliberately exposed.
+const HOST = process.env.SWITCHBOARD_BIND || '127.0.0.1';
+app.listen(PORT, HOST, () => console.log(`Switchboard API on http://${HOST}:${PORT} · engine: @switchboard/harness (embedded) · routines: ${ROUTINES_DIR} · log: ${join(ROUTINES_DIR, '.harness')}`));

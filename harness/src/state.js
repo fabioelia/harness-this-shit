@@ -74,6 +74,7 @@ export function materialize(entries) {
         for (const list of s.tasks.values()) for (const t of list) if ((e.tasks ?? []).includes(t.id)) t.claimedBy = e.run;
         break;
       }
+      case 'run.error': { const r = s.runs.get(e.run); if (r && r.status === 'running') Object.assign(r, { status: 'failed', finished: e.t, ok: false, summary: e.error ?? 'harness error' }); break; }
       case 'control.kill': s.killSwitch = !!e.engaged; break;
       case 'control.policies': s.policies = e.policies ?? null; break;
       case 'control.webhook-url': s.webhookUrl = e.url ?? ''; break;
@@ -86,7 +87,16 @@ export function materialize(entries) {
       case 'event.fired': if (e.dedupe_key) s.dedupe.set(e.dedupe_key, Date.parse(e.t)); break;
       case 'cron.fired': s.lastCron.set(`${e.slug}|${e.idx ?? 0}`, e.stamp); if (e.at) s.oneShots.add(`${e.slug}|at:${e.at}`); break;
       case 'flow.subscribed': s.flows.set(e.flow, { slug: e.slug, run: e.run, repo: e.repo, pr: e.pr, events: e.events, until: e.until, reconcileMs: e.reconcile_ms, createdAt: e.created_at ?? Date.parse(e.t), expiresAt: e.expires_at, status: 'open', fired: {}, lastChecked: 0, seen: null }); break;
-      case 'flow.reaction': { const f = s.flows.get(e.flow); if (f) f.fired[e.reaction] = (f.fired[e.reaction] ?? 0) + 1; break; }
+      case 'flow.reaction': {
+        const f = s.flows.get(e.flow);
+        if (f) {
+          f.fired[e.reaction] = (f.fired[e.reaction] ?? 0) + 1;
+          // Rebuild the once-only timeout guard key so a timer never re-fires after
+          // a restart (the live path sets both keys; replay must match).
+          if (String(e.when ?? '').startsWith('timeout')) f.fired[`timeout:${e.reaction}`] = 1;
+        }
+        break;
+      }
       case 'flow.state': { const f = s.flows.get(e.flow); if (f) f.seen = { ...e.seen, title: f.seen?.title, url: f.seen?.url, headSha: f.seen?.headSha }; break; }
       case 'flow.unsubscribed': { const f = s.flows.get(e.flow); if (f) { f.status = 'closed'; f.reason = e.reason; } break; }
       case 'surface.upserted': if (e.slug && e.target) s.surfaces.set(`${e.slug}|${e.target}`, { kind: e.kind, ref: e.ref }); break;

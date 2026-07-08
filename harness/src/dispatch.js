@@ -5,7 +5,7 @@
 // same resource at once; a non-converging loop terminates in needs-human.
 import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { rid, now, sleep, fmtDur, truncate } from './util.js';
+import { rid, now, sleep, fmtDur, truncate, jsonForLog } from './util.js';
 import { renderTemplate, buildContext } from './template.js';
 import { runGate } from './gate.js';
 import { resolveSecrets } from './secrets.js';
@@ -74,7 +74,7 @@ export class Dispatcher {
     const list = this.state.tasks.get(key) ?? [];
     list.push({ id, slug, summary, payload: p, origin, claimedBy: '', at: new Date().toISOString() });
     this.state.tasks.set(key, list);
-    this.log.append('task.added', { task: id, key, slug, summary, origin, payload: JSON.parse(truncate(JSON.stringify(p), 20_000).replace(/…$/, '') || '{}') });
+    this.log.append('task.added', { task: id, key, slug, summary, origin, payload: jsonForLog(p) });
     return id;
   }
   pendingTasks(key) { return (this.state.tasks.get(key) ?? []).filter((t) => !t.claimedBy); }
@@ -82,6 +82,11 @@ export class Dispatcher {
     if (!ids.length) return;
     for (const list of this.state.tasks.values()) for (const t of list) if (ids.includes(t.id)) t.claimedBy = runId;
     this.log.append('task.claimed', { tasks: ids, run: runId });
+  }
+  unclaimTasks(ids) {
+    if (!ids.length) return;
+    for (const list of this.state.tasks.values()) for (const t of list) if (ids.includes(t.id)) t.claimedBy = '';
+    this.log.append('task.unclaimed', { tasks: ids });
   }
 
   // ── lease store ──
@@ -110,7 +115,16 @@ export class Dispatcher {
   async dispatch(routine, trigger, envelope, { inputs = {}, approved = false, attempt = 0, chainPath = [], handler = null, id = null, label = null } = {}) {
     id = id ?? rid('run');
     label = label ?? (trigger ? `${trigger.type}${trigger.type === 'schedule' && trigger.config.cron ? ` · ${trigger.config.cron}` : ''}` : envelope.source);
-    const skip = (reason, ev = 'run.skip') => { this.log.append(ev, { run: id, slug: routine.slug, reason }); return { id, skipped: true, reason }; };
+    // Register the run immediately so it's visible (not a 404) while it queues on a
+    // group/lease or waits on an approval gate; run.start upgrades it to 'running'.
+    // 'waiting' is in the UI's run-status vocabulary and renders as live.
+    if (!this.state.runs.has(id)) this.state.runs.set(id, { slug: routine.slug, status: 'waiting', trigger: label, kind: envelope.payload?._replay ? 'replay' : envelope.source === 'flow' ? 'reaction' : envelope.upstream ? 'chain' : 'trigger', type: envelope.type ?? null, started: new Date().toISOString(), event: null, upstream: envelope.upstream ?? null, resource: envelope.resource_key || null });
+    const skip = (reason, ev = 'run.skip') => {
+      this.log.append(ev, { run: id, slug: routine.slug, reason });
+      const s = this.state.runs.get(id);
+      if (s && ['waiting', 'running'].includes(s.status)) Object.assign(s, { status: ev === 'run.coalesced' ? 'coalesced' : 'skipped', finished: new Date().toISOString(), reason, summary: reason });
+      return { id, skipped: true, reason };
+    };
 
     if (this.state.killSwitch) return skip('kill switch engaged');
     if (!routine.enabled) return skip('disabled');
@@ -125,10 +139,12 @@ export class Dispatcher {
     if (routine.policy.requiresApproval && !approved) {
       this.log.append('run.pending', {
         run: id, slug: routine.slug, trigger: label, approvers: routine.policy.approvers,
-        event: { ...envelope, payload: JSON.parse(truncate(JSON.stringify(envelope.payload ?? {}), 20_000).replace(/…$/, '') || '{}') },
+        event: { ...envelope, payload: jsonForLog(envelope.payload) },
         inputs,
       });
       this.state.approvals.set(id, { slug: routine.slug, approvers: routine.policy.approvers, status: 'pending', trigger: label, event: envelope, inputs });
+      const s = this.state.runs.get(id);
+      if (s) Object.assign(s, { status: 'waiting', summary: 'awaiting approval' });
       return { id, pending: true };
     }
 
@@ -152,7 +168,9 @@ export class Dispatcher {
         } else {
           this.log.append('group.queued', { run: id, slug: routine.slug, group, behind: holder });
           const deadline = now() + 10 * 60_000;
-          while (this.groups.get(group) && now() < deadline) await sleep(3000);
+          while (this.groups.get(group) && now() < deadline && !this.state.killSwitch && !this.canceled.has(id)) await sleep(3000);
+          if (this.canceled.delete(id)) return skip('canceled while queued');
+          if (this.state.killSwitch) return skip('kill switch engaged while queued');
           if (this.groups.get(group)) return skip(`gave up queued behind ${group}`);
         }
       }
@@ -193,19 +211,29 @@ export class Dispatcher {
         if (onConflict === 'steal-if-expired') { releaseGroup(); this.log.append('lease.conflict', { run: id, slug: routine.slug, key: leaseKey, holder: lease.holder, action: 'skip (not expired)' }); return skip(`lease ${leaseKey} live — not stealable`); }
         // queue
         this.log.append('lease.queued', { run: id, slug: routine.slug, key: leaseKey, holder: lease.holder });
+        const s = this.state.runs.get(id); if (s) s.status = 'waiting';
         const deadline = now() + ttlMs;
         while (now() < deadline) {
           await sleep(3000);
-          if (this.canceled.has(id)) break;                    // canceled while waiting — don't take the lease
+          if (this.canceled.has(id) || this.state.killSwitch) break;   // canceled or killed while waiting — don't take the lease
           lease = this.acquireLease(leaseKey, id, routine.slug, envelope.sha, ttlMs);
           if (lease.ok) break;
         }
         if (this.canceled.delete(id)) { releaseGroup(); this.releaseLease(leaseKey, id); return skip('canceled while waiting for lease'); }
+        if (this.state.killSwitch && !lease.ok) { releaseGroup(); return skip('kill switch engaged while waiting for lease'); }
         if (!lease.ok) { releaseGroup(); return skip(`gave up waiting for ${leaseKey}`); }
       }
       this.log.append('lease.acquired', { run: id, slug: routine.slug, key: leaseKey, ttl_ms: ttlMs, ...(lease.stolen ? { stolen_from: lease.stolen } : {}) });
     }
-    const releaseAll = () => { if (leaseKey) { this.releaseLease(leaseKey, id); this.log.append('lease.released', { run: id, key: leaseKey }); } releaseGroup(); };
+    // Kill switch may have engaged during any of the guard-phase awaits above.
+    if (this.state.killSwitch) { if (leaseKey) this.releaseLease(leaseKey, id); releaseGroup(); return skip('kill switch engaged'); }
+    let released = false;
+    const releaseAll = () => {
+      if (released) return;
+      released = true;
+      if (leaseKey) { this.releaseLease(leaseKey, id); this.log.append('lease.released', { run: id, key: leaseKey }); }
+      releaseGroup();
+    };
 
     // SHA barrier: if the PR head moved past the sha this event was for, the work is stale
     if (routine.concurrency.barrier) {
@@ -260,7 +288,7 @@ export class Dispatcher {
 
     // ── admitted: execute ──
     const kind = envelope.payload?._replay ? 'replay' : envelope.source === 'flow' ? 'reaction' : envelope.upstream ? 'chain' : 'trigger';
-    const eventForLog = JSON.parse(truncate(JSON.stringify(envelope.payload ?? {}), 20_000).replace(/…$/, '') || '{}');
+    const eventForLog = jsonForLog(envelope.payload);
     this.log.append('run.start', {
       run: id, slug: routine.slug, trigger: label, kind, attempt, source: envelope.source, type: envelope.type,
       repo: envelope.repo ?? undefined, resource: envelope.resource_key || undefined,
@@ -270,27 +298,58 @@ export class Dispatcher {
     const dayKey = `${routine.slug}|${new Date().toISOString().slice(0, 10)}`;
     this.state.runsByDay.set(dayKey, (this.state.runsByDay.get(dayKey) ?? 0) + 1);
 
+    // Lease renewal: extend the held lease on a timer so a run whose wall-clock
+    // exceeds the TTL (a long worktree job) never has its resource stolen mid-flight.
+    let renewTimer = null;
+    if (leaseKey && leaseSpec) {
+      renewTimer = setInterval(() => {
+        if (this.leases.get(leaseKey)?.runId === id) this.acquireLease(leaseKey, id, routine.slug, envelope.sha, leaseSpec.ttlMs);
+      }, Math.max(30_000, Math.floor(leaseSpec.ttlMs / 3)));
+      renewTimer.unref?.();
+    }
+
     let result;
     try {
       result = await this.execute(routine, trigger, envelope, { id, inputs, label, handler, coalescing, leaseKey });
+    } catch (e) {
+      // A pipeline error must still produce a terminal run.done — never leave the
+      // run pinned 'running' with the UI polling forever.
+      const summary = `harness error: ${e.message}`;
+      this.log.append('run.done', { run: id, slug: routine.slug, ok: false, ms: null, summary, output: summary });
+      result = { ok: false, summary, output: summary };
     } finally {
+      if (renewTimer) clearInterval(renewTimer);
       releaseAll();
       // Drain: tasks that landed while we ran but were never fetched → a fresh run
-      // handles them (claimed up front so the loop is bounded).
+      // handles them. Claimed up front to bound the loop; unclaimed if that drain
+      // run never executes (kill switch, disabled, lease conflict) so nothing is lost.
       if (coalescing && leaseKey) {
         const pend = this.pendingTasks(leaseKey);
         if (pend.length && !this.state.killSwitch) {
           const last = pend[pend.length - 1];
+          const ids = pend.map((t) => t.id);
           const drainEnv = { ...envelope, id: rid('evt'), payload: { ...(last.payload ?? {}), event: 'inbox-drain', tasks: pend.map((t) => t.summary) } };
           const drainId = rid('run');
-          this.claimTasks(pend.map((t) => t.id), drainId);
+          this.claimTasks(ids, drainId);
           this.log.append('inbox.drain', { run: drainId, slug: routine.slug, key: leaseKey, tasks: pend.length });
-          this.dispatch(routine, trigger, drainEnv, { chainPath, id: drainId, label: `inbox · ${pend.length} task${pend.length > 1 ? 's' : ''}` }).catch(() => {});
+          this.dispatch(routine, trigger, drainEnv, { chainPath, id: drainId, label: `inbox · ${pend.length} task${pend.length > 1 ? 's' : ''}` })
+            .then((r) => { if (r?.skipped || r?.coalesced || r?.pending) this.unclaimTasks(ids); })
+            .catch(() => this.unclaimTasks(ids));
         }
       }
     }
     const live = this.state.runs.get(id);
-    if (live && live.status === 'running') Object.assign(live, { status: result.ok ? 'succeeded' : 'failed', finished: new Date().toISOString(), ok: result.ok });
+    if (live && (live.status === 'running' || live.status === 'waiting')) {
+      // execute() sets summary/output for the normal path; the early-return paths
+      // (missing secrets, checkout failure, pipeline error) only return them, so
+      // carry them onto the live entry here too — never a blank run detail.
+      Object.assign(live, {
+        status: result.canceled ? 'canceled' : result.ok ? 'succeeded' : 'failed',
+        finished: new Date().toISOString(), ok: result.ok,
+        ...(live.summary == null && result.summary != null ? { summary: truncate(result.summary, 600) } : {}),
+        ...(live.output == null && (result.output ?? result.summary) != null ? { output: truncate(result.output ?? result.summary, 16_000) } : {}),
+      });
+    }
 
     // reactive flow: a successful run that produced/touched a PR subscribes to it
     if (result.ok && this.flow && routine.flow && !handler) {
@@ -400,6 +459,7 @@ export class Dispatcher {
         ...secretEnv, HARNESS_STATE_DIR: stateDir ?? '', HARNESS_REPO: routine.runtime.repo[0] ?? '',
         HARNESS_EVENT: truncate(JSON.stringify(envelope.payload ?? {}), 50_000),
         ...(this.config.controlUrl ? { HARNESS_CONTROL_URL: this.config.controlUrl } : {}),
+        ...(process.env.HARNESS_API_TOKEN || this.config.api_token ? { HARNESS_API_TOKEN: process.env.HARNESS_API_TOKEN || this.config.api_token } : {}),
       },
     });
     this.children.delete(id);

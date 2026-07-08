@@ -101,11 +101,15 @@ export function startHttp(daemon, { port }) {
         return json(res, out.error ? 404 : 200, out);
       }
 
-      // the `inbox` tool: fetch + claim tasks coalesced onto this run's lease
+      // Every mutating control endpoint below requires the bearer token when one is
+      // configured (HARNESS_API_TOKEN / config.api_token). No token = localhost dev tool.
+      if (!authed) return json(res, 401, { error: 'bearer token required' });
+
+      // the `inbox` tool: fetch + claim tasks coalesced onto this run's lease.
+      // Scoped to the lease this run actually holds — a run can only see its own tasks.
       const inbox = path.match(/^\/api\/runs\/([\w-]+)\/inbox$/);
       if (inbox) {
         const runId = inbox[1];
-        const st = daemon.dispatcher.state;
         let key = null;
         for (const [k, l] of daemon.dispatcher.leases) if (l.runId === runId) key = k;
         const pend = key ? daemon.dispatcher.pendingTasks(key) : [];
@@ -145,8 +149,11 @@ export function startHttp(daemon, { port }) {
     }
   });
 
+  // Bind loopback by default — the control plane is a same-machine surface. Set
+  // HARNESS_BIND=0.0.0.0 (with HARNESS_API_TOKEN) to expose it deliberately.
+  const host = process.env.HARNESS_BIND || daemon.config.bind || '127.0.0.1';
   return new Promise((resolve, reject) => {
     server.on('error', reject);
-    server.listen(port, () => resolve(server));
+    server.listen(port, host, () => resolve(server));
   });
 }

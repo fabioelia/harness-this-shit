@@ -5,7 +5,9 @@ const runId = process.env.HARNESS_RUN_ID;
 const base = process.env.HARNESS_CONTROL_URL;
 if (!runId || !base) { console.error('inbox: not available in this run (no HARNESS_RUN_ID / HARNESS_CONTROL_URL)'); process.exit(1); }
 try {
-  const res = await fetch(`${base.replace(/\/$/, '')}/api/runs/${runId}/inbox`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  const headers = { 'content-type': 'application/json' };
+  if (process.env.HARNESS_API_TOKEN) headers.authorization = `Bearer ${process.env.HARNESS_API_TOKEN}`;
+  const res = await fetch(`${base.replace(/\/$/, '')}/api/runs/${runId}/inbox`, { method: 'POST', headers, body: '{}' });
   const j = await res.json();
   const tasks = j.tasks ?? [];
   if (!tasks.length) { console.log('inbox empty — nothing handed off.'); process.exit(0); }

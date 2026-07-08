@@ -67,3 +67,15 @@ export function deepMerge(base, over) {
 export const slugify = (s) => String(s).toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
 export const truncate = (s, n) => (String(s).length > n ? String(s).slice(0, n) + '…' : String(s));
+
+// A log-safe view of an arbitrary object: the object itself if it serializes
+// small, else a truncated-preview envelope. NEVER produces invalid JSON — unlike
+// slicing a JSON string, which can leave a torn value that JSON.parse rejects.
+export function jsonForLog(obj, max = 20_000) {
+  const v = obj ?? {};
+  let s;
+  try { s = JSON.stringify(v); } catch { return { _unserializable: true }; }
+  if (s == null) return {};
+  if (s.length <= max) return v;
+  return { _truncated: true, _bytes: s.length, preview: s.slice(0, max) };
+}
