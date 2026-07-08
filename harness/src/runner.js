@@ -93,6 +93,8 @@ export function traceAdapter(put) {
             put('tool_result', toolById.get(b.tool_use_id) ?? null, !b.is_error, content ?? '');
           }
         }
+      } else if (o.type === 'result') {
+        put('result', null, !o.is_error, { subtype: o.subtype, is_error: o.is_error, num_turns: o.num_turns, total_cost_usd: o.total_cost_usd, duration_ms: o.duration_ms });
       }
     } catch { /* one malformed event must not kill the run */ }
   };

@@ -11,7 +11,9 @@ import { CAPABILITIES } from './schema.js';
 // via tools.mcp must resolve to a registry entry with a server config.
 export const NATIVE = new Set(['github', 'slack', 'web', 'webfetch']);
 
-export function buildMcpConfig(routine, registry, { runId }) {
+const isMcpRemote = (def) => def?.command === 'npx' && Array.isArray(def?.args) && def.args.includes('mcp-remote');
+
+export function buildMcpConfig(routine, registry, { runId, auth = {} }) {
   const servers = {};
   const missing = [];
   for (const id of routine.tools.mcp) {
@@ -21,7 +23,19 @@ export function buildMcpConfig(routine, registry, { runId }) {
       missing.push(id);
       continue;
     }
-    const def = c.config ?? (c.url ? { type: c.transport === 'http' ? 'http' : 'sse', url: c.url, headers: c.headers } : { command: c.command, args: c.args, env: c.env });
+    let def = structuredClone(c.config ?? (c.url ? { type: c.transport === 'http' ? 'http' : 'sse', url: c.url, headers: c.headers } : { command: c.command, args: c.args, env: c.env }));
+    // stored auth (UI-managed token) injected at run time — never written to the registry file
+    const a = auth[id];
+    if (a?.token) {
+      const value = a.scheme === 'raw' ? a.token : `Bearer ${a.token}`;
+      if (isMcpRemote(def)) def.args = [...def.args, '--header', `${a.header || 'Authorization'}: ${value}`];
+      else if (def.url) def.headers = { ...(def.headers || {}), [a.header || 'Authorization']: value };
+      else def.env = { ...(def.env || {}), [a.header || 'API_KEY']: a.token };
+    }
+    // "${VAR}" placeholders in env values resolve from the harness's environment
+    if (def.env) for (const [k, v] of Object.entries(def.env)) {
+      def.env[k] = String(v).replace(/\$\{(\w+)\}/g, (_, n) => process.env[n] ?? '');
+    }
     servers[id] = def;
   }
   if (!Object.keys(servers).length) return { path: null, servers, missing };

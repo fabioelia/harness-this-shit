@@ -18,7 +18,8 @@ Code routines, built on a real component-library design system. This is the app 
 | Styling / design system | Tailwind CSS + Radix UI primitives, tokens from the `.dc.html` |
 | Fonts (self-hosted) | Hanken Grotesk (UI/display) · JetBrains Mono (data) via `@fontsource` |
 | Data | TanStack Query |
-| Backend | Express + **`node:sqlite`** (Node's built-in SQLite — zero native deps) |
+| Backend | Express, a thin adapter over the **embedded [`@switchboard/harness`](../harness) engine** — no database |
+| Engine | [`harness/`](../harness): routines are `*.md` files, all state derives from the folder's `.harness` log |
 | Icons | inline SVG (matched to the design) |
 
 ## Frames implemented (from `Switchboard Fleet.dc.html`)
@@ -39,8 +40,10 @@ npm run install:all     # installs server + web deps
 npm run dev             # api on :4317, web on :5317 (Vite proxies /api → :4317)
 ```
 
-Then open **http://localhost:5317**. The SQLite DB (`server/switchboard.db`) is created and seeded
-on first boot with runnable example routines; delete it to reseed.
+Then open **http://localhost:5317**. On first boot the server seeds `server/routines/` with
+runnable example routines as real front-matter `.md` files — the same files `harness up` would
+run headless — and every wire/run/decision lands in `server/routines/.harness`. Delete the folder
+to reseed. `SWITCHBOARD_ROUTINES=/path/to/folder` points the app at any routines folder.
 
 Run the two processes separately if you prefer:
 
@@ -53,10 +56,10 @@ npm --prefix web run dev          # web  → http://localhost:5317
 
 The three Switchboard pillars, and deliberately little else:
 
-- **Routines as Markdown** — every routine is a front-matter contract (triggers, tool grants,
-  runtime, concurrency) + a prompt body. The generated **`.routine.md`** is viewable per routine;
-  create/edit covers triggers (schedule cron, GitHub events, manual), event filters, connectors,
-  model/effort, repo targeting, chains, reactions, memory, retries, and concurrency policy.
+- **Routines as Markdown, for real** — every routine IS a front-matter `.md` file on disk
+  (docs/02 schema); the UI is a structured editor over the same file the headless `harness` CLI
+  runs. Create/edit writes the file; hand-written richness the form doesn't cover (secrets,
+  budgets, trigger guards) is preserved on edit. The raw viewer shows the actual file.
 - **Triggers & runs** — a real cron scheduler, a GitHub webhook receiver (HMAC-verified) plus a
   generic `/api/events/:type` ingress, manual dispatch, and a full run model: live step-level
   trace (SSE), cost/turns/tokens, the dispatcher's match explanation, lineage (what triggered
@@ -69,7 +72,8 @@ The three Switchboard pillars, and deliberately little else:
   and fire B when its checks finish / review lands / it merges, or after a timeout).
 - **Connectors** — live gh + Slack status, custom MCP servers (paste a config, a remote URL, or
   search the MCP registry), per-server auth tokens and OAuth via `mcp-remote`, connectivity tests.
-- **Fleet controls** — enable/disable, run-now, and the org-wide **kill switch** all mutate the DB.
+- **Fleet controls** — enable/disable (rewrites the file's front matter), run-now, and the
+  org-wide **kill switch** (a `control.kill` entry in `.harness`, honored by the dispatcher).
   **Settings** — identities + org policy guardrails injected into every session prompt.
 
 ## Design system
@@ -84,12 +88,16 @@ helpers, so the app and the mock share one component vocabulary.
 
 ```
 app/
-  server/   Express + node:sqlite API
-    src/{index,db,samples,runner,integrations}.js
-    tools/{slack-post,inbox}   scripts granted to sessions by name
+  server/   Express adapter over the embedded harness engine
+    src/{index,samples,integrations}.js
+    routines/            the folder of *.md routines + connectors.yaml + .harness (created on boot)
   web/      Vite + React + TS
     src/
       components/{sb (design-system primitives), AppShell, ui/*}
       pages/{FleetPage, NewRoutinePage, RoutineDetailPage, RunsPage, RunDetailPage, ConnectorsPage, ActivityPage, SettingsPage}
       lib/{api, format, utils}, types.ts
+harness/    the engine: loader/schema, matcher, scheduler, dispatcher (leases/inbox), runner, flows, .harness log
 ```
+
+The same folder works both ways: `node ../harness/bin/harness.js up server/routines` runs the
+fleet headless; the app renders and edits it. One engine, one log, two front doors.

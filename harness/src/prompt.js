@@ -7,6 +7,7 @@ import { renderTemplate, buildContext } from './template.js';
 export function buildRunPrompt(routine, envelope, {
   inputs = {}, secrets = {}, stateDir = null, stateValues = {}, upstream = null,
   handler = null, prRef = null, workspace = null, extraConstraints = [],
+  coalesce = false, seedTasks = [],
 } = {}) {
   const ctx = buildContext({ event: envelope, inputs, secrets, state: stateValues, runtime: routine.runtime, upstream, pr: prRef ? { number: prRef.pr, ...prRef } : null });
   const misses = [];
@@ -58,9 +59,16 @@ export function buildRunPrompt(routine, envelope, {
     lines.push('', '## Tools you have', 'You are an autonomous session — take the actions the instruction calls for, don\'t just describe them.', ...how, ...scopeNotes);
   }
 
+  if (coalesce) {
+    lines.push('', '## Task inbox (you own this entity)',
+      'You are the single agent handling this PR/entity right now. While you work, related events (a new push, another label, a comment) are NOT given to a second agent — they are coalesced onto YOUR plate as tasks.',
+      '**Before you finish, RUN the shell command `inbox`** — it prints any new tasks that landed since you started (newest event context included). If it returns tasks, fold them into your work, then run `inbox` again. Only wrap up once `inbox` comes back empty, so nothing handed to you is dropped.');
+    if (seedTasks.length) lines.push('', 'Tasks already waiting for you:', ...seedTasks.map((t) => `- ${t}`));
+  }
+
   if (routine.outputs.summary === 'structured') {
     lines.push('', '## Result contract', 'End with a final line of compact JSON: {"outcome":"...", "summary":"one line", "links":[...]} — the harness parses it.');
   }
-  lines.push('', `Carry out the instruction now using the trigger context and your tools. End with a one-line summary of what you did.`);
+  lines.push('', `Carry out the instruction now using the trigger context and your tools.${coalesce ? ' Drain your `inbox` before finishing.' : ''} End with a one-line summary of what you did.`);
   return { prompt: lines.join('\n'), templateMisses: misses };
 }

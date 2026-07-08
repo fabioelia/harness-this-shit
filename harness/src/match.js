@@ -21,6 +21,48 @@ const checkNameOf = (p) => p?.check_run?.name ?? p?.check_suite?.app?.slug ?? p?
 const conclusionOf = (p) => p?.check_run?.conclusion ?? p?.check_suite?.conclusion ?? p?.workflow_run?.conclusion ?? p?.deployment_status?.state ?? p?.state ?? null;
 const statusOf = (p) => p?.check_run?.status ?? p?.check_suite?.status ?? p?.workflow_run?.status ?? null;
 
+// Condition-group DSL (the Fleet UI's filter builder): named event fields, four
+// operators, groups combined AND/OR at two levels. Complements `if:` for
+// machine-written filters that must round-trip losslessly through front matter.
+const eventStates = (p) => [
+  p?.action, p?.conclusion, p?.state,
+  p?.check_run?.conclusion, p?.check_suite?.conclusion, p?.workflow_run?.conclusion,
+  p?.deployment_status?.state, p?.review?.state,
+].filter(Boolean);
+export const FILTER_FIELDS = {
+  action: (p) => eventStates(p),
+  check: (p) => [p?.check_run?.name, p?.check_suite?.app?.slug, p?.workflow_run?.name, p?.workflow_job?.name, p?.context, p?.deployment?.task].filter(Boolean),
+  branch: (p) => [branchOf(p)].filter(Boolean),
+  base: (p) => [p?.pull_request?.base?.ref].filter(Boolean),
+  label: (p) => labelsOf(p),
+  author: (p) => [p?.pull_request?.user?.login || p?.issue?.user?.login || p?.sender?.login].filter(Boolean),
+  title: (p) => [p?.pull_request?.title || p?.issue?.title].filter(Boolean),
+  draft: (p) => (p?.pull_request ? [String(!!p.pull_request.draft)] : []),
+};
+export function evalCondition(c, p) {
+  const vals = (FILTER_FIELDS[c.field]?.(p) || []).map(String);
+  const want = (Array.isArray(c.values) ? c.values : []).map(String);
+  if (!want.length && c.op !== 'is_not') return true; // empty = no constraint
+  const lc = (s) => s.toLowerCase();
+  switch (c.op) {
+    case 'is_not': return !vals.some((v) => want.includes(v));
+    case 'contains': return vals.some((v) => want.some((w) => lc(v).includes(lc(w))));
+    case 'matches': return vals.some((v) => want.some((w) => { try { return new RegExp(w).test(v); } catch { return false; } }));
+    default: return vals.some((v) => want.includes(v)); // 'is'
+  }
+}
+export function filterGroupsMatch(f, p) {
+  if (!f || !Array.isArray(f.groups) || !f.groups.length) return true;
+  const groupOk = (g) => {
+    const conds = Array.isArray(g?.conditions) ? g.conditions : [];
+    if (!conds.length) return true;
+    const res = conds.map((c) => evalCondition(c, p));
+    return g.match === 'any' ? res.some(Boolean) : res.every(Boolean);
+  };
+  const gr = f.groups.map(groupOk);
+  return f.match === 'any' ? gr.some(Boolean) : gr.every(Boolean);
+}
+
 // Match one github-trigger config against a github envelope's payload.
 export function githubFiltersMatch(cfg, envelope) {
   const p = envelope.payload ?? {};
@@ -70,6 +112,7 @@ export function githubFiltersMatch(cfg, envelope) {
     const s = p?.review?.state ?? p?.pull_request?.state ?? p?.state;
     if (s && !arr(cfg.state).map(String).includes(String(s))) return false;
   }
+  if (cfg.filters != null && !filterGroupsMatch(cfg.filters, p)) return false;
   return true;
 }
 

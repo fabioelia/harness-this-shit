@@ -2,7 +2,7 @@
 // routine SUBSCRIBES to that PR and reacts to its life — "if ci/* fails, do
 // fix-ci" — until merged/closed. Local transport is reconcile polling via gh
 // (webhook events, when wired, land through the same reaction matcher).
-import { rid, now, anyGlob, truncate } from './util.js';
+import { rid, now, anyGlob, truncate, durationMs } from './util.js';
 import { makeEnvelope } from './events.js';
 import { prView, resolvePrFromBranch } from './gh.js';
 
@@ -16,6 +16,7 @@ export class FlowManager {
   }
 
   // After a successful run: find the PR this run produced/touched and subscribe.
+  // A routine whose reactions are timeout-only subscribes even without a PR.
   async maybeSubscribe(routine, envelope, runId, output) {
     if (!routine.flow) return;
     let repo = envelope.repo ?? routine.runtime.repo[0] ?? null;
@@ -26,8 +27,13 @@ export class FlowManager {
       const rm = envelope.resource_key.match(/^pr:(.+)#(\d+)$/);
       if (rm) { repo = rm[1]; pr = +rm[2]; }
     }
+    if (!pr && (envelope.payload?.pull_request?.number ?? envelope.payload?.number)) {
+      pr = Number(envelope.payload.pull_request?.number ?? envelope.payload.number);
+    }
     if (!pr && repo && envelope.payload?.branch) pr = await resolvePrFromBranch(repo, envelope.payload.branch);
-    if (!repo || !pr) { this.log.append('flow.skip', { run: runId, slug: routine.slug, reason: 'no PR resolved from run' }); return; }
+    const timerOnly = routine.flow.reactions.length > 0 && routine.flow.reactions.every((rx) => rx.when.event === 'timeout');
+    if ((!repo || !pr) && !timerOnly) { this.log.append('flow.skip', { run: runId, slug: routine.slug, reason: 'no PR resolved from run' }); return; }
+    if (timerOnly && (!repo || !pr)) { repo = repo ?? null; pr = pr ?? null; }
 
     // one open subscription per (routine, PR)
     for (const f of this.state.flows.values()) {
@@ -38,13 +44,13 @@ export class FlowManager {
     const rec = {
       slug: routine.slug, run: runId, repo, pr,
       events: sub.events, until: sub.until,
-      reconcileMs: sub.reconcileMs, expiresAt: now() + sub.ttlMs,
+      reconcileMs: sub.reconcileMs, createdAt: now(), expiresAt: now() + sub.ttlMs,
       status: 'open', fired: {}, lastChecked: 0, seen: null,
     };
     this.state.flows.set(flow, rec);
     this.log.append('flow.subscribed', {
       flow, run: runId, slug: routine.slug, repo, pr,
-      events: sub.events, until: sub.until, reconcile_ms: sub.reconcileMs, expires_at: rec.expiresAt,
+      events: sub.events, until: sub.until, reconcile_ms: sub.reconcileMs, created_at: rec.createdAt, expires_at: rec.expiresAt,
     });
   }
 
@@ -80,12 +86,25 @@ export class FlowManager {
   reactionMatches(rx, occ) {
     if (rx.when.event !== occ.event && !(rx.when.event === 'status' && occ.event === 'check_run')) return false;
     for (const [k, want] of Object.entries(rx.when.filters)) {
+      if (rx.when.event === 'timeout' && k === 'after') continue;   // duration, not a payload filter
       const actual = occ[k];
       if (actual == null) continue;
       if (typeof want === 'boolean') { if (!!actual !== want) return false; }
       else if (!anyGlob(want, actual)) return false;
     }
     return true;
+  }
+
+  // Timeout reactions: fire once per subscription after `when.timeout.after` elapses.
+  dueTimeouts(rec, routine) {
+    const out = [];
+    for (const rx of routine.flow.reactions) {
+      if (rx.when.event !== 'timeout') continue;
+      const ms = durationMs(rx.when.filters.after ?? rx.when.filters.duration ?? '30m') ?? 1_800_000;
+      const key = `timeout:${rx.do}`;
+      if (!rec.fired[key] && now() - rec.createdAt >= ms) { rec.fired[key] = 1; out.push({ rx, occ: { event: 'timeout', after: rx.when.filters.after } }); }
+    }
+    return out;
   }
 
   async fire(flowId, rec, routine, rx, occ, cur) {
@@ -134,6 +153,19 @@ export class FlowManager {
         this.log.append('flow.unsubscribed', { flow: flowId, reason: 'ttl expired' });
         continue;
       }
+      const routineForTimers = this.d.bySlug(rec.slug);
+      if (routineForTimers?.flow) {
+        for (const due of this.dueTimeouts(rec, routineForTimers)) {
+          await this.fire(flowId, rec, routineForTimers, due.rx, due.occ, rec.seen ?? { checks: {}, reviews: {}, comments: 0, state: 'OPEN', title: '', url: '', headSha: '' });
+          if (rec.status !== 'open') break;
+        }
+        // a timer-only subscription closes once every timeout reaction has fired
+        if (rec.status === 'open' && !rec.pr && routineForTimers.flow.reactions.every((rx) => rx.when.event !== 'timeout' || rec.fired[`timeout:${rx.do}`])) {
+          rec.status = 'closed';
+          this.log.append('flow.unsubscribed', { flow: flowId, reason: 'all timers fired' });
+        }
+      }
+      if (rec.status !== 'open' || !rec.pr) continue;
       if (now() - rec.lastChecked < rec.reconcileMs) continue;
       rec.lastChecked = now();
       const routine = this.d.bySlug(rec.slug);

@@ -65,15 +65,34 @@ export class Dispatcher {
     return d;
   }
 
+  // ── coalesce inbox: events handed to the agent already holding the lease ──
+  addTask(key, slug, envelope, origin, label) {
+    const id = rid('task');
+    const p = envelope.payload ?? {};
+    const pr = p.pull_request?.number ?? p.number;
+    const summary = [label ?? envelope.type, p.action, pr ? `PR #${pr}` : '', envelope.sha ? `@${envelope.sha.slice(0, 7)}` : '', p.sender?.login ? `by ${p.sender.login}` : ''].filter(Boolean).join(' ');
+    const list = this.state.tasks.get(key) ?? [];
+    list.push({ id, slug, summary, payload: p, origin, claimedBy: '', at: new Date().toISOString() });
+    this.state.tasks.set(key, list);
+    this.log.append('task.added', { task: id, key, slug, summary, origin, payload: JSON.parse(truncate(JSON.stringify(p), 20_000).replace(/…$/, '') || '{}') });
+    return id;
+  }
+  pendingTasks(key) { return (this.state.tasks.get(key) ?? []).filter((t) => !t.claimedBy); }
+  claimTasks(ids, runId) {
+    if (!ids.length) return;
+    for (const list of this.state.tasks.values()) for (const t of list) if (ids.includes(t.id)) t.claimedBy = runId;
+    this.log.append('task.claimed', { tasks: ids, run: runId });
+  }
+
   // ── lease store ──
   acquireLease(key, runId, slug, sha, ttlMs) {
     const cur = this.leases.get(key);
     if (cur && cur.expiresAt > now() && cur.runId !== runId) return { ok: false, holder: cur.runId, expired: false };
     if (cur && cur.expiresAt <= now() && cur.runId !== runId) {
-      this.leases.set(key, { runId, slug, sha, expiresAt: now() + ttlMs });
+      this.leases.set(key, { runId, slug, sha, acquiredAt: now(), expiresAt: now() + ttlMs });
       return { ok: true, stolen: cur.runId };
     }
-    this.leases.set(key, { runId, slug, sha, expiresAt: now() + ttlMs });
+    this.leases.set(key, { runId, slug, sha, acquiredAt: cur?.runId === runId ? cur.acquiredAt : now(), expiresAt: now() + ttlMs });
     return { ok: true };
   }
   releaseLease(key, runId) {
@@ -88,11 +107,12 @@ export class Dispatcher {
   }
 
   // ── the admission pipeline + execution ──
-  async dispatch(routine, trigger, envelope, { inputs = {}, approved = false, attempt = 0, chainPath = [], handler = null } = {}) {
-    const id = rid('run');
-    const label = trigger ? `${trigger.type}${trigger.type === 'schedule' && trigger.config.cron ? ` · ${trigger.config.cron}` : ''}` : envelope.source;
+  async dispatch(routine, trigger, envelope, { inputs = {}, approved = false, attempt = 0, chainPath = [], handler = null, id = null, label = null } = {}) {
+    id = id ?? rid('run');
+    label = label ?? (trigger ? `${trigger.type}${trigger.type === 'schedule' && trigger.config.cron ? ` · ${trigger.config.cron}` : ''}` : envelope.source);
     const skip = (reason, ev = 'run.skip') => { this.log.append(ev, { run: id, slug: routine.slug, reason }); return { id, skipped: true, reason }; };
 
+    if (this.state.killSwitch) return skip('kill switch engaged');
     if (!routine.enabled) return skip('disabled');
 
     // policy: per-day run cap
@@ -140,24 +160,47 @@ export class Dispatcher {
     }
     const releaseGroup = () => { if (group && this.groups.get(group) === id) this.groups.delete(group); };
 
-    // claim-before-act lease
-    let leaseKey = '';
-    if (routine.concurrency.lease) {
-      leaseKey = renderTemplate(routine.concurrency.lease.resource, ctx);
-      const { ttlMs, onConflict } = routine.concurrency.lease;
+    // claim-before-act lease — explicit `lease:` or synthesized from the `scope:`
+    // shorthand (per-routine keys, so a routine never overlaps itself on an entity
+    // while distinct routines still act on the same PR independently).
+    let leaseSpec = routine.concurrency.lease;
+    if (!leaseSpec && routine.concurrency.scope && routine.concurrency.scope !== 'off') {
+      const p = envelope.payload ?? {};
+      const prNum = p.pull_request?.number ?? p.number;
+      const repo = envelope.repo ?? routine.runtime.repo[0] ?? null;
+      let scope = routine.concurrency.scope;
+      if (scope === 'auto') scope = (repo && prNum) ? 'pr' : 'routine';
+      const resource = scope === 'pr' && repo && prNum ? `${routine.slug}@pr:${repo}#${prNum}`
+        : scope === 'repo' && repo ? `${routine.slug}@repo:${repo}`
+        : `routine:${routine.slug}`;
+      leaseSpec = { resource, ttlMs: 15 * 60_000, onConflict: routine.concurrency.scopeConflict };
+    }
+    let leaseKey = '', coalescing = false;
+    if (leaseSpec) {
+      leaseKey = renderTemplate(leaseSpec.resource, ctx);
+      const { ttlMs, onConflict } = leaseSpec;
+      coalescing = onConflict === 'coalesce';
       let lease = this.acquireLease(leaseKey, id, routine.slug, envelope.sha, ttlMs);
       if (!lease.ok) {
         if (onConflict === 'skip') { releaseGroup(); this.log.append('lease.conflict', { run: id, slug: routine.slug, key: leaseKey, holder: lease.holder, action: 'skip' }); return skip(`stood down — ${leaseKey} held by ${lease.holder}`); }
         if (onConflict === 'coalesce') {
+          // Hand off to the running agent: this event becomes a task in its inbox.
           releaseGroup();
-          this.log.append('run.coalesced', { run: id, slug: routine.slug, key: leaseKey, into: lease.holder, reason: `handed to ${lease.holder}` });
+          this.addTask(leaseKey, routine.slug, envelope, id, label);
+          this.log.append('run.coalesced', { run: id, slug: routine.slug, key: leaseKey, into: lease.holder, reason: `handed off to ${lease.holder} — added to its task inbox for ${leaseKey}` });
           return { id, coalesced: true };
         }
         if (onConflict === 'steal-if-expired') { releaseGroup(); this.log.append('lease.conflict', { run: id, slug: routine.slug, key: leaseKey, holder: lease.holder, action: 'skip (not expired)' }); return skip(`lease ${leaseKey} live — not stealable`); }
         // queue
         this.log.append('lease.queued', { run: id, slug: routine.slug, key: leaseKey, holder: lease.holder });
         const deadline = now() + ttlMs;
-        while (now() < deadline) { await sleep(3000); lease = this.acquireLease(leaseKey, id, routine.slug, envelope.sha, ttlMs); if (lease.ok) break; }
+        while (now() < deadline) {
+          await sleep(3000);
+          if (this.canceled.has(id)) break;                    // canceled while waiting — don't take the lease
+          lease = this.acquireLease(leaseKey, id, routine.slug, envelope.sha, ttlMs);
+          if (lease.ok) break;
+        }
+        if (this.canceled.delete(id)) { releaseGroup(); this.releaseLease(leaseKey, id); return skip('canceled while waiting for lease'); }
         if (!lease.ok) { releaseGroup(); return skip(`gave up waiting for ${leaseKey}`); }
       }
       this.log.append('lease.acquired', { run: id, slug: routine.slug, key: leaseKey, ttl_ms: ttlMs, ...(lease.stolen ? { stolen_from: lease.stolen } : {}) });
@@ -216,16 +259,35 @@ export class Dispatcher {
     }
 
     // ── admitted: execute ──
-    this.log.append('run.start', { run: id, slug: routine.slug, trigger: label, attempt, source: envelope.source, type: envelope.type, repo: envelope.repo ?? undefined, resource: envelope.resource_key || undefined });
-    this.state.runs.set(id, { slug: routine.slug, status: 'running', trigger: label, started: new Date().toISOString() });
+    const kind = envelope.payload?._replay ? 'replay' : envelope.source === 'flow' ? 'reaction' : envelope.upstream ? 'chain' : 'trigger';
+    const eventForLog = JSON.parse(truncate(JSON.stringify(envelope.payload ?? {}), 20_000).replace(/…$/, '') || '{}');
+    this.log.append('run.start', {
+      run: id, slug: routine.slug, trigger: label, kind, attempt, source: envelope.source, type: envelope.type,
+      repo: envelope.repo ?? undefined, resource: envelope.resource_key || undefined,
+      upstream: envelope.upstream ?? undefined, event: eventForLog,
+    });
+    this.state.runs.set(id, { slug: routine.slug, status: 'running', trigger: label, kind, type: envelope.type ?? null, started: new Date().toISOString(), event: eventForLog, upstream: envelope.upstream ?? null, resource: envelope.resource_key || null });
     const dayKey = `${routine.slug}|${new Date().toISOString().slice(0, 10)}`;
     this.state.runsByDay.set(dayKey, (this.state.runsByDay.get(dayKey) ?? 0) + 1);
 
     let result;
     try {
-      result = await this.execute(routine, trigger, envelope, { id, inputs, label, handler });
+      result = await this.execute(routine, trigger, envelope, { id, inputs, label, handler, coalescing, leaseKey });
     } finally {
       releaseAll();
+      // Drain: tasks that landed while we ran but were never fetched → a fresh run
+      // handles them (claimed up front so the loop is bounded).
+      if (coalescing && leaseKey) {
+        const pend = this.pendingTasks(leaseKey);
+        if (pend.length && !this.state.killSwitch) {
+          const last = pend[pend.length - 1];
+          const drainEnv = { ...envelope, id: rid('evt'), payload: { ...(last.payload ?? {}), event: 'inbox-drain', tasks: pend.map((t) => t.summary) } };
+          const drainId = rid('run');
+          this.claimTasks(pend.map((t) => t.id), drainId);
+          this.log.append('inbox.drain', { run: drainId, slug: routine.slug, key: leaseKey, tasks: pend.length });
+          this.dispatch(routine, trigger, drainEnv, { chainPath, id: drainId, label: `inbox · ${pend.length} task${pend.length > 1 ? 's' : ''}` }).catch(() => {});
+        }
+      }
     }
     const live = this.state.runs.get(id);
     if (live && live.status === 'running') Object.assign(live, { status: result.ok ? 'succeeded' : 'failed', finished: new Date().toISOString(), ok: result.ok });
@@ -247,7 +309,22 @@ export class Dispatcher {
       await this.notify(routine, `run ${id} succeeded (${label}): ${truncate(result.summary ?? '', 200)}`, 'success');
     }
 
-    // after-chain: emit a control-plane event other routines' `on.after` can match
+    // chain (push model): the routine names its downstreams; they get the original
+    // event + upstream context. Cycle- and depth-guarded via chainPath.
+    if (result.ok && routine.chain?.length && chainPath.length < 8) {
+      const nextPath = [...chainPath, routine.slug];
+      for (const slug of routine.chain) {
+        if (nextPath.includes(slug)) { this.log.append('chain.stopped', { slug: routine.slug, reason: `cycle back to ${slug}` }); continue; }
+        const target = this.bySlug(slug);
+        if (!target || !target.enabled) { this.log.append('chain.stopped', { slug: routine.slug, reason: `target ${slug} missing/disabled` }); continue; }
+        const upstream = { routine: routine.slug, run: id, outcome: 'success', output: truncate(result.output ?? result.summary ?? '', 8000) };
+        const chained = { ...envelope, id: rid('evt'), upstream, payload: { ...(envelope.payload ?? {}), upstream } };
+        this.log.append('chain.fired', { from: routine.slug, to: slug, run: id });
+        this.dispatch(target, null, chained, { chainPath: nextPath, label: `after · ${routine.slug}` }).catch(() => {});
+      }
+    }
+
+    // after-chain (pull model): emit a control-plane event `on.after` can match
     if (this.emitEnvelope && chainPath.length < 8) {
       const outcome = result.ok ? 'success' : 'failure';
       const env2 = fromAfter({ routine: routine.slug, run: id, outcome, output: truncate(result.summary ?? '', 4000) });
@@ -257,7 +334,7 @@ export class Dispatcher {
     return { id, ...result };
   }
 
-  async execute(routine, trigger, envelope, { id, inputs, label, handler = null }) {
+  async execute(routine, trigger, envelope, { id, inputs, label, handler = null, coalescing = false, leaseKey = '' }) {
     const t0 = now();
     // secrets → env (values registered for redaction before anything is logged)
     const { env: secretEnv, report } = resolveSecrets(routine, { dir: this.dir, mapping: this.config.secrets ?? {}, log: this.log });
@@ -280,26 +357,33 @@ export class Dispatcher {
     }
 
     // MCP config from the connector registry (docs/06 §4)
-    const mcp = buildMcpConfig(routine, this.registry, { runId: id });
+    const mcp = buildMcpConfig(routine, this.registry, { runId: id, auth: this.config.getMcpAuth?.() ?? {} });
     for (const name of Object.keys(mcp.servers)) this.log.append('wire.mcp', { run: id, slug: routine.slug, server: name });
     for (const name of mcp.missing) this.log.append('wire.mcp', { run: id, slug: routine.slug, server: name, ok: false, reason: 'not in connector registry' });
 
     const stateDir = routine.state.enabled ? this.stateDirFor(routine) : null;
     const { allow, deny, grants } = allowedTools(routine, { hasWorkspace: workspace.cloned.length > 0 });
     if (stateDir) allow.push('Read', 'Write', 'Edit', 'Glob', 'Grep');
+    if (coalescing) allow.push('Bash(inbox:*)');   // the running agent fetches handed-off tasks
 
     const prRef = envelope.resource_key?.startsWith('pr:') ? (() => { const m = envelope.resource_key.match(/^pr:(.+)#(\d+)$/); return m ? { repo: m[1], pr: +m[2] } : null; })() : null;
+    const seedTasks = Array.isArray(envelope.payload?.tasks) ? envelope.payload.tasks : [];
     const { prompt, templateMisses } = buildRunPrompt(routine, envelope, {
       inputs, secrets: secretEnv, stateDir, upstream: envelope.upstream, prRef, workspace, handler,
+      coalesce: coalescing, seedTasks,
+      extraConstraints: this.config.getConstraints?.() ?? [],   // org-wide policy guardrails
     });
     for (const miss of templateMisses) this.log.append('template.miss', { run: id, slug: routine.slug, ref: miss });
 
     // step-level trace into .harness (compact by default; off/full via harness.yaml trace:)
     const traceMode = this.config.trace ?? 'compact';
+    const t0trace = now();
     let seq = 0;
     const put = traceMode === 'off' ? () => {} : (type, tool, ok, payload) => {
-      const text = truncate(typeof payload === 'string' ? payload : JSON.stringify(payload), traceMode === 'full' ? 4000 : 300);
-      this.log.append('run.event', { run: id, seq: seq++, type, ...(tool ? { tool } : {}), ...(ok == null ? {} : { ok }), text });
+      const full = typeof payload === 'string' ? payload : JSON.stringify(payload);
+      const max = traceMode === 'full' ? 16_000 : 300;
+      const truncated = full.length > max;
+      this.log.append('run.event', { run: id, seq: seq++, ms: now() - t0trace, type, ...(tool ? { tool } : {}), ...(ok == null ? {} : { ok }), text: truncate(full, max), truncated });
     };
 
     const res = await runClaude(prompt, {
@@ -312,7 +396,11 @@ export class Dispatcher {
       mcpConfig: mcp.path,
       runId: id,
       timeoutMs: routine.runtime.timeoutMs ?? 240_000,
-      extraEnv: { ...secretEnv, HARNESS_STATE_DIR: stateDir ?? '', HARNESS_REPO: routine.runtime.repo[0] ?? '', HARNESS_EVENT: truncate(JSON.stringify(envelope.payload ?? {}), 50_000) },
+      extraEnv: {
+        ...secretEnv, HARNESS_STATE_DIR: stateDir ?? '', HARNESS_REPO: routine.runtime.repo[0] ?? '',
+        HARNESS_EVENT: truncate(JSON.stringify(envelope.payload ?? {}), 50_000),
+        ...(this.config.controlUrl ? { HARNESS_CONTROL_URL: this.config.controlUrl } : {}),
+      },
     });
     this.children.delete(id);
     workspace.cleanup();
@@ -334,15 +422,23 @@ export class Dispatcher {
       if (!structured) this.log.append('run.contract', { run: id, slug: routine.slug, ok: false, reason: 'no structured JSON summary found' });
     }
 
+    const inTok = res.usage ? (res.usage.input_tokens || 0) + (res.usage.cache_read_input_tokens || 0) + (res.usage.cache_creation_input_tokens || 0) : null;
+    const outTok = res.usage ? (res.usage.output_tokens || 0) : null;
     this.log.append('run.done', {
       run: id, slug: routine.slug, ok, canceled: canceled || undefined,
       ms: res.ms, cost_usd: res.costUsd, turns: res.numTurns, session: res.sessionId || undefined,
+      in_tokens: inTok, out_tokens: outTok, model: routine.runtime.model || this.config.model || '',
       resource: envelope.resource_key || undefined,
-      summary: truncate(summary, 600),
+      summary: truncate(summary, 600), output: truncate(summary, 16_000),
       ...(structured ? { structured } : {}),
     });
     const st = this.state.runs.get(id);
-    if (st) Object.assign(st, { status: ok ? 'succeeded' : 'failed', finished: new Date().toISOString(), ok, costUsd: res.costUsd });
+    if (st) Object.assign(st, {
+      status: canceled ? 'canceled' : ok ? 'succeeded' : 'failed', finished: new Date().toISOString(), ok,
+      costUsd: res.costUsd, ms: res.ms, turns: res.numTurns, session: res.sessionId || '',
+      inTokens: inTok, outTokens: outTok, model: routine.runtime.model || this.config.model || '',
+      summary: truncate(summary, 600), output: truncate(summary, 16_000),
+    });
     if (envelope.resource_key) this.state.lastRunFor.set(envelope.resource_key, now());
     if (res.costUsd) { const d = new Date().toISOString().slice(0, 10); this.state.spendByDay.set(d, (this.state.spendByDay.get(d) ?? 0) + res.costUsd); }
 

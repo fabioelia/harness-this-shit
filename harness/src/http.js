@@ -101,6 +101,24 @@ export function startHttp(daemon, { port }) {
         return json(res, out.error ? 404 : 200, out);
       }
 
+      // the `inbox` tool: fetch + claim tasks coalesced onto this run's lease
+      const inbox = path.match(/^\/api\/runs\/([\w-]+)\/inbox$/);
+      if (inbox) {
+        const runId = inbox[1];
+        const st = daemon.dispatcher.state;
+        let key = null;
+        for (const [k, l] of daemon.dispatcher.leases) if (l.runId === runId) key = k;
+        const pend = key ? daemon.dispatcher.pendingTasks(key) : [];
+        daemon.dispatcher.claimTasks(pend.map((t) => t.id), runId);
+        return json(res, 200, { key, tasks: pend.map((t) => ({ id: t.id, summary: t.summary, event: t.payload })) });
+      }
+
+      if (path === '/api/kill-switch') {
+        daemon.state.killSwitch = !!body.engaged;
+        log.append('control.kill', { engaged: daemon.state.killSwitch, by: body.by ?? 'api' });
+        return json(res, 200, { killSwitch: daemon.state.killSwitch });
+      }
+
       const cancel = path.match(/^\/api\/runs\/([\w-]+)\/cancel$/);
       if (cancel) {
         const ok = daemon.dispatcher.cancel(cancel[1]);

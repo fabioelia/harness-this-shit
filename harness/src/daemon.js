@@ -13,20 +13,23 @@ import { cronMatches, minuteStamp, nextCronFire, validTz } from './cron.js';
 import { connectorHealth } from './mcp.js';
 import { startHttp } from './http.js';
 import { renderTemplate, buildContext } from './template.js';
-import { durationMs, now, iso, truncate } from './util.js';
+import { durationMs, now, iso, truncate, rid } from './util.js';
 
 const VERSION = '0.1.0';
 
 export class Daemon {
-  constructor(dir, { mirror = null, port = null } = {}) {
+  // `http: false` embeds the daemon in a host process (the Fleet app) that serves
+  // its own API — no listener is started and shutdown doesn't exit the process.
+  constructor(dir, { mirror = null, port = null, http = true, configOverrides = {} } = {}) {
     const loaded = loadDir(dir);
     this.dir = loaded.dir;
     this.routines = loaded.routines;
     this.failures = loaded.failures;
     this.skipped = loaded.skipped;
     this.registry = loaded.connectors;
-    this.config = loaded.config;
+    this.config = { ...loaded.config, ...configOverrides };
     this.fleetWarnings = loaded.fleetWarnings;
+    this.http = http;
     this.port = port ?? this.config.port;
     this.log = new HarnessLog(this.dir, { mirror });
     this.state = loadState(this.dir);
@@ -40,6 +43,24 @@ export class Daemon {
     this.stopping = false;
   }
 
+  // Re-read the folder after a file was written/deleted (the app's CRUD path).
+  // Routine array identity is preserved so the dispatcher sees the new fleet.
+  reload() {
+    const loaded = loadDir(this.dir);
+    this.routines.splice(0, this.routines.length, ...loaded.routines);
+    this.failures = loaded.failures;
+    this.skipped = loaded.skipped;
+    this.fleetWarnings = loaded.fleetWarnings;
+    Object.assign(this.registry, loaded.connectors);
+    for (const k of Object.keys(this.registry)) if (!(k in loaded.connectors)) delete this.registry[k];
+    this.webhookTriggers.clear();
+    for (const r of this.routines) r.on.forEach((t) => {
+      if (t.type === 'webhook') this.webhookTriggers.set(String(t.config.id), { slug: r.slug, secretRef: t.config.secret ?? null });
+    });
+    this.log.append('harness.reload', { routines: this.routines.length, failures: this.failures.length });
+    return { routines: this.routines, failures: this.failures };
+  }
+
   // ── boot ──
   async up() {
     // reap runs a dead daemon left "running" so the log stays honest
@@ -49,8 +70,11 @@ export class Daemon {
       if (st) st.status = 'failed';
     }
 
-    this.server = await startHttp(this, { port: this.port });
-    this.log.append('harness.up', { dir: this.dir, version: VERSION, pid: process.pid, port: this.port, routines: this.routines.length });
+    if (this.http) {
+      this.server = await startHttp(this, { port: this.port });
+      if (!this.config.controlUrl) this.config.controlUrl = `http://127.0.0.1:${this.port}`;
+    }
+    this.log.append('harness.up', { dir: this.dir, version: VERSION, pid: process.pid, port: this.http ? this.port : null, embedded: !this.http || undefined, routines: this.routines.length });
 
     for (const f of this.failures) this.log.append('routine.error', { file: f.file, errors: f.errors });
     for (const s of this.skipped) this.log.append('routine.skipped', { file: s.file, reason: s.reason });
@@ -78,9 +102,11 @@ export class Daemon {
     this.timers.push(setInterval(() => this.dispatcher.flow.tick().catch(() => {}), Math.max(15, this.config.flow_tick_seconds) * 1000));
     this.timers.forEach((t) => t.unref?.());
 
-    const bye = (sig) => () => this.shutdown(sig);
-    process.on('SIGINT', bye('SIGINT'));
-    process.on('SIGTERM', bye('SIGTERM'));
+    if (this.http) {
+      const bye = (sig) => () => this.shutdown(sig);
+      process.on('SIGINT', bye('SIGINT'));
+      process.on('SIGTERM', bye('SIGTERM'));
+    }
     return this;
   }
 
@@ -110,15 +136,21 @@ export class Daemon {
   }
 
   // ── the event pipeline: ingest → match → guards (dedupe/debounce) → dispatch ──
+  // Returns matched slugs AND pre-allocated run ids so an ingress endpoint can
+  // answer synchronously while the dispatches proceed in the background.
   ingest(envelope) {
-    if (this.stopping) return { matched: [] };
+    if (this.stopping) return { matched: [], runs: [] };
+    if (this.state.killSwitch) {
+      this.log.append('event.rejected', { source: envelope.source, type: envelope.type, reason: 'kill switch engaged' });
+      return { matched: [], runs: [], error: 'kill switch engaged' };
+    }
     const pairs = matchFleet(this.routines, envelope);
     this.log.append('event.received', {
       source: envelope.source, type: envelope.type, repo: envelope.repo ?? undefined,
       resource: envelope.resource_key || undefined, matched: pairs.map((p) => p.routine.slug),
     });
-    for (const pair of pairs) this.admitPair(pair, envelope);
-    return { matched: pairs.map((p) => p.routine.slug) };
+    const runs = pairs.map((pair) => ({ slug: pair.routine.slug, runId: this.admitPair(pair, envelope) })).filter((x) => x.runId);
+    return { matched: pairs.map((p) => p.routine.slug), runs };
   }
 
   admitPair({ routine, trigger }, envelope) {
@@ -131,15 +163,16 @@ export class Daemon {
       const last = this.state.dedupe.get(key);
       if (last && now() - last < windowMs) {
         this.log.append('event.deduped', { slug: routine.slug, dedupe_key: key, last_fired: iso(last) });
-        return;
+        return null;
       }
       this.state.dedupe.set(key, now());
       this.log.append('event.fired', { slug: routine.slug, dedupe_key: key });
     }
 
+    const runId = rid('run');
     const go = (env) => this.dispatcher
-      .dispatch(routine, trigger, env, { chainPath: env.chainPath ?? [] })
-      .catch((e) => this.log.append('run.error', { slug: routine.slug, error: e.message }));
+      .dispatch(routine, trigger, env, { chainPath: env.chainPath ?? [], id: runId })
+      .catch((e) => this.log.append('run.error', { run: runId, slug: routine.slug, error: e.message }));
 
     if (g.debounce) {
       const ms = durationMs(g.debounce) ?? 30_000;
@@ -150,13 +183,15 @@ export class Daemon {
       timer.unref?.();
       this.debounces.set(key, { timer, envelope });
       this.log.append('event.debounced', { slug: routine.slug, key, for_ms: ms });
-      return;
+      return runId;
     }
     go(envelope);
+    return runId;
   }
 
   // ── schedules ──
   tickSchedules() {
+    if (this.state.killSwitch) return;
     const d = new Date();
     for (const r of this.routines) {
       if (!r.enabled) continue;
@@ -275,6 +310,6 @@ export class Daemon {
     this.timers.forEach(clearInterval);
     this.log.append('harness.down', { reason, pid: process.pid });
     this.server?.close();
-    setTimeout(() => process.exit(0), 100).unref?.();
+    if (this.http) setTimeout(() => process.exit(0), 100).unref?.();
   }
 }

@@ -1,0 +1,20 @@
+#!/usr/bin/env node
+// Granted tool (coalesce mode): print + claim the tasks other events handed to
+// THIS running agent. Empty output = inbox drained, safe to wrap up.
+const runId = process.env.HARNESS_RUN_ID;
+const base = process.env.HARNESS_CONTROL_URL;
+if (!runId || !base) { console.error('inbox: not available in this run (no HARNESS_RUN_ID / HARNESS_CONTROL_URL)'); process.exit(1); }
+try {
+  const res = await fetch(`${base.replace(/\/$/, '')}/api/runs/${runId}/inbox`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  const j = await res.json();
+  const tasks = j.tasks ?? [];
+  if (!tasks.length) { console.log('inbox empty — nothing handed off.'); process.exit(0); }
+  console.log(`${tasks.length} task(s) handed to you:`);
+  for (const t of tasks) {
+    console.log(`\n— ${t.summary}`);
+    if (t.event && Object.keys(t.event).length) console.log(JSON.stringify(t.event).slice(0, 2000));
+  }
+} catch (e) {
+  console.error(`inbox: ${e.message}`);
+  process.exit(1);
+}

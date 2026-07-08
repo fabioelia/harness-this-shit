@@ -39,3 +39,7 @@ app/server/switchboard.db*
 # harness runtime artifacts (per-deployment, not source)
 harness/examples/routines/.harness
 harness/examples/routines/state/
+
+# the app's routines folder is seeded at boot and is per-deployment
+app/server/routines/
+.secrets.json

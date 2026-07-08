@@ -1,12 +1,13 @@
 # Switchboard — a team harness for Claude Code routines
 
-> **Status:** Design package **plus two runnable pieces**, now cleanly separated.
-> [`docs/`](docs) holds the shared understanding (what we're building and why, the canonical
-> shape, the tools). [`harness/`](harness) is the **headless harness** — a standalone CLI that
-> reads a folder of front-matter `.md` routines, wires cron/webhooks/MCPs per the
-> [docs/02 spec](docs/02-routine-spec.md), and logs everything to a single `.harness` file.
-> [`app/`](app) is the **Fleet console** — the web UI reference implementation (React +
-> Express + `node:sqlite`). "Switchboard" is a working codename — rename freely.
+> **Status:** Design package plus a working implementation with **one engine and two front
+> doors**. [`docs/`](docs) holds the shared understanding (what we're building and why, the
+> canonical shape, the tools). [`harness/`](harness) is the **engine + headless CLI**: it reads
+> a folder of front-matter `.md` routines, wires cron/webhooks/MCPs per the
+> [docs/02 spec](docs/02-routine-spec.md), and logs everything to that folder's single
+> `.harness` file. [`app/`](app) is the **Fleet console** — the web UI, whose Express server
+> embeds the same harness engine and edits the same `.md` files (no database). Point both at
+> one folder and they stay in agreement. "Switchboard" is a working codename — rename freely.
 
 ## Try the headless harness
 

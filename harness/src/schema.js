@@ -88,6 +88,12 @@ export function normalizeRoutine(meta, { file = '', connectorIds = new Set() } =
     } else if (type === 'github') {
       if (!cfg.event) err(`${p}.github`, 'event: required');
       else if (!GITHUB_EVENTS.has(cfg.event)) warn(`${p}.github.event`, `"${cfg.event}" not a known webhook event`);
+      if (cfg.filters != null) {
+        if (!isObj(cfg.filters) || (cfg.filters.groups != null && !Array.isArray(cfg.filters.groups))) err(`${p}.github.filters`, 'must be { match, groups: [{ match, conditions }] }');
+        else for (const g of cfg.filters.groups ?? []) for (const c of (g?.conditions ?? [])) {
+          if (!c?.field) err(`${p}.github.filters`, 'every condition needs a field');
+        }
+      }
     } else if (type === 'webhook') {
       if (!cfg.id) err(`${p}.webhook`, 'id: required');
     } else if (type === 'after') {
@@ -154,7 +160,20 @@ export function normalizeRoutine(meta, { file = '', connectorIds = new Set() } =
     group: str(cc.group),
     cancelInProgress: !!cc.cancel_in_progress,
     lease: null, barrier: null, yieldToHuman: !!cc.yield_to_human, budget: null,
+    // Fleet-UI shorthand: `scope: auto|pr|repo|routine|off` + `on_conflict:
+    // wait|drop|coalesce` — the dispatcher synthesizes a per-routine lease from it.
+    scope: '', scopeConflict: 'queue',
   };
+  if (cc.scope != null) {
+    const scope = str(cc.scope);
+    if (!['auto', 'pr', 'repo', 'routine', 'off'].includes(scope)) err('concurrency.scope', `"${scope}" not auto|pr|repo|routine|off`);
+    const conflictMap = { wait: 'queue', queue: 'queue', drop: 'skip', skip: 'skip', coalesce: 'coalesce' };
+    const oc = str(cc.on_conflict ?? cc.onConflict ?? 'wait');
+    if (!conflictMap[oc]) err('concurrency.on_conflict', `"${oc}" not wait|drop|coalesce`);
+    r.concurrency.scope = scope;
+    r.concurrency.scopeConflict = conflictMap[oc] ?? 'queue';
+    if (cc.lease != null) warn('concurrency', 'both scope shorthand and an explicit lease — the explicit lease wins');
+  }
   if (cc.lease != null) {
     const l = isObj(cc.lease) ? cc.lease : {};
     if (!l.resource) err('concurrency.lease', 'resource: required');
@@ -222,6 +241,10 @@ export function normalizeRoutine(meta, { file = '', connectorIds = new Set() } =
   r.includes = arr(meta.includes).map(str);
   r.extends = meta.extends != null ? str(meta.extends) : null;
 
+  // ── chain: push-model hand-off (upstream declares its downstreams; the pull
+  // form is `on: [{after: …}]` on the downstream — both are supported) ──
+  r.chain = arr(meta.chain).map(str).filter(Boolean);
+
   // ── 2.12 flow ──
   if (meta.flow != null) {
     const f = isObj(meta.flow) ? meta.flow : {};
@@ -253,7 +276,7 @@ export function normalizeRoutine(meta, { file = '', connectorIds = new Set() } =
   // Unknown top-level keys → lint, so typos ('trigger:' for 'on:') don't silently no-op.
   const KNOWN = new Set(['name', 'slug', 'summary', 'owner', 'maintainers', 'team', 'tags', 'labels', 'enabled',
     'visibility', 'on', 'inputs', 'tools', 'runtime', 'concurrency', 'secrets', 'state', 'outputs', 'policy',
-    'includes', 'extends', 'flow']);
+    'includes', 'extends', 'flow', 'chain']);
   for (const k of Object.keys(meta)) if (!KNOWN.has(k)) warn(k, 'unknown front-matter key (ignored)');
 
   return { routine: errors.length ? null : r, errors, warnings };
@@ -269,6 +292,9 @@ export function lintFleet(routines) {
       if (t.type === 'after' && !bySlug.has(t.config.routine)) {
         warnings.push({ slug: r.slug, msg: `on.after points at "${t.config.routine}" which is not in this folder` });
       }
+    }
+    for (const c of r.chain ?? []) {
+      if (!bySlug.has(c)) warnings.push({ slug: r.slug, msg: `chain points at "${c}" which is not in this folder` });
     }
     if (r.concurrency.lease) {
       const k = r.concurrency.lease.resource;
