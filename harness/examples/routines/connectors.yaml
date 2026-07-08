@@ -1,0 +1,26 @@
+# Connector registry (docs/06): the org-level place MCPs are managed once and
+# granted per-routine via `tools.mcp: [id]`. Builtins already registered:
+#   github (native, gh CLI) · slack (native, slack-post/slack-read + Web API)
+#   web (native, WebFetch/WebSearch) · atlassian / jira (Atlassian remote MCP)
+# Entries here extend or override the builtins. Secrets stay in env vars —
+# never put a token in this file.
+
+slack-mcp:                        # full Slack MCP server (search, threads) — beyond the native slack-post
+  kind: mcp
+  config:
+    command: npx
+    args: [-y, "@modelcontextprotocol/server-slack"]
+    env: { SLACK_BOT_TOKEN: "${SLACK_BOT_TOKEN}", SLACK_TEAM_ID: "${SLACK_TEAM_ID}" }
+  auth: { env: [SLACK_BOT_TOKEN, SLACK_TEAM_ID] }
+  events: [message, mention, reaction]
+  detail: "Slack MCP server (bring-your-own)"
+
+sentry:
+  kind: mcp
+  config:
+    command: npx
+    args: [-y, "@sentry/mcp-server"]
+    env: { SENTRY_AUTH_TOKEN: "${SENTRY_AUTH_TOKEN}" }
+  auth: { env: [SENTRY_AUTH_TOKEN] }
+  events: [issue, issue_resolved]
+  detail: "Sentry MCP (issues as tools + events)"

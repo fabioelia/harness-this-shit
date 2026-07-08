@@ -1,3 +1,10 @@
+// Switchboard Fleet API — a UI adapter over the EMBEDDED HARNESS.
+//
+// The engine (scheduler, matcher, dispatcher/leases, runner, flows, MCP wiring)
+// is @switchboard/harness. Routines are *.md files in ROUTINES_DIR (the same
+// files `harness up` runs); every wire/run/decision lands in that folder's
+// single .harness log, and this server derives all state from it. There is no
+// database — the UI is a structured editor + viewer over the harness's world.
 import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
@@ -5,68 +12,860 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { getDb, all, one, run } from './db.js';
-import { runClaude, buildPrompt, allowedToolsFor } from './runner.js';
+import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync, chmodSync } from 'node:fs';
+
+import { Daemon } from '@switchboard/harness/src/daemon.js';
+import { replay } from '@switchboard/harness/src/log.js';
+import { fromGithub, fromManual, makeEnvelope } from '@switchboard/harness/src/events.js';
+import { triggerMatches, evalCondition, FILTER_FIELDS } from '@switchboard/harness/src/match.js';
+import { buildRunPrompt } from '@switchboard/harness/src/prompt.js';
+import { allowedTools, buildMcpConfig, connectorHealth } from '@switchboard/harness/src/mcp.js';
+import { runClaude } from '@switchboard/harness/src/runner.js';
+import { nextCronFire, validTz } from '@switchboard/harness/src/cron.js';
+import { renderTemplate, buildContext } from '@switchboard/harness/src/template.js';
+import {
+  uiToMeta, routineFileText, writeRoutineFile, deleteRoutineFile, patchRoutineMeta,
+  mergeOn, mergeFlow, rebuildBody,
+  flowToReactions, readConnectorsFile, upsertConnector, removeConnector, isBuiltinConnector,
+} from '@switchboard/harness/src/writer.js';
+import { rid } from '@switchboard/harness/src/util.js';
+
 import { integrationStatus, listRepos, listOrgs, listChecks, claudeAccount, testConnector, bustStatus, gh } from './integrations.js';
 import { SAMPLE_ROUTINES, DEFAULT_REPO } from './samples.js';
 
-// In-process bus so the run trace can stream live over SSE (no DB polling lag).
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PORT = process.env.PORT || 4317;
+const ROUTINES_DIR = process.env.SWITCHBOARD_ROUTINES || join(__dirname, '..', 'routines');
+mkdirSync(ROUTINES_DIR, { recursive: true });
+
+const now = () => Date.now();
+
+// ── Secrets sidecar: UI-managed tokens live OUTSIDE the reviewable folder log ──
+// (.secrets.json is gitignored; the .harness log never contains a secret value.)
+const SECRETS_PATH = join(ROUTINES_DIR, '.secrets.json');
+function loadSecrets() {
+  try { return JSON.parse(readFileSync(SECRETS_PATH, 'utf8')); } catch { return {}; }
+}
+function saveSecrets(s) {
+  writeFileSync(SECRETS_PATH, JSON.stringify(s, null, 2));
+  try { chmodSync(SECRETS_PATH, 0o600); } catch { /* best effort */ }
+}
+const secrets = { tokens: {}, mcpAuth: {}, webhookSecret: '', ...loadSecrets() };
+const TOKEN_ENV = { slack: 'SLACK_BOT_TOKEN', atlassian: 'ATLASSIAN_API_TOKEN' };
+const ENV_BASE = {};
+for (const [code, envKey] of Object.entries(TOKEN_ENV)) {
+  ENV_BASE[envKey] = process.env[envKey];
+  if (secrets.tokens[code] && !process.env[envKey]) process.env[envKey] = secrets.tokens[code];
+}
+
+// ── Policies (org guardrails) — persisted as control.* entries in .harness ──
+const DEFAULT_POLICIES = [
+  { key: 'deny_merge', title: 'Never merge pull requests', desc: 'Every session is told to never run `gh pr merge` or any merge command.', on: true },
+  { key: 'pr_not_push', title: 'Changes via pull request, not direct push', desc: 'Sessions must open a PR for changes instead of pushing to a protected branch.', on: true },
+  { key: 'no_destructive', title: 'No destructive git/history ops', desc: 'Sessions must not force-push, delete branches, or rewrite history.', on: true },
+];
+function policyConstraints() {
+  const saved = daemon?.state.policies || {};
+  const on = (k) => (k in saved ? !!saved[k] : !!DEFAULT_POLICIES.find((p) => p.key === k)?.on);
+  const c = [];
+  if (on('deny_merge')) c.push('Never merge a pull request — do not run `gh pr merge` or any merge command.');
+  if (on('pr_not_push')) c.push('Do not push directly to a protected or default branch; open a pull request for any change.');
+  if (on('no_destructive')) c.push('Do not force-push, delete branches, or rewrite git history.');
+  return c;
+}
+
+// ── Live plumbing: SSE bus + activity ring + in-memory traces, fed by the log mirror ──
 const runBus = new EventEmitter();
 runBus.setMaxListeners(0);
+const traces = new Map();           // runId → TraceEvent[] (live runs; replay covers the rest)
+const activity = [];                // ring of shaped activity rows (newest first)
+const ACT_STATE = (e) => {
+  if (e.ev === 'run.done') return e.ok ? 'success' : 'failing';
+  if (['run.error', 'routine.error', 'event.rejected', 'budget.exhausted', 'barrier.stale', 'surface.error', 'flow.error'].includes(e.ev)) return 'failing';
+  if (['run.start', 'retry.scheduled', 'lease.queued', 'group.queued', 'inbox.drain', 'task.added', 'flow.subscribed'].includes(e.ev)) return 'queued';
+  if (['approval.granted', 'flow.reaction', 'chain.fired', 'cron.fired'].includes(e.ev)) return 'success';
+  return 'idle';
+};
+const ACT_TEXT = (e) => {
+  const bits = { ...e };
+  delete bits.t; delete bits.ev;
+  switch (e.ev) {
+    case 'run.start': return `${e.slug} started · ${e.trigger}`;
+    case 'run.done': return `${e.slug} ${e.ok ? 'ran · ' + String(e.summary ?? '').split('\n').pop().slice(0, 60) : 'failed · ' + String(e.summary ?? '').slice(0, 60)}`;
+    case 'run.skip': return `${e.slug} skipped · ${e.reason}`;
+    case 'run.coalesced': return `${e.slug} coalesced · ${e.reason}`;
+    case 'lease.acquired': return `${e.slug} leased ${e.key}`;
+    case 'lease.queued': return `${e.slug} waiting · ${e.key} held by ${e.holder}`;
+    case 'event.received': return `event ${e.type} · matched [${(e.matched ?? []).join(', ') || '—'}]`;
+    case 'event.rejected': return `event rejected · ${e.reason}`;
+    case 'cron.fired': return `${e.slug} schedule fired${e.cron ? ' · ' + e.cron : ''}`;
+    case 'chain.fired': return `chain ${e.from} → ${e.to}`;
+    case 'flow.subscribed': return `${e.slug} following ${e.repo ? `${e.repo}#${e.pr}` : 'timers'}`;
+    case 'flow.reaction': return `reaction · ${e.when} → ${e.reaction}`;
+    case 'flow.unsubscribed': return `flow closed · ${e.reason}`;
+    case 'task.added': return `${e.slug} inbox +1 · ${e.summary}`;
+    case 'inbox.drain': return `${e.slug} draining ${e.tasks} inbox task${e.tasks > 1 ? 's' : ''}`;
+    case 'retry.scheduled': return `${e.slug} retry ${e.attempt}/${e.max} in ${Math.round(e.in_ms / 1000)}s`;
+    case 'control.kill': return `kill switch ${e.engaged ? 'ENGAGED' : 'released'} by ${e.by ?? '—'}`;
+    case 'routine.error': return `${e.file}: ${(e.errors ?? []).join('; ').slice(0, 100)}`;
+    case 'harness.up': return `harness up · ${e.routines} routine(s)`;
+    case 'harness.reload': return `routines reloaded · ${e.routines} active, ${e.failures} failing to parse`;
+    default: return `${e.ev} ${Object.entries(bits).slice(0, 4).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v)?.slice(0, 40) : v}`).join(' ')}`;
+  }
+};
+const SILENT_EVS = new Set(['run.event', 'wire.secret', 'template.miss', 'event.fired']);
+const fmtOffset = (ms) => `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, '0')}`;
+const shapeTrace = (e) => ({ seq: e.seq, t: fmtOffset(e.ms ?? 0), ms: e.ms ?? 0, type: e.type, tool: e.tool ?? null, ok: e.ok == null ? null : (e.ok ? 1 : 0), text: e.text ?? '', truncated: !!e.truncated });
 
+function onLogEntry(e) {
+  if (e.ev === 'run.event') {
+    const list = traces.get(e.run) ?? [];
+    const shaped = shapeTrace(e);
+    list.push(shaped);
+    traces.set(e.run, list);
+    runBus.emit(e.run, { kind: 'event', event: shaped });
+    return;
+  }
+  if (['run.done', 'run.skip', 'run.coalesced'].includes(e.ev)) {
+    const status = e.ev === 'run.done' ? (e.canceled ? 'canceled' : e.ok ? 'succeeded' : 'failed') : e.ev === 'run.skip' ? 'skipped' : 'coalesced';
+    runBus.emit(e.run, { kind: 'done', status });
+    setTimeout(() => traces.delete(e.run), 60_000).unref?.();   // replay serves it from here on
+  }
+  if (!SILENT_EVS.has(e.ev)) {
+    activity.unshift({ time: String(e.t).slice(11, 19), text: ACT_TEXT(e), state: ACT_STATE(e) });
+    if (activity.length > 300) activity.length = 300;
+  }
+}
+
+// ── Boot the embedded harness ──
+const daemon = new Daemon(ROUTINES_DIR, {
+  http: false,
+  mirror: onLogEntry,
+  configOverrides: {
+    trace: 'full',
+    controlUrl: `http://127.0.0.1:${PORT}`,
+    getMcpAuth: () => secrets.mcpAuth,
+    getConstraints: () => policyConstraints(),
+  },
+});
+
+// First boot: an empty folder ships with the runnable example fleet as real files.
+function seedSamples(repo) {
+  const fill = (s) => String(s || '').split('__REPO__').join(repo || DEFAULT_REPO);
+  const created = [], skipped = [];
+  for (const rt of SAMPLE_ROUTINES) {
+    if (daemon.routines.some((r) => r.slug === rt.slug) || existsSync(join(ROUTINES_DIR, `${rt.slug}.md`))) { skipped.push(rt.slug); continue; }
+    writeRoutineFile(ROUTINES_DIR, rt.slug, uiToMeta({ ...rt, repo: fill(rt.repo) }), fill(rt.prompt));
+    created.push(rt.slug);
+  }
+  if (created.length) daemon.reload();
+  return { created, skipped };
+}
+if (!daemon.routines.length && !daemon.failures.length) seedSamples(DEFAULT_REPO);
+await daemon.up();
+// Seed the activity ring from the recent past so the feed isn't empty on boot.
+for (const e of replay(ROUTINES_DIR).slice(-150)) if (!SILENT_EVS.has(e.ev) && e.ev !== 'run.event') activity.unshift({ time: String(e.t).slice(11, 19), text: ACT_TEXT(e), state: ACT_STATE(e) });
+activity.splice(300);
+
+const { state, dispatcher } = daemon;
+const bySlug = (slug) => dispatcher.bySlug(slug);
+
+// ── Display helpers (the UI renders these strings verbatim) ──
+function relTime(ts) {
+  if (!ts) return '—';
+  const d = now() - ts;
+  if (d < 4000) return 'now';
+  if (d < 60_000) return `${Math.round(d / 1000)}s ago`;
+  if (d < 3_600_000) return `${Math.round(d / 60_000)}m ago`;
+  if (d < 86_400_000) return `${Math.round(d / 3_600_000)}h ago`;
+  return `${Math.round(d / 86_400_000)}d ago`;
+}
+const relFuture = (ts) => { const d = ts - now(); if (d < 60_000) return 'in <1m'; if (d < 3_600_000) return `in ${Math.round(d / 60_000)}m`; if (d < 86_400_000) return `in ${Math.round(d / 3_600_000)}h`; return `in ${Math.round(d / 86_400_000)}d`; };
+const fmtDur = (ms) => (ms == null ? '…' : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`);
+const ts = (r) => Date.parse(r.finished ?? r.started ?? 0) || 0;
+const AV_PALETTE = ['#d98a5c', '#c9a24a', '#6fae9a', '#7f9bd1', '#c98fb0', '#b59ad6', '#5b9ee6', '#5fbf86', '#e6b052'];
+const ownerColor = (name) => { let h = 0; for (const c of String(name)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return AV_PALETTE[h % AV_PALETTE.length]; };
+const initialsOf = (name) => { const p = String(name).trim().split(/\s+/).filter(Boolean); return !p.length ? '??' : (p.length === 1 ? p[0].slice(0, 2) : p[0][0] + p[p.length - 1][0]).toUpperCase(); };
+const slugify = (s) => String(s).toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+const MODELS = [
+  { id: 'claude-opus-4-8', label: 'Opus 4.8' },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
+  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
+  { id: 'claude-fable-5', label: 'Fable 5' },
+];
+const MODEL_IDS = MODELS.map((m) => m.id);
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const DEFAULT_MODEL = 'claude-opus-4-8';
+
+// ── Runs, from the harness ledger ──
+const allRuns = () => [...state.runs.entries()].map(([id, r]) => ({ id, ...r })).sort((a, b) => ts(a) - ts(b) || a.id.localeCompare(b.id));
+const runsFor = (slug) => allRuns().filter((r) => r.slug === slug);
+const runStarted = (r) => Date.parse(r.started ?? 0) || 0;
+const durOf = (r) => (r.status === 'running' || r.status === 'waiting' ? '…' : r.ms != null ? fmtDur(r.ms) : '—');
+function traceFor(runId) {
+  const live = traces.get(runId);
+  if (live?.length) return live;
+  return replay(ROUTINES_DIR).filter((e) => e.ev === 'run.event' && e.run === runId).map(shapeTrace);
+}
+
+// ── Routine shaping: harness routine object → the Fleet UI's wire format ──
+const CONFLICT_BACK = { queue: 'wait', skip: 'drop', coalesce: 'coalesce' };
+function uiConfig(r) {
+  const triggers = [...new Set(r.on.map((t) => (t.type === 'github' ? t.config.event : t.type)))];
+  const schedTrigger = r.on.find((t) => t.type === 'schedule');
+  const ghTrigger = r.on.find((t) => t.type === 'github');
+  return {
+    triggers,
+    schedule: schedTrigger?.config.cron ?? '',
+    filters: ghTrigger?.config.filters ?? {},
+    connectors: r.tools.mcp,
+    chain: r.chain ?? [],
+    reactions: flowToReactions(r.flow),
+    // Only the `scope:` shorthand round-trips through the UI. An explicit lease/
+    // budget block is hand-written richness the form can't edit — report {} so a
+    // save never echoes a synthesized scope back onto it.
+    concurrency: r.concurrency.scope
+      ? { scope: r.concurrency.scope, onConflict: CONFLICT_BACK[r.concurrency.scopeConflict] ?? 'wait' }
+      : {},
+    model: r.runtime.model || DEFAULT_MODEL,
+    effort: r.runtime.effort || '',
+    memory: !!r.state.enabled,
+    repo: r.runtime.repo.join(', '),
+    branch: r.runtime.branch || 'main',
+    retries: r.policy.retry?.max ?? 0,
+  };
+}
+function shapeRoutine(r) {
+  const runs = runsFor(r.slug);
+  const recentRuns = runs.slice(-12);
+  const recent = recentRuns.map((x) => x.status);
+  const finished = recent.filter((s) => s === 'succeeded' || s === 'failed');
+  const successRate = finished.length ? Math.round((100 * finished.filter((s) => s === 'succeeded').length) / finished.length) : null;
+  const last = runs[runs.length - 1];
+  const live = runs.some((x) => x.status === 'running' || x.status === 'waiting');
+  const spend = runs.reduce((a, x) => a + (x.costUsd || 0), 0);
+  const withMs = runs.filter((x) => x.ms != null);
+  const avg = withMs.length ? fmtDur(withMs.reduce((a, x) => a + x.ms, 0) / withMs.length) : '—';
+  const cfg = uiConfig(r);
+  const cronT = r.on.find((t) => t.type === 'schedule' && t.config.cron);
+  const everyT = r.on.find((t) => t.type === 'schedule' && (t.config.every != null || t.config.at != null));
+  const next = cronT ? (() => { const n = nextCronFire(cronT.config.cron, validTz(cronT.config.tz) ? cronT.config.tz : null); return n ? relFuture(n.getTime()) : cronT.config.cron; })()
+    : everyT ? (everyT.config.every != null ? `every ${everyT.config.every}` : `at ${everyT.config.at}`)
+    : (r.on.length ? 'on event' : '—');
+  const inbox = [...state.tasks.entries()].reduce((a, [, list]) => a + list.filter((t) => t.slug === r.slug && !t.claimedBy).length, 0);
+  return {
+    slug: r.slug, name: r.name, summary: r.summary,
+    owner: r.owner || 'unassigned', team: r.team || 'general',
+    ownerColor: ownerColor(r.owner || 'unassigned'), initials: initialsOf(r.owner || 'unassigned'),
+    ...cfg,
+    state: !r.enabled ? 'disabled' : live ? 'running' : 'idle',
+    enabled: !!r.enabled,
+    lastAgo: last ? relTime(ts(last)) : 'never',
+    lastStatus: !last ? 'idle' : last.status === 'running' ? 'running' : last.status === 'succeeded' ? 'success' : last.status === 'failed' ? 'failing' : 'idle',
+    next,
+    recent, successRate, runCount: recent.length,
+    spend: `$${spend.toFixed(2)}`, avg, inbox,
+  };
+}
+function detailOf(r) {
+  const cfg = uiConfig(r);
+  const flt = cfg.filters || {};
+  const condVals = (field) => (flt.groups ?? []).flatMap((g) => g.conditions ?? []).filter((c) => c.field === field).flatMap((c) => c.values);
+  return {
+    breadcrumb: ['Fleet', r.slug],
+    file: r.file,
+    frontMatter: {
+      on: r.on.map((t) => ({ key: `trigger · ${t.type === 'github' ? t.config.event : t.type}`, detail: t.type === 'schedule' ? (t.config.cron ?? t.config.every ?? '') : '' })),
+      tools: cfg.connectors.map((c) => ({ sign: '+', name: c, tone: 'ok' })),
+      runtime: [cfg.model, `${cfg.effort ? `· ${cfg.effort} effort ` : ''}· repos ${cfg.repo || '*'}`, `· branch ${cfg.branch}`],
+      filters: { actions: [...new Set([...(flt.actions ?? []), ...condVals('action')])], branches: [...new Set([...(flt.branches ?? []), ...condVals('branch')])] },
+    },
+    flowNodes: [
+      { title: cfg.triggers[0] || 'trigger', sub: 'on' },
+      { title: 'session', sub: r.slug, tone: 'run' },
+      ...(cfg.connectors.length ? [{ title: cfg.connectors.join(' + '), sub: 'tools' }] : []),
+    ],
+    prompt: r.prompt && r.prompt.trim() ? r.prompt : `## Prompt\n${r.summary}`,
+  };
+}
+// Flow subscriptions rendered in the legacy "watches" vocabulary.
+function watchRows(filterFn) {
+  const rows = [];
+  for (const [flowId, f] of state.flows) {
+    if (!filterFn(f)) continue;
+    const routine = bySlug(f.slug);
+    const reactions = routine?.flow?.reactions ?? [];
+    reactions.forEach((rx, i) => {
+      const ui = flowToReactions({ reactions: [rx] })[0];
+      rows.push({
+        id: `${flowId}:${i}`, origin: f.slug, target: ui?.run ?? rx.do,
+        source: ui?.source ?? 'github', kind: ui?.kind ?? rx.when.event, when: ui?.when ?? '',
+        entity: f.pr ? { repo: f.repo, pr: f.pr } : {},
+        status: f.status === 'open' ? 'open' : (f.fired?.[rx.do] || f.fired?.[`timeout:${rx.do}`]) ? 'fired' : 'expired',
+        detail: f.status === 'open' ? '' : (f.reason ?? ''), attempts: 0, ago: relTime(f.createdAt),
+      });
+    });
+  }
+  return rows;
+}
+const kindOf = (r) => r.kind ?? 'trigger';
+
+// Explain why a run matched: trigger + repo target + each filter condition.
+function explainMatch(r, event, typeHint = '') {
+  const type = event?.event || typeHint || event?.type || 'manual';
+  const env = makeEnvelope(GITHUBISH_TYPES.has(type) ? 'github' : type, type, event ?? {});
+  const listens = [...new Set(r.on.map((t) => (t.type === 'github' ? t.config.event : t.type)))];
+  const fired = r.on.some((t) => triggerMatches(r, t, env));
+  const checks = [{ label: `trigger is "${type}"`, ok: listens.includes(type) || (type === 'manual') || fired, detail: `listens for [${listens.join(', ') || 'none'}]` }];
+  if (r.runtime.repo.length) {
+    const er = env.repo;
+    checks.push({ label: 'repository in target', ok: !er || r.runtime.repo.includes(er), detail: `target [${r.runtime.repo.join(', ')}]` });
+  }
+  const gh = r.on.find((t) => t.type === 'github' && t.config.filters);
+  for (const g of gh?.config.filters.groups ?? []) for (const c of g.conditions ?? []) {
+    const vals = (FILTER_FIELDS[c.field]?.(event ?? {}) || []).map(String);
+    checks.push({ label: `${c.field} ${c.op} [${(c.values || []).join(', ')}]`, ok: evalCondition(c, event ?? {}), detail: `event ${c.field}: [${vals.join(', ') || '—'}]` });
+  }
+  return { fired, checks };
+}
+const GITHUBISH_TYPES = new Set(['pull_request', 'pull_request_target', 'push', 'label', 'issue_comment', 'issues',
+  'pull_request_review', 'pull_request_review_comment', 'check_run', 'check_suite', 'release', 'workflow_run',
+  'workflow_job', 'deployment_status', 'status', 'create', 'delete']);
+
+// ── Dispatch through the embedded dispatcher (run id known synchronously) ──
+function startRun(r, envelope, label) {
+  const id = rid('run');
+  const trigger = r.on.find((t) => triggerMatches(r, t, envelope)) ?? null;
+  dispatcher.dispatch(r, trigger, envelope, { id, label, chainPath: envelope.chainPath ?? [] })
+    .catch((e) => daemon.log.append('run.error', { run: id, slug: r.slug, error: e.message }));
+  return id;
+}
+
+// ── Express ──
 const app = express();
-// Same-machine tool: only allow the local web origin to call the API from a browser.
 app.use(cors({ origin: [/^http:\/\/localhost(:\d+)?$/, /^http:\/\/127\.0\.0\.1(:\d+)?$/] }));
-app.use(express.json({ limit: '2mb', verify: (req, _res, buf) => { req.rawBody = buf; } }));
-getDb();
+// Keep every response on the {error} JSON contract — a malformed body must not
+// return Express's default HTML error page.
+app.use((req, res, next) => express.json({ limit: '2mb', verify: (rq, _r, buf) => { rq.rawBody = buf; } })(req, res, (err) => {
+  if (err) return res.status(400).json({ error: `invalid request body: ${err.message}` });
+  next();
+}));
 
-const PORT = process.env.PORT || 4317;
-const now = () => Date.now();
-const j = (s) => { try { const v = JSON.parse(s); return Array.isArray(v) ? v : []; } catch { return []; } };
-const jObj = (s) => { try { return JSON.parse(s); } catch { return null; } };
-const meta = (k, d) => one('SELECT value FROM meta WHERE key=?', k)?.value ?? d;
-const setMeta = (k, v) => run('INSERT INTO meta (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', k, String(v));
+app.get('/api/health', (_q, res) => res.json({ ok: true }));
+app.get('/api/models', (_q, res) => res.json({ models: MODELS, efforts: EFFORTS, defaultModel: DEFAULT_MODEL }));
 
-// Verify a GitHub webhook HMAC (X-Hub-Signature-256) when a secret is configured.
+app.get('/api/stats', (_q, res) => {
+  const routines = daemon.routines;
+  const shaped = routines.map(shapeRoutine);
+  const dayAgo = now() - 86_400_000;
+  const finished = allRuns().filter((r) => ['succeeded', 'failed'].includes(r.status)).slice(-100);
+  const successRate = finished.length ? Math.round((100 * finished.filter((r) => r.status === 'succeeded').length) / finished.length) : null;
+  const spend = allRuns().reduce((a, r) => a + (r.costUsd || 0), 0);
+  res.json({
+    wordmark: 'Switchboard', killSwitch: !!state.killSwitch,
+    total: routines.length, enabled: routines.filter((r) => r.enabled).length,
+    teams: new Set(routines.map((r) => r.team || 'general')).size,
+    running: shaped.filter((r) => r.enabled && r.state === 'running').length,
+    failing: shaped.filter((r) => r.enabled && r.lastStatus === 'failing').length,
+    runsToday: allRuns().filter((r) => runStarted(r) > dayAgo).length,
+    successRate, spend: `$${spend.toFixed(2)}`,
+  });
+});
+
+app.get('/api/github/repos', async (req, res) => res.json({ repos: await listRepos({ owner: String(req.query.owner || ''), q: String(req.query.q || '') }) }));
+app.get('/api/github/orgs', async (_q, res) => res.json({ orgs: await listOrgs() }));
+app.get('/api/github/checks', async (req, res) => res.json({ checks: await listChecks(String(req.query.repo || '')) }));
+app.get('/api/github/labels', async (req, res) => {
+  const repo = String(req.query.repo || '').trim();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return res.json({ labels: [] });
+  const r = await gh(['api', `repos/${repo}/labels`, '--paginate', '--jq', '.[].name']);
+  res.json({ labels: r.code === 0 ? r.out.split('\n').map((s) => s.trim()).filter(Boolean) : [] });
+});
+
+app.get('/api/routines', (_q, res) => res.json(daemon.routines.map(shapeRoutine)));
+
+app.get('/api/routines/:slug', (req, res) => {
+  const r = bySlug(req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const runs = runsFor(r.slug);
+  const runHistory = runs.slice(-12).reverse().map((x) => ({ id: x.id, status: x.status, ago: relTime(ts(x)), dur: durOf(x), trigger: x.trigger ?? '' }));
+  const watches = watchRows((f) => f.slug === r.slug).slice(0, 20);
+  const leases = [...dispatcher.leases.entries()].filter(([, l]) => l.slug === r.slug && l.expiresAt > now())
+    .map(([key, l]) => ({ key, runId: l.runId, sha: l.sha ? String(l.sha).slice(0, 7) : '', held: relTime(l.acquiredAt), ttl: fmtDur(Math.max(0, l.expiresAt - now())) }));
+  const inboxTasks = [...state.tasks.entries()].flatMap(([key, list]) => list.filter((t) => t.slug === r.slug && !t.claimedBy).map((t) => ({ summary: t.summary, key, ago: relTime(Date.parse(t.at)) }))).slice(0, 20);
+  const lf = [...runs].reverse().find((x) => x.status === 'failed');
+  const lastError = lf ? { runId: lf.id, output: String(lf.output || lf.summary || '').slice(0, 400), ago: relTime(ts(lf)) } : null;
+  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, lastError });
+});
+
+app.post('/api/routines', (req, res) => {
+  const b = req.body || {};
+  const name = (b.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'A routine name is required.' });
+  const slug = slugify(b.slug || name);
+  if (!slug) return res.status(400).json({ error: 'A valid slug is required.' });
+  // Guard against a live routine, a same-slug file, OR a currently-failing file
+  // that would otherwise be silently shadowed by a new `${slug}.md`.
+  const fileConflict = existsSync(join(ROUTINES_DIR, `${slug}.md`)) || existsSync(join(ROUTINES_DIR, `${slug}.routine.md`))
+    || daemon.failures.some((f) => f.file.replace(/\.routine\.md$|\.md$/i, '') === slug);
+  if (bySlug(slug) || fileConflict) return res.status(409).json({ error: `A routine with slug "${slug}" already exists (or a same-named file is present).` });
+  writeRoutineFile(ROUTINES_DIR, slug, uiToMeta({ ...b, slug }), b.prompt);
+  daemon.reload();
+  const r = bySlug(slug);
+  if (!r) return res.status(400).json({ error: 'routine failed to load — check the definition' });
+  res.status(201).json(shapeRoutine(r));
+});
+
+// PUT merges UI-owned keys into the existing front matter so hand-written
+// richness (secrets, budgets, outputs, trigger guards on untouched sections…)
+// survives an edit from the form. Replacing `on:` wholesale is intentional —
+// the trigger list is what the form edits.
+app.put('/api/routines/:slug', (req, res) => {
+  const r = bySlug(req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const b = req.body || {};
+  const cur = uiConfig(r);
+  const merged = {
+    name: b.name ?? r.name, slug: r.slug, summary: b.summary ?? r.summary,
+    owner: b.owner ?? r.owner, team: b.team ?? r.team, enabled: r.enabled,
+    triggers: b.triggers ?? cur.triggers, schedule: b.schedule ?? cur.schedule,
+    filters: b.filters ?? cur.filters, connectors: b.connectors ?? cur.connectors,
+    model: b.model ?? cur.model, effort: b.effort ?? cur.effort,
+    repo: b.repo ?? cur.repo, branch: b.branch ?? cur.branch,
+    memory: b.memory ?? cur.memory, concurrency: b.concurrency ?? cur.concurrency,
+    retries: b.retries ?? cur.retries, chain: b.chain ?? cur.chain,
+    reactions: b.reactions ?? cur.reactions,
+  };
+  const uiMeta = uiToMeta(merged);
+  const fileHadModel = r.runtime.model !== '';
+  patchRoutineMeta(r.path, (meta) => {
+    meta.name = uiMeta.name; meta.slug = r.slug; meta.summary = uiMeta.summary;
+    meta.owner = uiMeta.owner; meta.team = uiMeta.team;
+    if (uiMeta.enabled === false) meta.enabled = false; else delete meta.enabled;
+    // on: merge — preserve every:/at:/after:/webhook:/connector triggers + guards
+    meta.on = mergeOn(meta.on, uiMeta.on, uiMeta.on.map((e) => (Object.keys(e)[0] === 'github' ? e.github.event : Object.keys(e)[0])));
+    if (uiMeta.chain) meta.chain = uiMeta.chain; else delete meta.chain;
+    // tools: the mcp grant is UI-owned; capabilities/scopes/deny are preserved
+    if (uiMeta.tools?.mcp?.length) meta.tools = { ...(meta.tools ?? {}), mcp: uiMeta.tools.mcp };
+    else if (meta.tools) { delete meta.tools.mcp; if (!Object.keys(meta.tools).length) delete meta.tools; }
+    // runtime: UI fields replaced; checkout/timeout/worktree/network preserved
+    const rt = { ...(meta.runtime ?? {}) };
+    for (const k of ['effort', 'repo', 'branch']) { if (uiMeta.runtime?.[k] !== undefined) rt[k] = uiMeta.runtime[k]; else delete rt[k]; }
+    // don't pin the default model onto a file that never named one (no-op save)
+    if (uiMeta.runtime?.model && (fileHadModel || uiMeta.runtime.model !== DEFAULT_MODEL)) rt.model = uiMeta.runtime.model;
+    else if (!fileHadModel) delete rt.model;
+    if (uiMeta.runtime?.repo && !rt.checkout) rt.checkout = 'none';   // UI routines use gh CLI, not a clone
+    if (Object.keys(rt).length) meta.runtime = rt; else delete meta.runtime;
+    // memory toggle
+    if (merged.memory) meta.state = { ...(meta.state ?? {}), enabled: true };
+    else if (meta.state?.files?.length) meta.state = { ...meta.state, enabled: false };
+    else delete meta.state;
+    // concurrency shorthand (an explicit lease/budget block is preserved untouched)
+    if (uiMeta.concurrency) meta.concurrency = { ...(meta.concurrency ?? {}), scope: uiMeta.concurrency.scope, on_conflict: uiMeta.concurrency.on_conflict };
+    else if (meta.concurrency) { delete meta.concurrency.scope; delete meta.concurrency.on_conflict; if (!Object.keys(meta.concurrency).length) delete meta.concurrency; }
+    // retry policy (other policy keys kept)
+    if (uiMeta.policy?.retry) meta.policy = { ...(meta.policy ?? {}), retry: uiMeta.policy.retry };
+    else if (meta.policy) { delete meta.policy.retry; if (!Object.keys(meta.policy).length) delete meta.policy; }
+    // flow: merge UI rows in, preserving handlers/done/budgets/subscribe
+    if (b.reactions !== undefined) { const mf = mergeFlow(meta.flow, b.reactions); if (mf) meta.flow = mf; else delete meta.flow; }
+    return meta;
+  });
+  // prompt: rebuild preserving the pre-Prompt preamble and every ## handler: section
+  if (b.prompt !== undefined && String(b.prompt).trim() !== r.prompt.trim()) {
+    const raw = readFileSync(r.path, 'utf8');
+    const m = raw.match(/^(---\r?\n[\s\S]*?\r?\n---\r?\n?)([\s\S]*)$/);
+    if (m) writeFileSync(r.path, m[1].replace(/\n?$/, '\n') + '\n' + rebuildBody(m[2], b.prompt));
+  }
+  daemon.reload();
+  const fresh = bySlug(r.slug);
+  if (!fresh) return res.status(400).json({ error: 'edit produced an invalid routine — check the file' });
+  res.json(shapeRoutine(fresh));
+});
+
+app.delete('/api/routines/:slug', (req, res) => {
+  const r = bySlug(req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  deleteRoutineFile(ROUTINES_DIR, r.file);
+  daemon.reload();
+  res.json({ ok: true });
+});
+
+app.post('/api/routines/:slug/enable', (req, res) => {
+  const r = bySlug(req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const en = !!req.body?.enabled;
+  patchRoutineMeta(r.path, (meta) => { if (en) delete meta.enabled; else meta.enabled = false; return meta; });
+  daemon.reload();
+  res.json({ ok: true, enabled: en });
+});
+
+// `/run` is the harness CLI's route (harness run <slug> routes here while the
+// app owns the folder, keeping one lease authority); `/dispatch` is the UI's.
+app.post(['/api/routines/:slug/dispatch', '/api/routines/:slug/run'], (req, res) => {
+  const r = bySlug(req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  if (state.killSwitch) return res.status(409).json({ error: 'kill switch engaged' });
+  const payload = req.body?.event ?? { event: 'manual', routine: r.slug, by: req.body?.by, inputs: req.body?.inputs ?? {}, dispatched_at: new Date().toISOString() };
+  const env = makeEnvelope('manual', 'manual', payload);
+  const runId = startRun(r, env, 'manual');
+  res.json({ ok: true, runId, run: runId, status: 'running' });
+});
+
+app.post('/api/routines/:slug/preview', (req, res) => {
+  const r = bySlug(req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const payload = req.body?.event && Object.keys(req.body.event).length ? req.body.event : { event: 'manual', routine: r.slug };
+  const env = makeEnvelope('manual', payload.event || 'manual', payload);
+  const { prompt } = buildRunPrompt(r, env, { extraConstraints: policyConstraints() });
+  const { allow } = allowedTools(r, { hasWorkspace: false });
+  let leaseKey = null;
+  if (r.concurrency.lease) leaseKey = renderTemplate(r.concurrency.lease.resource, buildContext({ event: env, runtime: r.runtime }));
+  else if (r.concurrency.scope && r.concurrency.scope !== 'off') {
+    const prNum = payload.pull_request?.number ?? payload.number;
+    const repo = env.repo ?? r.runtime.repo[0];
+    const scope = r.concurrency.scope === 'auto' ? ((repo && prNum) ? 'pr' : 'routine') : r.concurrency.scope;
+    leaseKey = scope === 'pr' && repo && prNum ? `${r.slug}@pr:${repo}#${prNum}` : scope === 'repo' && repo ? `${r.slug}@repo:${repo}` : `routine:${r.slug}`;
+  }
+  const wouldMatch = r.on.some((t) => triggerMatches(r, t, env));
+  res.json({ prompt, tools: r.tools.mcp, wouldMatch, leaseKey, allowedTools: allow, promptChars: prompt.length, estTokens: Math.round(prompt.length / 4) });
+});
+
+app.post('/api/routines/:slug/validate', async (req, res) => {
+  const r = bySlug(req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const st = await integrationStatus();
+  const cfg = uiConfig(r);
+  const checks = [
+    { label: 'Identity', ok: !!r.name && !!r.slug, detail: `${r.name} · ${r.file}` },
+    { label: 'Triggers', ok: r.on.length > 0, detail: cfg.triggers.join(', ') || 'no triggers — manual only' },
+    { label: 'Instruction', ok: !!(r.prompt && r.prompt.trim().length > 12), detail: `${(r.prompt || '').length} chars` },
+    { label: 'Model', ok: !cfg.model || MODEL_IDS.includes(cfg.model), detail: MODEL_IDS.includes(cfg.model) ? `${MODELS.find((m) => m.id === cfg.model)?.label || cfg.model}${cfg.effort ? ` · ${cfg.effort} effort` : ''}` : `unknown model "${cfg.model}" — pick a valid one` },
+  ];
+  const registryIds = new Set(Object.keys(daemon.registry));
+  for (const c of r.tools.mcp) {
+    if (c === 'github') checks.push({ label: 'Tool · gh', ok: st.github.connected, detail: st.github.connected ? `authed as @${st.github.account}` : 'gh not authed — run `gh auth login`' });
+    else if (c === 'slack') checks.push({ label: 'Tool · slack-post', ok: st.slack.connected, detail: st.slack.connected ? `${st.slack.team} · @${st.slack.bot}` : 'SLACK_BOT_TOKEN not set' });
+    else if (c === 'web' || c === 'webfetch') checks.push({ label: 'Tool · web', ok: true, detail: 'WebFetch / WebSearch' });
+    else if (registryIds.has(c)) checks.push({ label: `Tool · ${c}`, ok: true, detail: `MCP · mcp__${c}__*` });
+    else checks.push({ label: 'Tools', ok: false, detail: `not wired: ${c} — add it on the Connectors page, or remove it` });
+  }
+  for (const t of r.on) {
+    if (t.type !== 'schedule' || !t.config.cron) continue;
+    const parts = String(t.config.cron).trim().split(/\s+/);
+    const okCron = parts.length === 5 && parts.every((f) => /^[\d*,/?-]+$/.test(f));
+    checks.push({ label: 'Schedule cron', ok: okCron, detail: okCron ? t.config.cron : `"${t.config.cron}" is not a valid 5-field cron` });
+  }
+  (r.chain ?? []).forEach((c) => checks.push({ label: `Chain → ${c}`, ok: !!bySlug(c), detail: bySlug(c) ? 'resolves' : 'no such routine' }));
+  for (const w of r.warnings ?? []) checks.push({ label: 'Lint', ok: false, detail: w });
+  res.json({ ok: checks.every((c) => c.ok), checks });
+});
+
+app.get('/api/routines/:slug/raw', (req, res) => {
+  const r = bySlug(req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  res.json({ file: r.file, md: readFileSync(r.path, 'utf8') });
+});
+
+app.get('/api/routines/:slug/memory', (req, res) => {
+  const r = bySlug(req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  const dir = join(ROUTINES_DIR, 'state', r.slug);
+  const mdPath = join(dir, 'memory.md');
+  const exists = existsSync(mdPath);
+  const files = existsSync(dir) ? readdirSync(dir).filter((f) => f !== 'memory.md' && !f.startsWith('.')) : [];
+  res.json({ enabled: !!r.state.enabled, exists, md: exists ? readFileSync(mdPath, 'utf8') : '', files });
+});
+
+app.get('/api/templates', (_q, res) => res.json({
+  templates: [
+    { id: 'pr-reviewer', name: 'PR reviewer', desc: 'Review opened/updated PRs and comment', icon: '🔎', body: { triggers: ['pull_request'], connectors: ['github'], model: DEFAULT_MODEL, prompt: 'A pull request was opened or updated. Review the diff for bugs, risky changes, and missing tests, then post a concise review comment with `gh pr comment`.' } },
+    { id: 'daily-report', name: 'Daily report', desc: 'Scheduled standup summary to Slack', icon: '📊', body: { triggers: ['schedule'], schedule: '0 9 * * 1-5', connectors: ['github', 'slack'], model: DEFAULT_MODEL, prompt: "Summarize yesterday's merged PRs and open issues for the repo, then post a short digest to the team channel with `slack-post`." } },
+    { id: 'ci-watcher', name: 'CI failure watcher', desc: 'Triage failed checks', icon: '🚨', body: { triggers: ['check_run'], connectors: ['github', 'slack'], model: DEFAULT_MODEL, prompt: 'A CI check finished. If it failed, fetch the logs with `gh run view`, summarize the likely cause, and alert the author.' } },
+  ],
+}));
+
+app.post('/api/samples/load', async (req, res) => {
+  try {
+    const repos = await listRepos({});
+    const repo = String(req.body?.repo || '').trim() || repos[0] || '';
+    const { created, skipped } = seedSamples(repo);
+    res.json({ repo, routines: created, skipped });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Runs ──
+app.get('/api/runs', (_q, res) => {
+  const rows = allRuns().slice(-100).reverse().map((x) => ({
+    id: x.id, routineSlug: x.slug, routineName: bySlug(x.slug)?.name ?? x.slug,
+    status: x.status, ago: relTime(ts(x)), dur: durOf(x), trigger: x.trigger ?? '',
+  }));
+  res.json(rows);
+});
+
+app.get('/api/runs/:id/stream', (req, res) => {
+  const id = req.params.id;
+  const x = state.runs.get(id);
+  if (!x) return res.status(404).json({ error: 'not found' });
+  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+  res.flushHeaders?.();
+  const send = (m) => res.write(`data: ${JSON.stringify(m)}\n\n`);
+  for (const e of traceFor(id)) send({ kind: 'event', event: e });
+  if (!['running', 'waiting'].includes(x.status)) { send({ kind: 'done', status: x.status }); return res.end(); }
+  const ping = setInterval(() => res.write(':\n\n'), 25_000);
+  const onMsg = (m) => { send(m); if (m.kind === 'done') { cleanup(); res.end(); } };
+  const cleanup = () => { clearInterval(ping); runBus.off(id, onMsg); };
+  runBus.on(id, onMsg);
+  req.on('close', cleanup);
+});
+
+// The running agent's inbox — the `inbox` tool posts here (HARNESS_CONTROL_URL).
+app.post('/api/runs/:id/inbox', (req, res) => {
+  const id = req.params.id;
+  if (!state.runs.get(id)) return res.status(404).json({ error: 'not found' });
+  let key = null;
+  for (const [k, l] of dispatcher.leases) if (l.runId === id) key = k;
+  const pend = key ? dispatcher.pendingTasks(key) : [];
+  dispatcher.claimTasks(pend.map((t) => t.id), id);
+  res.json({ key, tasks: pend.map((t) => ({ id: t.id, summary: t.summary, event: t.payload })) });
+});
+
+app.post('/api/runs/:id/replay', (req, res) => {
+  const origId = req.params.id;
+  const x = state.runs.get(origId);
+  if (!x) return res.status(404).json({ error: 'not found' });
+  const r = bySlug(x.slug);
+  if (!r) return res.status(404).json({ error: 'routine no longer exists' });
+  if (state.killSwitch) return res.status(409).json({ error: 'kill switch engaged' });
+  const payload = { ...(x.event ?? {}), _replay: true };
+  const type = payload.event ?? x.type ?? 'manual';
+  const source = GITHUBISH_TYPES.has(type) ? 'github' : type;
+  const env = makeEnvelope(source, type, payload, { upstream: { routine: r.slug, run: origId } });
+  res.json({ ok: true, runId: startRun(r, env, `replay · ${origId}`) });
+});
+
+app.post('/api/runs/:id/cancel', (req, res) => {
+  const id = req.params.id;
+  const x = state.runs.get(id);
+  if (!x) return res.status(404).json({ error: 'not found' });
+  if (!['running', 'waiting'].includes(x.status)) return res.status(409).json({ error: `run is ${x.status}, not running` });
+  const killed = dispatcher.cancel(id);
+  daemon.log.append('run.cancel', { run: id, slug: x.slug, killed });
+  res.json({ ok: true, killed });
+});
+
+app.get('/api/runs/:id', (req, res) => {
+  const x = state.runs.get(req.params.id);
+  if (!x) return res.status(404).json({ error: 'not found' });
+  const id = req.params.id;
+  const r = bySlug(x.slug);
+  const running = x.status === 'running';
+  const ok = x.status === 'succeeded';
+  const trace = traceFor(id);
+  const toolAgg = new Map();
+  for (const e of trace) {
+    if (!e.tool) continue;
+    const a = toolAgg.get(e.tool) ?? { tool: e.tool, calls: 0, errors: 0 };
+    if (e.type === 'tool_use') a.calls++;
+    if (e.type === 'tool_result' && e.ok === 0) a.errors++;
+    toolAgg.set(e.tool, a);
+  }
+  const downstream = allRuns().filter((d) => d.upstream?.run === id)
+    .map((d) => ({ runId: d.id, routine: d.slug, status: d.status, dur: durOf(d), kind: kindOf(d) }));
+  const watches = watchRows((f) => f.run === id).map((w) => ({ target: w.target, source: w.source, kind: w.kind, when: w.when, status: w.status, detail: w.detail }));
+  let inbox = [];
+  for (const [key, list] of state.tasks) {
+    inbox = inbox.concat(list.filter((t) => t.claimedBy === id || (!t.claimedBy && [...dispatcher.leases.entries()].some(([k, l]) => k === key && l.runId === id)))
+      .map((t) => ({ summary: t.summary, ago: relTime(Date.parse(t.at)), pending: !t.claimedBy })));
+  }
+  res.json({
+    id, routine: x.slug, status: x.status, trigger: x.trigger ?? '', triggerKind: kindOf(x),
+    started: new Date(runStarted(x)).toLocaleTimeString(), elapsed: durOf(x),
+    model: x.model || r?.runtime.model || DEFAULT_MODEL,
+    cost: x.costUsd ?? null, turns: x.turns ?? null, sessionId: x.session ?? '',
+    inTokens: x.inTokens ?? null, outTokens: x.outTokens ?? null,
+    matchExplain: r && x.event ? explainMatch(r, x.event, x.type?.replace(/^manual$/, '') || '') : null,
+    stdout: x.output ?? x.summary ?? '', event: x.event ?? null, trace, inbox,
+    toolBreakdown: [...toolAgg.values()].filter((t) => t.calls > 0 || t.errors > 0).sort((a, b) => b.calls - a.calls),
+    lineage: { triggeredBy: x.upstream?.run ? { runId: x.upstream.run, routine: x.upstream.routine, kind: kindOf(x) } : null, downstream, watches },
+    awaiting: running ? 'auto-mode session running…' : null,
+    summary: {
+      result: running ? 'Running…' : ok ? (String(x.output ?? '').split('\n').pop()?.slice(0, 80) || 'Completed') : x.status === 'failed' ? 'Failed' : x.summary ?? x.status,
+      surface: (r?.tools.mcp ?? []).join(', ') || 'session',
+    },
+  });
+});
+
+// ── Events in ──
+function SAMPLE_PUSH() {
+  return {
+    event: 'push',
+    repository: DEFAULT_REPO,
+    ref: 'refs/heads/feat/oauth-login',
+    pusher: 'fabio',
+    head_commit: { id: 'a1b9f3c', message: 'wire up the OAuth callback handler' },
+    pull_request: { number: 42, title: 'Add OAuth login flow', state: 'open', base: 'main' },
+  };
+}
+function ingestGithubish(type, payload) {
+  const envs = fromGithub(type, payload ?? {});
+  const matched = new Set(); const runs = [];
+  for (const env of envs) {
+    const out = daemon.ingest(env);
+    if (out.error) return out;
+    out.matched.forEach((s) => matched.add(s));
+    runs.push(...out.runs);
+  }
+  return { matched: [...matched], runs };
+}
+app.post('/api/events/:type', (req, res) => {
+  const type = req.params.type;
+  const payload = type === 'push' && (!req.body || !Object.keys(req.body).length) ? SAMPLE_PUSH() : req.body;
+  const out = ingestGithubish(type, payload);
+  if (out.error) return res.status(409).json(out);
+  res.json({ ...out, event: payload });
+});
+
 function githubSignatureValid(req) {
-  const secret = process.env.GITHUB_WEBHOOK_SECRET || meta('webhook_secret', '');
-  if (!secret) return process.env.NODE_ENV !== 'production'; // fail-closed in prod, accept in local/dev
+  const secret = process.env.GITHUB_WEBHOOK_SECRET || secrets.webhookSecret || '';
+  if (!secret) return process.env.NODE_ENV !== 'production';
   const sig = req.get('x-hub-signature-256') || '';
-  if (!sig) return false; // a secret is set → an unsigned request is rejected
+  if (!sig) return false;
   const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(req.rawBody || Buffer.from('')).digest('hex');
   try { return sig.length === expected.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)); }
   catch { return false; }
 }
-if (process.env.NODE_ENV === 'production' && !process.env.GITHUB_WEBHOOK_SECRET)
-  console.warn('[switchboard] NODE_ENV=production but GITHUB_WEBHOOK_SECRET is unset — /api/webhooks/github will reject all requests until you set it.');
-
-// UI-configured secrets are stored in meta; load them into the process env so the
-// runner's child sessions and the integrations both see them (env wins if already set).
-const TOKEN_ENV = { slack: 'SLACK_BOT_TOKEN', atlassian: 'ATLASSIAN_API_TOKEN' };
-const ENV_BASE = {}; // the real shell-env tokens, so clearing a UI override restores them
-for (const [k, envKey] of Object.entries(TOKEN_ENV)) {
-  ENV_BASE[envKey] = process.env[envKey];
-  const v = meta(`token_${k}`, ''); if (v && !process.env[envKey]) process.env[envKey] = v;
+const _recentDeliveries = new Map();
+function isDuplicateDelivery(key) {
+  if (!key) return false;
+  const prev = _recentDeliveries.get(key);
+  _recentDeliveries.set(key, now());
+  if (_recentDeliveries.size > 1000) for (const [k, v] of _recentDeliveries) if (now() - v > 600_000) _recentDeliveries.delete(k);
+  return prev != null && now() - prev < 600_000;
 }
+app.post('/api/webhooks/github', (req, res) => {
+  if (!githubSignatureValid(req)) return res.status(401).json({ error: 'invalid webhook signature' });
+  const type = req.get('x-github-event') || 'push';
+  if (type === 'ping') return res.json({ ok: true, pong: true });
+  const deliveryId = req.get('x-github-delivery') || '';
+  if (isDuplicateDelivery(deliveryId)) return res.json({ ok: true, duplicate: true });
+  const out = ingestGithubish(type, req.body || {});
+  if (out.error) return res.status(409).json(out);
+  res.json({ ok: true, ...out });
+});
 
-// ── Custom MCP servers: user drops in a config + auth; routines grant them ──────
-const mcpNameSet = () => new Set(all('SELECT name FROM mcp_servers').map((s) => s.name));
+const receiverUrl = () => (state.webhookUrl ? state.webhookUrl.replace(/\/$/, '') + '/api/webhooks/github' : '');
+app.get('/api/webhooks/config', (_q, res) => res.json({
+  publicUrl: state.webhookUrl || '',
+  receiverUrl: receiverUrl(),
+  secretSet: !!(process.env.GITHUB_WEBHOOK_SECRET || secrets.webhookSecret),
+}));
+app.post('/api/webhooks/config', (req, res) => {
+  const url = String(req.body?.publicUrl || '').trim().replace(/\/$/, '');
+  if (url) { try { new URL(url); } catch { return res.status(400).json({ error: 'invalid URL' }); } }
+  state.webhookUrl = url;
+  daemon.log.append('control.webhook-url', { url });
+  res.json({ ok: true, publicUrl: url, receiverUrl: receiverUrl() });
+});
+app.post('/api/webhooks/secret', (_q, res) => {
+  secrets.webhookSecret = crypto.randomBytes(24).toString('hex');
+  saveSecrets(secrets);
+  res.json({ ok: true, secretSet: true }); // never returns the secret
+});
+
+app.post('/api/kill-switch', (req, res) => {
+  state.killSwitch = !!req.body?.engaged;
+  daemon.log.append('control.kill', { engaged: state.killSwitch, by: 'ui' });
+  res.json({ killSwitch: state.killSwitch });
+});
+
+// ── Connectors & MCP (registry = connectors.yaml + builtins; auth = .secrets.json) ──
+const customConnectors = () => Object.values(daemon.registry).filter((c) => !isBuiltinConnector(c.id) && (c.kind ?? 'mcp') === 'mcp');
+const isMcpRemoteDef = (def) => def?.command === 'npx' && Array.isArray(def?.args) && def.args.includes('mcp-remote');
+const mcpRemoteUrl = (def) => (isMcpRemoteDef(def) ? def.args.find((a) => /^https?:\/\//.test(a)) : def?.url) || '';
+const mcpRemoteDef = (url) => ({ command: 'npx', args: ['-y', 'mcp-remote', url] });
 const maskConfig = (cfg) => {
   const c = JSON.parse(JSON.stringify(cfg || {}));
   if (c.env) for (const k of Object.keys(c.env)) c.env[k] = '••••';
   if (c.headers) for (const k of Object.keys(c.headers)) c.headers[k] = '••••';
   return c;
 };
-// Wrap a remote MCP URL with mcp-remote — the drop-in proxy that handles the OAuth 2.1
-// browser flow + token storage (~/.mcp-auth) and --header token auth for Claude.
-const mcpRemoteDef = (url) => ({ command: 'npx', args: ['-y', 'mcp-remote', url] });
-const isMcpRemote = (def) => def?.command === 'npx' && Array.isArray(def?.args) && def.args.includes('mcp-remote');
-const mcpRemoteUrl = (def) => (isMcpRemote(def) ? def.args.find((a) => /^https?:\/\//.test(a)) : def?.url) || '';
 
-// Normalize whatever the user pasted into { name, def }. Accepts a bare def,
-// a single-key wrapper { betterstack: {...} }, or a full { mcpServers: { name: def } }.
+app.get('/api/connectors', async (_q, res) => {
+  const st = await integrationStatus();
+  const uses = (key) => daemon.routines.filter((r) => r.enabled && r.tools.mcp.includes(key)).length;
+  const since7 = now() - 7 * 86_400_000;
+  const agg = {};
+  for (const x of allRuns()) { if (runStarted(x) > since7) { const e = (agg[x.slug] ||= { runs: 0, cost: 0 }); e.runs++; e.cost += x.costUsd || 0; } }
+  const usageFor = (key) => {
+    let runs = 0, cost = 0;
+    for (const r of daemon.routines) if (r.tools.mcp.includes(key)) { const a = agg[r.slug]; if (a) { runs += a.runs; cost += a.cost; } }
+    return { runs7d: runs, cost7d: +cost.toFixed(2) };
+  };
+  const out = [
+    { code: 'GH', name: 'GitHub', kind: 'CLI · gh', health: st.github.connected ? 'ok' : 'off', auth: st.github.connected ? `gh · @${st.github.account}` : 'run `gh auth login`', scopes: 'read/write PRs, issues, checks, gists', routines: uses('github'), ...usageFor('github'), avColor: '#7f9bd1', testable: true, configKey: '' },
+    { code: 'SL', name: 'Slack', kind: 'Bot', health: st.slack.connected ? 'ok' : 'off', auth: st.slack.connected ? `${st.slack.team} · @${st.slack.bot}` : 'set a bot token', scopes: 'post messages via slack-post', routines: uses('slack'), ...usageFor('slack'), avColor: '#c9a24a', testable: true, configKey: 'slack' },
+    { code: 'WB', name: 'Web fetch', kind: 'Built-in', health: 'ok', auth: 'no auth needed', scopes: 'fetch & read public URLs', routines: uses('web'), ...usageFor('web'), avColor: '#8aa0b8', testable: true, configKey: '' },
+  ];
+  for (const c of customConnectors()) {
+    const def = c.config ?? {};
+    const authed = !!secrets.mcpAuth[c.id]?.token;
+    const remote = isMcpRemoteDef(def);
+    const transport = remote ? `remote · ${mcpRemoteUrl(def)}` : def.command ? `stdio · ${def.command}` : def.url ? `http · ${def.url}` : 'custom MCP';
+    out.push({ code: c.id, name: c.id, kind: remote ? 'MCP · remote' : 'MCP', health: 'ok', auth: `${transport}${authed ? ' · 🔑 token' : ''}`, scopes: `mcp__${c.id}__*`, routines: uses(c.id), ...usageFor(c.id), avColor: '#b49ae6', testable: true, configKey: '', mcp: true, authed, remote });
+  }
+  res.json(out);
+});
+
+// Boot a tiny session with just this server's config and read the init event.
+async function testMcp(name) {
+  const fake = { tools: { mcp: [name], capabilities: [], scopes: {}, deny: [] } };
+  const mcp = buildMcpConfig(fake, daemon.registry, { runId: `test-${name}`, auth: secrets.mcpAuth });
+  if (!mcp.path) return { ok: false, detail: 'not configured' };
+  let init = null;
+  const r = await runClaude('Reply with the single word OK.', { mcpConfig: mcp.path, timeoutMs: 60_000, onEvent: (o) => { if (o.type === 'system' && o.subtype === 'init') init = o; } });
+  if (init) {
+    const srv = (init.mcp_servers || []).find((s) => s.name === name) || (init.mcp_servers || [])[0];
+    const tools = (init.tools || []).filter((t) => typeof t === 'string' && t.startsWith(`mcp__${name}__`));
+    if (srv) return { ok: srv.status !== 'failed', detail: `${name}: ${srv.status || 'loaded'} · ${tools.length} tool${tools.length === 1 ? '' : 's'}` };
+    return { ok: false, detail: 'server did not load into the session' };
+  }
+  return { ok: false, detail: (r.stderr || `claude exited ${r.code}`).slice(0, 100) };
+}
+app.post('/api/connectors/:code/test', async (req, res) => {
+  const t0 = now();
+  const code = req.params.code;
+  const isCustom = customConnectors().some((c) => c.id === code);
+  const result = isCustom ? await testMcp(code) : await testConnector(code, req.body || {});
+  res.json({ ...result, latencyMs: now() - t0 });
+});
+app.post('/api/connectors/:code/config', (req, res) => {
+  const code = String(req.params.code || '').toLowerCase();
+  const envKey = TOKEN_ENV[code];
+  if (!envKey) return res.status(400).json({ error: 'this connector has no configurable token' });
+  const token = String(req.body?.token || '').trim();
+  if (token) { secrets.tokens[code] = token; process.env[envKey] = token; }
+  else { delete secrets.tokens[code]; if (ENV_BASE[envKey]) process.env[envKey] = ENV_BASE[envKey]; else delete process.env[envKey]; }
+  saveSecrets(secrets);
+  bustStatus();
+  res.json({ ok: true, configured: !!token });
+});
+
+app.get('/api/mcp', (_q, res) => res.json(customConnectors().map((c) => {
+  const auth = secrets.mcpAuth[c.id] || {};
+  return { name: c.id, config: maskConfig(c.config), remote: isMcpRemoteDef(c.config), url: mcpRemoteUrl(c.config), auth: { configured: !!auth.token, scheme: auth.scheme || 'bearer', header: auth.header || '' } };
+})));
+app.post('/api/mcp/:name/auth', (req, res) => {
+  if (!customConnectors().some((c) => c.id === req.params.name)) return res.status(404).json({ error: 'not found' });
+  const token = String(req.body?.token || '').trim();
+  const scheme = ['bearer', 'raw'].includes(req.body?.scheme) ? req.body.scheme : 'bearer';
+  const header = String(req.body?.header || '').trim();
+  if (token) secrets.mcpAuth[req.params.name] = { token, scheme, header };
+  else delete secrets.mcpAuth[req.params.name];
+  saveSecrets(secrets);
+  res.json({ ok: true, configured: !!token });
+});
+
 const isDef = (o) => o && typeof o === 'object' && (o.command || o.url);
 function normalizeMcp(name, cfg) {
   if (typeof cfg === 'string') cfg = JSON.parse(cfg);
@@ -82,1211 +881,16 @@ function normalizeMcp(name, cfg) {
   }
   return { name, def: cfg };
 }
-// Write an --mcp-config file for the granted MCP server names; null if none configured.
-function writeMcpConfig(grantedNames) {
-  const set = mcpNameSet();
-  const names = [...new Set((grantedNames || []).filter((n) => set.has(n)))];
-  if (!names.length) return null;
-  const mcpServers = {};
-  for (const n of names) {
-    const row = one('SELECT config, auth FROM mcp_servers WHERE name=?', n);
-    if (!row) continue;
-    const def = jObj(row.config) || {};
-    const auth = jObj(row.auth) || {};
-    if (auth.token) {
-      const value = auth.scheme === 'raw' ? auth.token : `Bearer ${auth.token}`;
-      if (isMcpRemote(def)) def.args = [...def.args, '--header', `${auth.header || 'Authorization'}: ${value}`];
-      else if (def.url) def.headers = { ...(def.headers || {}), [auth.header || 'Authorization']: value };
-      else def.env = { ...(def.env || {}), [auth.header || 'API_KEY']: auth.token };
-    }
-    mcpServers[n] = def;
-  }
-  const path = join(tmpdir(), `sb-mcp-${Math.random().toString(36).slice(2)}.json`);
-  writeFileSync(path, JSON.stringify({ mcpServers }));
-  return path;
-}
-// Test a server by booting a tiny session with just its config and reading the init event.
-async function testMcp(name) {
-  const path = writeMcpConfig([name]);
-  if (!path) return { ok: false, detail: 'not configured' };
-  let init = null;
-  const res = await runClaude('Reply with the single word OK.', { mcpConfig: path, timeoutMs: 60_000, onEvent: (o) => { if (o.type === 'system' && o.subtype === 'init') init = o; } });
-  try { unlinkSync(path); } catch { /* ignore */ }
-  if (init) {
-    const srv = (init.mcp_servers || []).find((s) => s.name === name) || (init.mcp_servers || [])[0];
-    const tools = (init.tools || []).filter((t) => typeof t === 'string' && t.startsWith(`mcp__${name}__`));
-    if (srv) return { ok: srv.status !== 'failed', detail: `${name}: ${srv.status || 'loaded'} · ${tools.length} tool${tools.length === 1 ? '' : 's'}` };
-    return { ok: false, detail: 'server did not load into the session' };
-  }
-  return { ok: false, detail: (res.stderr || `claude exited ${res.code}`).slice(0, 100) };
-}
-
-// Per-routine persistent memory: a memory.md index + any supporting files.
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const MEM_ROOT = process.env.SWITCHBOARD_MEMORY || join(__dirname, '..', 'memory');
-const memDirFor = (slug) => join(MEM_ROOT, String(slug).replace(/[^a-z0-9_-]/gi, '_'));
-function ensureMemory(slug) {
-  const dir = memDirFor(slug);
-  mkdirSync(dir, { recursive: true });
-  const md = join(dir, 'memory.md');
-  if (!existsSync(md)) writeFileSync(md, `# Memory — ${slug}\n\nThe index of what this routine has learned across runs. Add durable facts below; link supporting files like [decisions](decisions.md).\n\n## Facts\n\n`);
-  return dir;
-}
-
-// ── Config normalizers ──────────────────────────────────────────────────────────
-const cleanFilters = (f) => {
-  const o = f && typeof f === 'object' ? f : {};
-  const arr = (x) => (Array.isArray(x) ? x.map((s) => String(s).trim()).filter(Boolean) : []);
-  if (Array.isArray(o.groups)) {
-    const FIELDS = ['action', 'check', 'branch', 'base', 'label', 'author', 'title', 'draft'];
-    const OPS = ['is', 'is_not', 'contains', 'matches'];
-    const groups = o.groups.map((g) => ({
-      match: g && g.match === 'any' ? 'any' : 'all',
-      conditions: (Array.isArray(g?.conditions) ? g.conditions : []).map((c) => ({
-        field: FIELDS.includes(c?.field) ? c.field : 'action',
-        op: OPS.includes(c?.op) ? c.op : 'is',
-        values: arr(c?.values),
-      })).filter((c) => c.values.length || c.op === 'is_not'),
-    })).filter((g) => g.conditions.length);
-    return { match: o.match === 'any' ? 'any' : 'all', groups };
-  }
-  return { actions: arr(o.actions), branches: arr(o.branches), labels: arr(o.labels), mode: o.mode === 'or' ? 'or' : 'and' };
-};
-const normRetries = (n) => Math.max(0, Math.min(3, parseInt(n, 10) || 0));
-const cleanConcurrency = (c) => {
-  const o = c && typeof c === 'object' ? c : {};
-  return { scope: ['auto', 'pr', 'repo', 'routine', 'off'].includes(o.scope) ? o.scope : 'auto', onConflict: ['wait', 'drop', 'coalesce'].includes(o.onConflict) ? o.onConflict : 'wait' };
-};
-const cleanReactions = (arr) => (Array.isArray(arr) ? arr : [])
-  .map((x) => ({ source: String(x.source || '').trim(), kind: String(x.kind || '').trim(), when: String(x.when || '').trim(), check: String(x.check || '').trim(), run: String(x.run || '').trim() }))
-  .filter((x) => x.source && x.kind && x.run);
-
-function relTime(ts) {
-  if (!ts) return '—';
-  const d = now() - ts;
-  if (d < 4000) return 'now';
-  if (d < 60_000) return `${Math.round(d / 1000)}s ago`;
-  if (d < 3_600_000) return `${Math.round(d / 60_000)}m ago`;
-  if (d < 86_400_000) return `${Math.round(d / 3_600_000)}h ago`;
-  return `${Math.round(d / 86_400_000)}d ago`;
-}
-const fmtDur = (ms) => (ms == null ? '…' : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`);
-const fmtOffset = (ms) => `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, '0')}`;
-
-// ── Concurrency leases: no two runs act on the same entity at once ──────────────
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const LEASE_TTL = 15 * 60_000; // a crashed run's lease frees itself after this
-const eventSha = (e) => e?.pull_request?.head?.sha || e?.after || e?.check_suite?.head_sha || e?.workflow_run?.head_sha || e?.head_commit?.id || '';
-const lightPrRef = (e, routine) => { const repo = eventRepo(e) || repoTargets(routine)[0]; const num = e?.pull_request?.number ?? e?.number; return repo && num ? { repo, pr: num } : null; };
-function leaseFor(routine, event) {
-  let conc; try { conc = JSON.parse(routine.concurrency || '{}'); } catch { conc = {}; }
-  let scope = conc.scope || 'auto';
-  const pr = lightPrRef(event, routine);
-  if (scope === 'auto') scope = pr ? 'pr' : 'routine';
-  const onConflict = ['drop', 'coalesce'].includes(conc.onConflict) ? conc.onConflict : 'wait';
-  const sha = eventSha(event);
-  // Keys are per-routine so a routine never overlaps itself on an entity, but distinct
-  // routines act on the same PR independently (and coalesce hands off to its OWN agent).
-  if (scope === 'off') return { key: null, onConflict, sha: '', prRef: null };
-  if (scope === 'pr' && pr) return { key: `${routine.slug}@pr:${pr.repo}#${pr.pr}`, onConflict, sha, prRef: pr };
-  if (scope === 'repo') { const repo = pr?.repo || repoTargets(routine)[0] || eventRepo(event); return { key: repo ? `${routine.slug}@repo:${repo}` : `routine:${routine.slug}`, onConflict, sha, prRef: null }; }
-  return { key: `routine:${routine.slug}`, onConflict, sha, prRef: null };
-}
-// Atomic (node:sqlite is synchronous): steals an expired lease, else reports the holder.
-function acquireLease(key, runId, slug, sha) {
-  const cur = one('SELECT * FROM leases WHERE key=?', key);
-  if (cur && cur.run_id !== runId && cur.expires_at > now()) return { ok: false, holder: cur.run_id };
-  run('INSERT INTO leases (key,run_id,routine_slug,head_sha,acquired_at,expires_at) VALUES (?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET run_id=excluded.run_id, routine_slug=excluded.routine_slug, head_sha=excluded.head_sha, acquired_at=excluded.acquired_at, expires_at=excluded.expires_at',
-    key, runId, slug, sha || '', now(), now() + LEASE_TTL);
-  return { ok: true };
-}
-const releaseLease = (key, runId) => { if (key) run('DELETE FROM leases WHERE key=? AND run_id=?', key, runId); };
-// SHA barrier: the PR's live head, so a run whose PR moved (e.g. while it waited on the
-// lease) stands down instead of acting on an outdated diff. Best-effort — '' = skip the check.
-async function livePrHeadSha(repo, pr) {
-  try { const r = await gh(['pr', 'view', String(pr), '--repo', repo, '--json', 'headRefOid', '--jq', '.headRefOid']); return r.code === 0 ? r.out.trim() : ''; }
-  catch { return ''; }
-}
-
-// ── Task inbox: when concurrency=coalesce, a new event that would overlap a running
-//    agent is handed off as a TASK onto that agent's plate (keyed by the lease) instead
-//    of spawning a second agent. The running agent drains its inbox before wrapping up. ──
-const handoffSummary = (event, triggerLabel) => {
-  const e = event || {};
-  const pr = e.pull_request?.number ?? e.number;
-  const sha = (eventSha(e) || '').slice(0, 7);
-  const who = e.sender?.login || e.pull_request?.user?.login;
-  const parts = [String(triggerLabel || e.event || 'event').replace(/ · .*/, '')];
-  if (e.action) parts.push(e.action);
-  if (pr) parts.push(`PR #${pr}`);
-  if (sha) parts.push(`@${sha}`);
-  if (who) parts.push(`by ${who}`);
-  return parts.join(' ');
-};
-const addTask = (slug, key, event, originRun, triggerLabel) =>
-  run('INSERT INTO run_tasks (routine_slug,lease_key,summary,payload,origin_run,created_at) VALUES (?,?,?,?,?,?)',
-    slug, key, handoffSummary(event, triggerLabel), JSON.stringify(event || {}), originRun || '', now());
-const pendingTasks = (slug, key) => all("SELECT * FROM run_tasks WHERE routine_slug=? AND lease_key=? AND handled_by='' ORDER BY created_at", slug, key);
-const claimTasks = (ids, runId) => { if (ids.length) run(`UPDATE run_tasks SET handled_by=? WHERE id IN (${ids.map(() => '?').join(',')})`, runId, ...ids); };
-
-// Runtime options the CLI actually accepts (verified against `claude --model/--effort`).
-const MODELS = [
-  { id: 'claude-opus-4-8', label: 'Opus 4.8' },
-  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
-  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
-  { id: 'claude-fable-5', label: 'Fable 5' },
-];
-const MODEL_IDS = MODELS.map((m) => m.id);
-const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
-const DEFAULT_MODEL = 'claude-opus-4-8';
-const normModel = (m) => (MODEL_IDS.includes((m || '').trim()) ? m.trim() : DEFAULT_MODEL);
-const normEffort = (e) => (EFFORTS.includes((e || '').trim()) ? e.trim() : '');
-
-// Redact obvious secrets before a trace event is ever written to disk.
-const MAX_PAYLOAD = 16_000;
-const redact = (s) => String(s)
-  .replace(/xox[baprs]-[A-Za-z0-9-]+/g, 'xoxb-***')
-  .replace(/gh[pousr]_[A-Za-z0-9]{20,}/g, 'gh***')
-  .replace(/-----BEGIN[\s\S]*?PRIVATE KEY-----/g, '***private-key***');
-
-const shapeRoutine = (r) => {
-  const recent = all('SELECT status FROM runs WHERE routine_slug=? ORDER BY created_at DESC LIMIT 12', r.slug).map((x) => x.status).reverse();
-  const finished = recent.filter((s) => s === 'succeeded' || s === 'failed');
-  const successRate = finished.length ? Math.round((100 * finished.filter((s) => s === 'succeeded').length) / finished.length) : null;
-  return {
-    slug: r.slug, name: r.name, summary: r.summary,
-    owner: r.owner, team: r.team, ownerColor: r.av_color, initials: r.initials,
-    triggers: j(r.triggers), connectors: j(r.connectors), chain: j(r.chain),
-    schedule: r.schedule || '', filters: jObj(r.filters) || {}, reactions: j(r.reactions),
-    concurrency: jObj(r.concurrency) || {},
-    model: r.model, effort: r.effort || '', memory: !!r.memory, repo: r.repo, branch: r.branch,
-    state: r.enabled ? r.state : 'disabled', enabled: !!r.enabled,
-    lastAgo: r.last_ago, lastStatus: r.last_status, next: r.next,
-    recent, successRate, spend: r.spend, avg: r.avg, runCount: recent.length,
-    retries: r.retries || 0,
-    inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
-  };
-};
-
-function detailOf(r) {
-  const repos = (r.repo || '').split(',').map((s) => s.trim()).filter(Boolean);
-  const flt = jObj(r.filters) || {};
-  const conns = j(r.connectors);
-  return {
-    breadcrumb: ['Fleet', r.slug],
-    file: `${r.slug}.routine.md`,
-    frontMatter: {
-      on: j(r.triggers).map((t) => ({ key: `trigger · ${t}`, detail: t === 'schedule' && r.schedule ? r.schedule : '' })),
-      tools: conns.map((c) => ({ sign: '+', name: c, tone: 'ok' })),
-      runtime: [r.model || DEFAULT_MODEL, `${r.effort ? `· ${r.effort} effort ` : ''}· repos ${repos.join(', ') || '*'}`, `· branch ${r.branch || 'main'}`],
-      filters: { actions: flt.actions || [], branches: flt.branches || [] },
-    },
-    // trigger → session → (tools), reflecting the real shape only.
-    flowNodes: [
-      { title: j(r.triggers)[0] || 'trigger', sub: 'on' },
-      { title: 'session', sub: r.slug, tone: 'run' },
-      ...(conns.length ? [{ title: conns.join(' + '), sub: 'tools' }] : []),
-    ],
-    prompt: r.prompt && r.prompt.trim() ? r.prompt : `## Prompt\n${r.summary}`,
-  };
-}
-
-const AV_PALETTE = ['#d98a5c', '#c9a24a', '#6fae9a', '#7f9bd1', '#c98fb0', '#b59ad6', '#5b9ee6', '#5fbf86', '#e6b052'];
-const ownerColor = (name) => { let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0; return AV_PALETTE[h % AV_PALETTE.length]; };
-const initialsOf = (name) => { const p = name.trim().split(/\s+/).filter(Boolean); return !p.length ? '??' : (p.length === 1 ? p[0].slice(0, 2) : p[0][0] + p[p.length - 1][0]).toUpperCase(); };
-const slugify = (s) => s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-const runId = () => 'run_' + Math.random().toString(36).slice(2, 9);
-
-function logActivity(text, state) {
-  run('INSERT INTO activity (time,text,state,ord) VALUES (?,?,?,?)',
-    new Date().toISOString().slice(11, 19), text, state, (one('SELECT MAX(ord) AS m FROM activity').m ?? -1) + 1);
-}
-
-// Live session processes by run id — so a run can be cancelled mid-flight.
-const liveChildren = new Map();
-const canceledRuns = new Set(); // run ids the user canceled — finalize skips retry
-
-// Auto-retry a failed run (transient: claude/gh/timeout) with backoff, up to r.retries.
-const RETRY_DELAYS = [5_000, 20_000, 60_000];
-function maybeRetry(r, rawEvent, triggerLabel, attempt) {
-  const max = r.retries || 0;
-  if (attempt >= max) return false;
-  const next = attempt + 1;
-  const delay = RETRY_DELAYS[attempt] || 60_000;
-  const base = String(triggerLabel || '').replace(/^retry \d+\/\d+ · /, '');
-  logActivity(`${r.slug} failed — auto-retry ${next}/${max} in ${Math.round(delay / 1000)}s`, 'queued');
-  setTimeout(() => {
-    // Re-fetch at fire time: the user may have disabled or edited the routine meanwhile.
-    const fresh = one('SELECT * FROM routines WHERE slug=? AND enabled=1', r.slug);
-    if (fresh) executeRoutine(fresh, { ...(rawEvent || {}), _attempt: next }, `retry ${next}/${max} · ${base}`);
-    else logActivity(`${r.slug} retry ${next}/${max} dropped · routine disabled or deleted`, 'idle');
-  }, delay).unref?.();
-  return true;
-}
-
-// ── Execution: build prompt → run an auto-mode session → capture trace → chain ─
-function executeRoutine(r, rawEvent, triggerLabel) {
-  const id = runId();
-  const created = now();
-  const ord = (one('SELECT MAX(ord) AS m FROM runs').m ?? -1) + 1;
-  run(`INSERT INTO runs (id,routine_slug,status,ago,dur,trigger,ord,output,event,created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
-    id, r.slug, 'running', 'now', '…', triggerLabel, ord, '', JSON.stringify(rawEvent ?? {}), created);
-  run('UPDATE runs SET upstream_run=? WHERE id=?', rawEvent?.upstream?.run || '', id);
-  run('UPDATE routines SET state=?, last_ago=?, last_status=? WHERE slug=?', 'running', 'now', 'running', r.slug);
-
-  // Kill switch is authoritative HERE, not just at the ingress endpoints — async re-entry
-  // paths (queued retries, chain follow-ups, inbox drains, in-flight reaction ticks) all
-  // funnel into executeRoutine, so this is the one check they can't bypass.
-  if (meta('kill_switch', 'false') === 'true') {
-    run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", 'kill switch engaged — skipped', id);
-    run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
-    logActivity(`${r.slug} skipped · kill switch engaged`, 'failing');
-    return id;
-  }
-  // Auto-pause: if a required connector is offline, skip (don't burn a session that'll fail).
-  if (meta('skip_on_connector_down', '1') === '1') {
-    const need = j(r.connectors); const down = [];
-    if (need.includes('github') && _intCache.github && _intCache.github.connected === false) down.push('github');
-    if (need.includes('slack') && _intCache.slack && _intCache.slack.connected === false) down.push('slack');
-    if (down.length) {
-      run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", `connector offline: ${down.join(', ')} — skipped (not failed)`, id);
-      run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
-      logActivity(`${r.slug} skipped · ${down.join(', ')} offline`, 'idle');
-      return id;
-    }
-  }
-
-  (async () => {
-    // Concurrency guard: acquire the routine's lease before doing any work so two
-    // runs never act on the same entity (PR / repo / routine) at once.
-    const { key: leaseK, onConflict, sha, prRef } = leaseFor(r, rawEvent ?? {});
-    if (leaseK) {
-      let lease = acquireLease(leaseK, id, r.slug, sha);
-      if (!lease.ok) {
-        if (onConflict === 'coalesce') {
-          // Hand off to the running agent: drop this run, add the event to its inbox.
-          addTask(r.slug, leaseK, rawEvent ?? {}, id, triggerLabel);
-          run("UPDATE runs SET status='coalesced', dur='—', output=? WHERE id=?", `handed off to ${lease.holder} — added to its task inbox for ${leaseK}`, id);
-          run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
-          logActivity(`${r.slug} coalesced → ${lease.holder} · ${leaseK} (handoff)`, 'idle');
-          return;
-        }
-        if (onConflict === 'drop') {
-          run("UPDATE runs SET status='skipped', dur=?, output=? WHERE id=?", '—', `stood down — ${leaseK} is held by ${lease.holder}`, id);
-          run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
-          logActivity(`${r.slug} stood down · ${leaseK} held by ${lease.holder}`, 'idle');
-          return;
-        }
-        run("UPDATE runs SET status='waiting', dur=? WHERE id=?", `waiting · ${leaseK}`, id);
-        logActivity(`${r.slug} waiting · ${leaseK} held by ${lease.holder}`, 'queued');
-        const deadline = now() + LEASE_TTL;
-        while (now() < deadline) {
-          await sleep(3000);
-          if (canceledRuns.has(id)) break; // canceled while waiting — don't take the lease
-          lease = acquireLease(leaseK, id, r.slug, sha);
-          if (lease.ok) break;
-        }
-        // A cancel that landed while we waited already finalized the run row — stand down.
-        if (canceledRuns.delete(id)) { releaseLease(leaseK, id); return; }
-        if (!lease.ok) {
-          run("UPDATE runs SET status='failed', dur='—', output=? WHERE id=?", `gave up waiting for ${leaseK}`, id);
-          run("UPDATE routines SET state='idle', last_status='failing' WHERE slug=?", r.slug);
-          return;
-        }
-      }
-      // SHA barrier: once we hold the lease, if the PR's head moved past the SHA this
-      // event was for (someone pushed, e.g. while we waited), stand down as stale.
-      if (sha && prRef) {
-        const live = await livePrHeadSha(prRef.repo, prRef.pr);
-        if (live && live !== sha) {
-          releaseLease(leaseK, id);
-          run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", `stood down — ${prRef.repo}#${prRef.pr} head moved to ${live.slice(0, 7)} (this run was for ${sha.slice(0, 7)})`, id);
-          run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
-          logActivity(`${r.slug} stood down · ${leaseK} head ${sha.slice(0, 7)}→${live.slice(0, 7)} (stale)`, 'idle');
-          return;
-        }
-      }
-      run("UPDATE runs SET status='running' WHERE id=?", id);
-    }
-
-    try {
-    // The session is autonomous: it gets the natural instruction + the raw event +
-    // its granted tools, and does the work itself (gh, slack-post, web…) — the harness
-    // only routes, captures the trace, and enforces guardrails.
-    const tools = j(r.connectors);
-    const memoryDir = r.memory ? ensureMemory(r.slug) : null;
-    const mcpGranted = tools.filter((c) => !['github', 'slack', 'web', 'webfetch'].includes(c));
-    const mcpConfig = mcpGranted.length ? writeMcpConfig(mcpGranted) : null;
-    const coalesce = onConflict === 'coalesce' && !!leaseK;
-    const seedTasks = Array.isArray(rawEvent?.tasks) ? rawEvent.tasks : [];
-    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints(), { memoryDir, coalesce, seedTasks });
-    run('UPDATE runs SET prompt=? WHERE id=?', prompt, id);
-
-    // Step-level trace: normalize each stream-json event into a run_events row,
-    // persisted as the session runs so the UI fills in near-live via polling.
-    let seq = 0;
-    const t0 = now();
-    const toolById = new Map();
-    const putEvt = (type, tool, ok, payload) => {
-      let p = redact(typeof payload === 'string' ? payload : JSON.stringify(payload));
-      const truncated = p.length > MAX_PAYLOAD;
-      if (truncated) p = p.slice(0, MAX_PAYLOAD);
-      const s = seq++;
-      run('INSERT INTO run_events (run_id,seq,t_offset,type,tool,ok,payload) VALUES (?,?,?,?,?,?,?)',
-        id, s, now() - t0, type, tool ?? null, ok == null ? null : (ok ? 1 : 0), JSON.stringify({ d: p, truncated }));
-      runBus.emit(id, { kind: 'event', event: { seq: s, t: fmtOffset(now() - t0), ms: now() - t0, type, tool: tool ?? null, ok: ok == null ? null : (ok ? 1 : 0), text: p, truncated } });
-    };
-    const onEvent = (o) => {
-      try {
-        if (o.type === 'system' && o.subtype === 'init') {
-          putEvt('system', null, null, { model: o.model, tools: o.tools, cwd: o.cwd, permissionMode: o.permissionMode });
-        } else if (o.type === 'assistant') {
-          for (const b of o.message?.content ?? []) {
-            if (b.type === 'text' && b.text?.trim()) putEvt('text', null, null, b.text);
-            else if (b.type === 'tool_use') { toolById.set(b.id, b.name); putEvt('tool_use', b.name, null, b.input ?? {}); }
-          }
-        } else if (o.type === 'user') {
-          for (const b of o.message?.content ?? []) {
-            if (b.type === 'tool_result') {
-              const tool = toolById.get(b.tool_use_id) ?? null;
-              const content = Array.isArray(b.content) ? b.content.map((c) => c.text ?? '').join('') : b.content;
-              putEvt('tool_result', tool, !b.is_error, content ?? '');
-            }
-          }
-        } else if (o.type === 'result') {
-          putEvt('result', null, !o.is_error, { subtype: o.subtype, is_error: o.is_error, num_turns: o.num_turns, total_cost_usd: o.total_cost_usd, duration_ms: o.duration_ms });
-        }
-      } catch { /* one malformed event must not kill the run */ }
-    };
-
-    const res = await runClaude(prompt, { tools, onEvent, onChild: (c) => liveChildren.set(id, c), model: normModel(r.model), effort: normEffort(r.effort), memoryDir, mcpConfig, runId: id, coalesce });
-    liveChildren.delete(id);
-    if (mcpConfig) try { unlinkSync(mcpConfig); } catch { /* ignore */ }
-    const canceled = canceledRuns.delete(id);
-    const ok = !canceled && !res.isError && !!res.finalText;
-    const rawOut = canceled ? 'canceled by user'
-      : ok ? res.finalText
-      : (res.finalText || (res.code === 124 ? `timed out after ${Math.round(res.ms / 1000)}s` : res.stderr || `claude exited ${res.code}`));
-    const output = redact(rawOut); // never persist/log unredacted session output
-
-    const inTok = res.usage ? (res.usage.input_tokens || 0) + (res.usage.cache_read_input_tokens || 0) + (res.usage.cache_creation_input_tokens || 0) : null;
-    const outTok = res.usage ? (res.usage.output_tokens || 0) : null;
-    run('UPDATE runs SET status=?, dur=?, dur_ms=?, output=?, cost_usd=?, num_turns=?, session_id=?, in_tokens=?, out_tokens=?, model_used=? WHERE id=?',
-      ok ? 'succeeded' : 'failed', fmtDur(res.ms), res.ms, output, res.costUsd, res.numTurns, res.sessionId, inTok, outTok, normModel(r.model) || '', id);
-    runBus.emit(id, { kind: 'done', status: ok ? 'succeeded' : 'failed' });
-    // Roll up real spend + avg duration onto the routine.
-    const agg = one('SELECT COALESCE(SUM(cost_usd),0) AS spend, AVG(dur_ms) AS avgms FROM runs WHERE routine_slug=?', r.slug);
-    run('UPDATE routines SET state=?, last_ago=?, last_status=?, success=?, spend=?, avg=? WHERE slug=?',
-      'idle', 'just now', ok ? 'success' : 'failing', ok ? 100 : 0,
-      `$${Number(agg.spend || 0).toFixed(2)}`, agg.avgms ? fmtDur(agg.avgms) : '—', r.slug);
-    logActivity(`${r.slug} ${ok ? 'ran · ' + output.split('\n').pop().slice(0, 60) : 'failed'} · ${triggerLabel}`, ok ? 'success' : 'failing');
-    if (!ok && !canceled) maybeRetry(r, rawEvent, triggerLabel, rawEvent?._attempt || 0);
-
-    // reactions: arm watches on the entity this run touched (PR checks/review/merge, timeout…)
-    try { await armReactions(r, rawEvent ?? {}, id); } catch (e) { logActivity(`reactions error · ${r.slug}: ${e.message}`, 'failing'); }
-
-    // chain: kick off downstream routines, guarding against cycles + runaway depth.
-    if (ok) {
-      const path = Array.isArray(rawEvent?._chainPath) ? rawEvent._chainPath : [];
-      const nextPath = [...path, r.slug];
-      if (nextPath.length > 8) {
-        logActivity(`chain stopped · max depth (8) reached at ${r.slug}`, 'idle');
-      } else {
-        for (const slug of j(r.chain)) {
-          if (nextPath.includes(slug)) { logActivity(`chain stopped · cycle back to ${slug}`, 'idle'); continue; }
-          const dr = one('SELECT * FROM routines WHERE slug=? AND enabled=1', slug);
-          if (dr) executeRoutine(dr, { ...(rawEvent ?? {}), _chainPath: nextPath, upstream: { routine: r.slug, run: id, output } }, `after · ${r.slug}`);
-        }
-      }
-    }
-    } finally {
-      if (leaseK) {
-        releaseLease(leaseK, id);
-        // Drain: tasks that landed but the agent never fetched → spawn a fresh run to
-        // handle them (and bound the loop by claiming them for that run up front).
-        const pend = pendingTasks(r.slug, leaseK);
-        if (pend.length) {
-          const last = jObj(pend[pend.length - 1].payload) || {};
-          const drainEv = { ...last, event: 'inbox-drain', tasks: pend.map((t) => t.summary), _chainPath: rawEvent?._chainPath };
-          const drainId = executeRoutine(r, drainEv, `inbox · ${pend.length} task${pend.length > 1 ? 's' : ''}`);
-          claimTasks(pend.map((t) => t.id), drainId);
-          logActivity(`${r.slug} draining ${pend.length} inbox task${pend.length > 1 ? 's' : ''} → ${drainId}`, 'queued');
-        }
-      }
-    }
-  })().catch((e) => {
-    run('UPDATE runs SET status=?, output=? WHERE id=?', 'failed', `harness error: ${e.message}`, id);
-  });
-
-  return id;
-}
-
-// ── Event matching: trigger type + repo target + optional sub-filters ────────────
-const eventRepo = (e) => (typeof e?.repository === 'object' ? e.repository?.full_name : e?.repository) || null;
-// A routine targets repos via its `repo` field (comma-separated owner/repo).
-// Empty = any repo. If the event carries a repo, it must be in the target set.
-const repoTargets = (r) => String(r.repo || '').split(',').map((s) => s.trim()).filter(Boolean);
-function repoMatches(r, event) {
-  const targets = repoTargets(r);
-  if (!targets.length) return true;
-  const er = eventRepo(event);
-  return !er || targets.includes(er);
-}
-
-const branchOf = (e) => (e?.ref ? String(e.ref).replace('refs/heads/', '') : null) || e?.pull_request?.head?.ref || e?.branch || null;
-const eventStates = (e) => [
-  e?.action, e?.conclusion, e?.state,
-  e?.check_run?.conclusion, e?.check_suite?.conclusion, e?.workflow_run?.conclusion,
-  e?.deployment_status?.state, e?.review?.state,
-].filter(Boolean);
-// Label names on an event: the just-added/removed one (e.label.name) + all current labels.
-const labelsOf = (e) => [...new Set([
-  e?.label?.name,
-  ...((e?.pull_request?.labels || e?.issue?.labels || e?.labels || []).map((l) => (typeof l === 'string' ? l : l?.name))),
-].filter(Boolean))];
-// A "labeled"/"unlabeled" pull_request/issues delivery also satisfies the `label` trigger.
-const LABEL_TYPES = new Set(['pull_request', 'pull_request_target', 'issues']);
-const isLabelEvent = (type, e) => LABEL_TYPES.has(type) && (e?.action === 'labeled' || e?.action === 'unlabeled');
-// The one trigger test everyone uses — dispatch, dry-run preview, and run-page explain
-// must agree, label aliasing included.
-const triggerHit = (triggers, type, event) => triggers.includes(type) || (isLabelEvent(type, event) && triggers.includes('label'));
-// A condition's field → the event's value(s) for it (always an array).
-const FILTER_FIELDS = {
-  action: (e) => eventStates(e),
-  check: (e) => [e?.check_run?.name, e?.check_suite?.app?.slug, e?.workflow_run?.name, e?.workflow_job?.name, e?.context, e?.deployment?.task].filter(Boolean),
-  branch: (e) => [branchOf(e)].filter(Boolean),
-  base: (e) => [e?.pull_request?.base?.ref].filter(Boolean),
-  label: (e) => labelsOf(e),
-  author: (e) => [e?.pull_request?.user?.login || e?.issue?.user?.login || e?.sender?.login].filter(Boolean),
-  title: (e) => [e?.pull_request?.title || e?.issue?.title].filter(Boolean),
-  draft: (e) => (e?.pull_request ? [String(!!e.pull_request.draft)] : []),
-};
-function evalCondition(c, e) {
-  const vals = (FILTER_FIELDS[c.field]?.(e) || []).map(String);
-  const want = (Array.isArray(c.values) ? c.values : []).map(String);
-  if (!want.length && c.op !== 'is_not') return true; // empty = no constraint
-  const lc = (s) => s.toLowerCase();
-  switch (c.op) {
-    case 'is_not': return !vals.some((v) => want.includes(v));
-    case 'contains': return vals.some((v) => want.some((w) => lc(v).includes(lc(w))));
-    case 'matches': return vals.some((v) => want.some((w) => { try { return new RegExp(w).test(v); } catch { return false; } }));
-    default: return vals.some((v) => want.includes(v)); // 'is'
-  }
-}
-function filtersMatch(r, event) {
-  let f; try { f = JSON.parse(r.filters || '{}'); } catch { f = {}; }
-  // New shape: groups of conditions, combined AND/OR at two levels.
-  if (Array.isArray(f.groups)) {
-    if (!f.groups.length) return true;
-    const groupOk = (g) => {
-      const conds = Array.isArray(g.conditions) ? g.conditions : [];
-      if (!conds.length) return true;
-      const res = conds.map((c) => evalCondition(c, event));
-      return g.match === 'any' ? res.some(Boolean) : res.every(Boolean);
-    };
-    const gr = f.groups.map(groupOk);
-    return f.match === 'any' ? gr.some(Boolean) : gr.every(Boolean);
-  }
-  // Legacy shape: { actions, branches, labels, mode }.
-  const actions = Array.isArray(f.actions) ? f.actions : [];
-  const branches = Array.isArray(f.branches) ? f.branches : [];
-  const labels = Array.isArray(f.labels) ? f.labels : [];
-  const mode = f.mode === 'or' ? 'or' : 'and';
-  const checks = [];
-  if (actions.length) { const vals = eventStates(event); checks.push(!vals.length || vals.some((v) => actions.includes(v))); }
-  if (branches.length) { const br = branchOf(event); checks.push(!br || branches.includes(br)); }
-  if (labels.length) { const labs = labelsOf(event); checks.push(!labs.length || labs.some((l) => labels.includes(l))); }
-  if (!checks.length) return true;
-  return mode === 'or' ? checks.some(Boolean) : checks.every(Boolean);
-}
-// Explain why a run matched (or would match): trigger + repo + each filter condition.
-function explainMatch(r, event) {
-  const checks = [];
-  const type = event?.event || event?.type || 'manual';
-  const triggers = j(r.triggers);
-  checks.push({ label: `trigger is "${type}"`, ok: triggerHit(triggers, type, event), detail: `listens for [${triggers.join(', ') || 'none'}]` });
-  const targets = repoTargets(r);
-  if (targets.length) checks.push({ label: 'repository in target', ok: repoMatches(r, event), detail: `target [${targets.join(', ')}]` });
-  let f; try { f = JSON.parse(r.filters || '{}'); } catch { f = {}; }
-  if (Array.isArray(f.groups)) {
-    for (const g of f.groups) for (const c of (g.conditions || [])) {
-      const vals = (FILTER_FIELDS[c.field]?.(event) || []).map(String);
-      checks.push({ label: `${c.field} ${c.op} [${(c.values || []).join(', ')}]`, ok: evalCondition(c, event), detail: `event ${c.field}: [${vals.join(', ') || '—'}]` });
-    }
-  }
-  return { fired: triggerHit(triggers, type, event) && repoMatches(r, event) && filtersMatch(r, event), checks };
-}
-
-function dispatchEvent(type, payload) {
-  if (meta('kill_switch', 'false') === 'true') {
-    logActivity(`event ${type} dropped · kill switch engaged`, 'failing');
-    return { error: 'kill switch engaged' };
-  }
-  const event = payload && Object.keys(payload).length ? payload : { event: type };
-  const candidates = all('SELECT * FROM routines WHERE enabled=1')
-    .filter((r) => triggerHit(j(r.triggers), type, event));
-  const matched = candidates.filter((r) => repoMatches(r, event) && filtersMatch(r, event));
-  // Audit: record why subscribed routines stood down (the "logs of if/how" devs want).
-  candidates.filter((r) => !matched.includes(r)).forEach((r) => {
-    const why = !repoMatches(r, event) ? `repo not in target [${repoTargets(r).join(', ')}]` : 'event filter mismatch';
-    logActivity(`${r.slug} skipped · ${type} — ${why}`, 'idle');
-  });
-  const runs = matched.map((r) => ({ slug: r.slug, runId: executeRoutine(r, event, `${type} · ${event.ref || eventRepo(event) || 'event'}`) }));
-  return { matched: matched.map((r) => r.slug), runs, event };
-}
-
-// ── Scheduler: makes the `schedule` trigger real (dependency-free 5-field cron) ──
-function cronFieldMatch(field, val, min, max) {
-  if (field === '*' || field === '?') return true;
-  for (const part of String(field).split(',')) {
-    const [rangePart, stepPart] = part.split('/');
-    const step = stepPart ? parseInt(stepPart, 10) || 1 : 1;
-    let lo, hi;
-    if (rangePart === '*') { lo = min; hi = max; }
-    else if (rangePart.includes('-')) { const [a, b] = rangePart.split('-').map(Number); lo = a; hi = b; }
-    else { lo = hi = Number(rangePart); }
-    if (Number.isNaN(lo) || Number.isNaN(hi)) continue;
-    for (let v = lo; v <= hi; v += step) if (v === val) return true;
-  }
-  return false;
-}
-export function cronMatches(expr, d) {
-  const p = String(expr).trim().split(/\s+/);
-  if (p.length !== 5) return false;
-  // Standard cron accepts both 0 and 7 for Sunday in the day-of-week field.
-  const dowMatch = cronFieldMatch(p[4], d.getDay(), 0, 6) || (d.getDay() === 0 && cronFieldMatch(p[4], 7, 0, 7));
-  return cronFieldMatch(p[0], d.getMinutes(), 0, 59)
-    && cronFieldMatch(p[1], d.getHours(), 0, 23)
-    && cronFieldMatch(p[2], d.getDate(), 1, 31)
-    && cronFieldMatch(p[3], d.getMonth() + 1, 1, 12)
-    && dowMatch;
-}
-const _lastFired = new Map();
-function tickScheduler() {
-  if (meta('kill_switch', 'false') === 'true') return;
-  const d = new Date();
-  const stamp = `${d.getFullYear()}/${d.getMonth()}/${d.getDate()} ${d.getHours()}:${d.getMinutes()}`;
-  for (const r of all('SELECT * FROM routines WHERE enabled=1')) {
-    if (!j(r.triggers).includes('schedule') || !r.schedule) continue;
-    if (!cronMatches(r.schedule, d)) continue;
-    if (_lastFired.get(r.slug) === stamp) continue; // fire at most once per matching minute
-    _lastFired.set(r.slug, stamp);
-    executeRoutine(r, { event: 'schedule', cron: r.schedule, fired_at: d.toISOString() }, `schedule · ${r.schedule}`);
-  }
-}
-if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(tickScheduler, 30_000).unref?.();
-
-// Watchdog: reap runs stuck in running/waiting (server crash mid-run, hung session) so
-// the run list stays honest and routine state / leases don't wedge. Runs on boot + 5-min.
-function reapStaleRuns() {
-  const cutoff = now() - 20 * 60_000; // > the 4-min session timeout + 15-min lease TTL
-  const stale = all("SELECT id, routine_slug FROM runs WHERE status IN ('running','waiting') AND created_at < ?", cutoff);
-  for (const s of stale) {
-    run("UPDATE runs SET status='failed', output=?, dur='—' WHERE id=?", 'reaped — no result within 20m (server restart or stuck session)', s.id);
-    run('DELETE FROM leases WHERE run_id=?', s.id);
-    run("UPDATE routines SET state='idle', last_status='failing' WHERE slug=? AND state='running'", s.routine_slug);
-    logActivity(`${s.routine_slug} run ${s.id} reaped · stuck > 20m`, 'failing');
-  }
-  if (stale.length) logActivity(`watchdog reaped ${stale.length} stuck run${stale.length > 1 ? 's' : ''}`, 'idle');
-  return stale.length;
-}
-reapStaleRuns();
-if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(reapStaleRuns, 5 * 60_000).unref?.();
-
-// Background-refreshed connector health (so the sync dispatch path can auto-pause cheaply).
-let _intCache = { github: { connected: true }, slack: { connected: true } };
-async function refreshIntCache() { try { _intCache = await integrationStatus(); } catch { /* keep last */ } }
-refreshIntCache();
-setInterval(refreshIntCache, 30_000).unref?.();
-
-// ── Reactions: watch a routine's downstream entity, fire a follow-up routine ────
-const wid = () => 'w_' + Math.random().toString(36).slice(2, 9);
-function durationToMs(s) {
-  const m = String(s).trim().match(/^(\d+)\s*(s|sec|m|min|h|hr|d)?$/i);
-  if (!m) return null;
-  const n = +m[1], u = (m[2] || 'm').toLowerCase();
-  return n * (u.startsWith('s') ? 1000 : u.startsWith('h') ? 3_600_000 : u.startsWith('d') ? 86_400_000 : 60_000);
-}
-async function resolvePrRef(event, routine) {
-  const repo = eventRepo(event) || repoTargets(routine)[0];
-  if (!repo) return null;
-  let num = event?.pull_request?.number ?? event?.number ?? null;
-  if (!num) {
-    const branch = branchOf(event);
-    if (branch) {
-      const r = await gh(['pr', 'list', '--repo', repo, '--head', branch, '--state', 'all', '--json', 'number', '--jq', '.[0].number']);
-      if (r.code === 0 && r.out.trim()) num = +r.out.trim();
-    }
-  }
-  return num ? { repo, pr: Number(num) } : null;
-}
-// Arm one watch per declared reaction once the originating run resolves its entity.
-async function armReactions(routine, event, runId) {
-  const reactions = j(routine.reactions);
-  let prRef = null;
-  for (const rx of cleanReactions(reactions)) {
-    if (!one('SELECT 1 FROM routines WHERE slug=? AND enabled=1', rx.run)) { logActivity(`reaction skipped · target ${rx.run} missing/disabled`, 'idle'); continue; }
-    let entity = {}, fireAt = 0;
-    if (rx.source === 'timeout') {
-      const ms = durationToMs(rx.when);
-      if (!ms) { logActivity(`reaction skipped · invalid duration "${rx.when}"`, 'idle'); continue; }
-      entity = { duration_ms: ms }; fireAt = now() + ms;
-    } else if (rx.source === 'github') {
-      if (!prRef) prRef = await resolvePrRef(event, routine);
-      if (!prRef) { logActivity(`reaction skipped · no PR resolved for ${routine.slug} → ${rx.run}`, 'idle'); continue; }
-      entity = { ...prRef, check: rx.check || '' }; // optional specific check to watch
-    } else { logActivity(`reaction skipped · source "${rx.source}" not yet supported`, 'idle'); continue; }
-    run('INSERT INTO watches (id,origin_run,origin_routine,target_slug,source,kind,when_cond,entity,status,detail,attempts,created_at,fire_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
-      wid(), runId, routine.slug, rx.run, rx.source, rx.kind, rx.when, JSON.stringify(entity), 'open', '', 0, now(), fireAt);
-    logActivity(`watching ${rx.source}:${rx.kind}${rx.when ? ':' + rx.when : ''} on ${entity.repo ? `${entity.repo}#${entity.pr}` : rx.when} → ${rx.run}`, 'queued');
-  }
-}
-// Source adapter: poll the entity, decide fire | keep | drop.
-async function pollWatch(w) {
-  const entity = jObj(w.entity) || {};
-  if (w.source === 'timeout') {
-    return now() >= w.fire_at ? { action: 'fire', context: { event: 'reaction', source: 'timeout', kind: 'after', when: w.when_cond }, detail: `after ${w.when_cond}` } : { action: 'keep' };
-  }
-  if (w.source === 'github') {
-    const view = async (fields) => { const r = await gh(['pr', 'view', String(entity.pr), '--repo', entity.repo, '--json', fields]); if (r.code !== 0) return { err: r.err }; try { return { pr: JSON.parse(r.out) }; } catch { return { err: 'parse' }; } };
-    if (w.kind === 'checks') {
-      const { pr, err } = await view('statusCheckRollup,state,title,url');
-      if (err) return { action: /no pull requests|not found/i.test(err) ? 'drop' : 'keep', detail: err.slice(0, 60) };
-      const checkName = entity.check || '';
-      let rollup = pr.statusCheckRollup || [];
-      const label = checkName ? `"${checkName}"` : 'checks';
-      if (checkName) {
-        rollup = rollup.filter((c) => (c.name || c.context) === checkName);
-        if (!rollup.length) return { action: 'keep', detail: `waiting for ${label}` };
-      }
-      if (!rollup.length) return { action: 'keep', detail: 'no checks yet' };
-      const pending = rollup.some((c) => (c.status && c.status !== 'COMPLETED') || ['PENDING', 'IN_PROGRESS', 'QUEUED', 'EXPECTED'].includes(c.state));
-      if (pending) return { action: 'keep', detail: `${label} running` };
-      const failed = rollup.some((c) => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED'].includes(c.conclusion) || ['FAILURE', 'ERROR'].includes(c.state));
-      const conclusion = failed ? 'failure' : 'success';
-      if (w.when_cond === 'any' || w.when_cond === conclusion) {
-        return { action: 'fire', detail: `${label} ${conclusion}`, context: { event: 'reaction', source: 'github', kind: 'checks', when: conclusion, check: checkName || null, pull_request: { number: entity.pr, title: pr.title, url: pr.url }, checks: rollup.map((c) => ({ name: c.name || c.context, conclusion: c.conclusion || c.state })) } };
-      }
-      return { action: 'drop', detail: `${label} ${conclusion} ≠ ${w.when_cond}` };
-    }
-    if (w.kind === 'merge') {
-      const { pr, err } = await view('state,title,url');
-      if (err) return { action: 'keep', detail: err.slice(0, 60) };
-      if (pr.state === 'MERGED') return { action: 'fire', detail: 'merged', context: { event: 'reaction', source: 'github', kind: 'merge', when: 'merged', pull_request: { number: entity.pr, title: pr.title, url: pr.url } } };
-      if (pr.state === 'CLOSED') return { action: 'drop', detail: 'closed without merge' };
-      return { action: 'keep' };
-    }
-    if (w.kind === 'review') {
-      const { pr, err } = await view('reviews,title,url');
-      if (err) return { action: 'keep', detail: err.slice(0, 60) };
-      const last = (pr.reviews || []).filter((x) => ['APPROVED', 'CHANGES_REQUESTED'].includes(x.state)).slice(-1)[0];
-      if (!last) return { action: 'keep', detail: 'no decisive review yet' };
-      const state = last.state === 'APPROVED' ? 'approved' : 'changes_requested';
-      if (w.when_cond === 'any' || w.when_cond === state) return { action: 'fire', detail: `review ${state}`, context: { event: 'reaction', source: 'github', kind: 'review', when: state, pull_request: { number: entity.pr, title: pr.title, url: pr.url } } };
-      return { action: 'keep', detail: `last review ${state}` };
-    }
-  }
-  return { action: 'keep' };
-}
-const WATCH_MAX_ATTEMPTS = 60; // ~45 min at the 45s cadence (timeout watches are exempt)
-let _watchTickRunning = false; // slow gh polls must not overlap the next interval tick
-async function tickWatches() {
-  if (_watchTickRunning) return;
-  _watchTickRunning = true;
-  try {
-  if (meta('kill_switch', 'false') === 'true') return;
-  for (const w of all("SELECT * FROM watches WHERE status='open' ORDER BY created_at LIMIT 50")) {
-    let res; try { res = await pollWatch(w); } catch (e) { res = { action: 'keep', detail: String(e.message).slice(0, 60) }; }
-    const attempts = w.attempts + 1;
-    if (res.action === 'fire') {
-      run("UPDATE watches SET status='fired', detail=?, attempts=? WHERE id=?", res.detail || '', attempts, w.id);
-      const tr = one('SELECT * FROM routines WHERE slug=? AND enabled=1', w.target_slug);
-      if (tr) {
-        executeRoutine(tr, { ...(res.context || {}), upstream: { routine: w.origin_routine, run: w.origin_run }, _chainPath: [w.origin_routine] }, `reaction · ${w.source}:${w.kind}${w.when_cond ? ':' + w.when_cond : ''}`);
-        logActivity(`reaction fired · ${w.source}:${w.kind} ${res.detail || ''} → ${w.target_slug}`, 'success');
-      }
-    } else if (res.action === 'drop') {
-      run("UPDATE watches SET status='dropped', detail=?, attempts=? WHERE id=?", res.detail || '', attempts, w.id);
-      logActivity(`reaction dropped · ${w.source}:${w.kind} — ${res.detail || ''}`, 'idle');
-    } else if (attempts >= WATCH_MAX_ATTEMPTS && w.source !== 'timeout') {
-      run("UPDATE watches SET status='expired', detail=?, attempts=? WHERE id=?", 'gave up waiting', attempts, w.id);
-      logActivity(`reaction expired · ${w.source}:${w.kind} → ${w.target_slug}`, 'idle');
-    } else {
-      run('UPDATE watches SET attempts=?, detail=? WHERE id=?', attempts, res.detail || '', w.id);
-    }
-  }
-  } finally { _watchTickRunning = false; }
-}
-if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(tickWatches, 45_000).unref?.();
-
-// ── Routes ────────────────────────────────────────────────────────────────────
-app.get('/api/health', (_q, res) => res.json({ ok: true }));
-app.get('/api/models', (_q, res) => res.json({ models: MODELS, efforts: EFFORTS, defaultModel: DEFAULT_MODEL }));
-
-app.get('/api/stats', (_q, res) => {
-  const rows = all('SELECT * FROM routines');
-  const enabled = rows.filter((r) => r.enabled);
-  const st = (s) => rows.filter((r) => r.enabled && r.state === s).length;
-  const teams = new Set(rows.map((r) => r.team)).size;
-  // Real success rate from the last 100 finished runs; real spend from captured cost.
-  const recent = all("SELECT status FROM runs WHERE status IN ('succeeded','failed') ORDER BY created_at DESC LIMIT 100");
-  const successRate = recent.length ? Math.round((100 * recent.filter((r) => r.status === 'succeeded').length) / recent.length) : null;
-  const spendNum = one('SELECT COALESCE(SUM(cost_usd),0) AS s FROM runs').s || 0;
-  const dayAgo = now() - 86_400_000;
-  res.json({
-    wordmark: meta('wordmark', 'Switchboard'), killSwitch: meta('kill_switch', 'false') === 'true',
-    total: rows.length, enabled: enabled.length, teams,
-    running: st('running'), failing: st('failing'),
-    runsToday: one('SELECT COUNT(*) AS n FROM runs WHERE created_at > ?', dayAgo).n,
-    successRate, spend: `$${Number(spendNum).toFixed(2)}`,
-  });
-});
-
-// The user's real GitHub repos — so the UI can see & target repositories.
-// ?owner=<org|*> & ?q=<search> for cross-org browse / GitHub-wide search.
-app.get('/api/github/repos', async (req, res) => res.json({ repos: await listRepos({ owner: String(req.query.owner || ''), q: String(req.query.q || '') }) }));
-app.get('/api/github/orgs', async (_q, res) => res.json({ orgs: await listOrgs() }));
-// Possible check names for a repo — so a reaction can target a specific check.
-app.get('/api/github/checks', async (req, res) => res.json({ checks: await listChecks(String(req.query.repo || '')) }));
-// A repo's labels — so the label filter is a pick-list, not free typing.
-app.get('/api/github/labels', async (req, res) => {
-  const repo = String(req.query.repo || '').trim();
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return res.json({ labels: [] });
-  const r = await gh(['api', `repos/${repo}/labels`, '--paginate', '--jq', '.[].name']);
-  res.json({ labels: r.code === 0 ? r.out.split('\n').map((s) => s.trim()).filter(Boolean) : [] });
-});
-
-app.get('/api/routines', (_q, res) => res.json(all('SELECT * FROM routines ORDER BY ord').map(shapeRoutine)));
-
-app.get('/api/routines/:slug', (req, res) => {
-  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  const runHistory = all('SELECT * FROM runs WHERE routine_slug=? ORDER BY created_at DESC, ord DESC LIMIT 12', r.slug)
-    .map((x) => ({ id: x.id, status: x.status, ago: relTime(x.created_at), dur: x.dur, trigger: x.trigger }));
-  const watches = all('SELECT * FROM watches WHERE origin_routine=? ORDER BY created_at DESC LIMIT 20', r.slug).map(shapeWatch);
-  const leases = all('SELECT * FROM leases WHERE routine_slug=? AND expires_at > ? ORDER BY acquired_at DESC', r.slug, now())
-    .map((l) => ({ key: l.key, runId: l.run_id, sha: l.head_sha ? l.head_sha.slice(0, 7) : '', held: relTime(l.acquired_at), ttl: fmtDur(Math.max(0, l.expires_at - now())) }));
-  const inboxTasks = all("SELECT * FROM run_tasks WHERE routine_slug=? AND handled_by='' ORDER BY created_at DESC LIMIT 20", r.slug)
-    .map((t) => ({ summary: t.summary, key: t.lease_key, ago: relTime(t.created_at) }));
-  const lf = one("SELECT id, output, created_at FROM runs WHERE routine_slug=? AND status='failed' ORDER BY created_at DESC, ord DESC LIMIT 1", r.slug);
-  const lastError = lf ? { runId: lf.id, output: String(lf.output || '').slice(0, 400), ago: relTime(lf.created_at) } : null;
-  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, lastError });
-});
-
-function insertRoutine(b) {
-  const slug = (b.slug || slugify(b.name)).trim();
-  const owner = (b.owner || '').trim() || 'unassigned';
-  const team = (b.team || '').trim() || 'general';
-  const triggers = Array.isArray(b.triggers) ? b.triggers.filter(Boolean) : [];
-  const connectors = Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : [];
-  const chain = Array.isArray(b.chain) ? b.chain.filter(Boolean) : [];
-  const schedule = (b.schedule || '').trim();
-  const ord = (one('SELECT MAX(ord) AS m FROM routines').m ?? -1) + 1;
-  const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
-  run(
-    `INSERT INTO routines
-      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,retries)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    slug, (b.name || '').trim(), (b.summary || '').trim(), owner, team,
-    JSON.stringify(triggers), JSON.stringify(connectors),
-    'idle', 'never', 'idle', next, null, '$0.00', b.enabled === false ? 0 : 1, '—',
-    ownerColor(owner), initialsOf(owner), ord,
-    (b.prompt || '').trim(), normModel(b.model), (b.repo || '').trim(), (b.branch || 'main').trim(),
-    JSON.stringify(chain), schedule, JSON.stringify(cleanFilters(b.filters)), JSON.stringify(cleanReactions(b.reactions)),
-    normEffort(b.effort), b.memory ? 1 : 0, JSON.stringify(cleanConcurrency(b.concurrency)), normRetries(b.retries)
-  );
-  return slug;
-}
-
-// Quick-start templates — common routine shapes that prefill the New form.
-const ROUTINE_TEMPLATES = [
-  { id: 'pr-reviewer', name: 'PR reviewer', desc: 'Review opened/updated PRs and comment', icon: '🔎', body: { triggers: ['pull_request'], connectors: ['github'], model: 'claude-opus-4-8', prompt: 'A pull request was opened or updated. Review the diff for bugs, risky changes, and missing tests, then post a concise review comment with `gh pr comment`.' } },
-  { id: 'daily-report', name: 'Daily report', desc: 'Scheduled standup summary to Slack', icon: '📊', body: { triggers: ['schedule'], schedule: '0 9 * * 1-5', connectors: ['github', 'slack'], model: 'claude-opus-4-8', prompt: 'Summarize yesterday\'s merged PRs and open issues for the repo, then post a short digest to the team channel with `slack-post`.' } },
-  { id: 'ci-watcher', name: 'CI failure watcher', desc: 'Triage failed checks', icon: '🚨', body: { triggers: ['check_run'], connectors: ['github', 'slack'], model: 'claude-opus-4-8', prompt: 'A CI check finished. If it failed, fetch the logs with `gh run view`, summarize the likely cause, and alert the author.' } },
-];
-app.get('/api/templates', (_q, res) => res.json({ templates: ROUTINE_TEMPLATES }));
-
-// One-click: seed the sample scenarios. Idempotent.
-app.post('/api/samples/load', async (req, res) => {
-  try {
-    const repos = await listRepos({});
-    const repo = String(req.body?.repo || '').trim() || repos[0] || '';
-    const fill = (s) => String(s).split('__REPO__').join(repo || 'OWNER/REPO');
-    const routines = [], skipped = [];
-    for (const rt of SAMPLE_ROUTINES) {
-      if (one('SELECT 1 FROM routines WHERE slug=?', rt.slug)) { skipped.push(rt.slug); continue; }
-      insertRoutine({ ...rt, repo: rt.repo === '__REPO__' ? repo : rt.repo, prompt: fill(rt.prompt) });
-      routines.push(rt.slug);
-    }
-    if (routines.length) logActivity(`loaded ${routines.length} example routines${repo ? ` for ${repo}` : ''}`, 'success');
-    res.json({ repo, routines, skipped });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.post('/api/routines', (req, res) => {
-  const b = req.body || {};
-  const name = (b.name || '').trim();
-  if (!name) return res.status(400).json({ error: 'A routine name is required.' });
-  const slug = (b.slug || slugify(name)).trim();
-  if (!slug) return res.status(400).json({ error: 'A valid slug is required.' });
-  if (one('SELECT 1 FROM routines WHERE slug=?', slug)) return res.status(409).json({ error: `A routine with slug "${slug}" already exists.` });
-  insertRoutine(b);
-  res.status(201).json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', slug)));
-});
-
-function buildRoutineMd(r) {
-  const L = ['---', `name: ${r.name}`, `slug: ${r.slug}`, 'summary: >-', `  ${r.summary}`, `owner: ${r.owner}`, `team: ${r.team}`, 'on:'];
-  const flt = jObj(r.filters) || {};
-  j(r.triggers).forEach((t) => {
-    if (t === 'schedule' && r.schedule) L.push(`  - schedule: { cron: "${r.schedule}" }`);
-    else if ((t === 'push') && Array.isArray(flt.branches) && flt.branches.length) L.push(`  - ${t}: { branches: [${flt.branches.join(', ')}] }`);
-    else if (Array.isArray(flt.actions) && flt.actions.length) L.push(`  - ${t}: { actions: [${flt.actions.join(', ')}] }`);
-    else L.push(`  - ${t}: {}`);
-  });
-  if (j(r.connectors).length) { L.push('tools:', `  grant: [${j(r.connectors).join(', ')}]`); }
-  L.push('runtime:', `  model: ${r.model}`);
-  if (r.effort) L.push(`  effort: ${r.effort}`);
-  L.push(`  repos: [${(r.repo || '').split(',').map((s) => s.trim()).filter(Boolean).join(', ') || '*'}]`);
-  if (r.memory) L.push('  memory: enabled');
-  { const c = jObj(r.concurrency) || {}; if (c.scope && c.scope !== 'off') L.push(`  concurrency: { scope: ${c.scope || 'auto'}, on_conflict: ${c.onConflict || 'wait'} }`); }
-  const chain = j(r.chain);
-  if (chain.length) L.push(`chain: [${chain.join(', ')}]`);
-  const reactions = cleanReactions(j(r.reactions));
-  if (reactions.length) {
-    L.push('react:');
-    reactions.forEach((rx) => L.push(`  - on: ${rx.source}:${rx.kind}${rx.when ? ':' + rx.when : ''}${rx.check ? ` [${rx.check}]` : ''}  →  run: ${rx.run}`));
-  }
-  L.push('---', '', r.prompt && r.prompt.trim() ? r.prompt : `## Prompt\n${r.summary}`);
-  return L.join('\n');
-}
-
-app.get('/api/routines/:slug/raw', (req, res) => {
-  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  res.json({ file: `${r.slug}.routine.md`, md: buildRoutineMd(r) });
-});
-
-// The routine's persistent memory (memory.md + supporting files).
-app.get('/api/routines/:slug/memory', (req, res) => {
-  const r = one('SELECT slug, memory FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  const dir = memDirFor(r.slug);
-  const mdPath = join(dir, 'memory.md');
-  const exists = existsSync(mdPath);
-  const files = existsSync(dir) ? readdirSync(dir).filter((f) => f !== 'memory.md' && !f.startsWith('.')) : [];
-  res.json({ enabled: !!r.memory, exists, md: exists ? readFileSync(mdPath, 'utf8') : '', files });
-});
-
-app.put('/api/routines/:slug', (req, res) => {
-  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  const b = req.body || {};
-  const owner = (b.owner ?? r.owner).trim() || 'unassigned';
-  const triggers = Array.isArray(b.triggers) ? b.triggers.filter(Boolean) : j(r.triggers);
-  const schedule = b.schedule != null ? String(b.schedule).trim() : (r.schedule || '');
-  const filters = b.filters != null ? cleanFilters(b.filters) : (jObj(r.filters) || {});
-  const reactions = b.reactions != null ? cleanReactions(b.reactions) : j(r.reactions);
-  const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
-  run(
-    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,retries=? WHERE slug=?`,
-    (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
-    JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
-    JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
-    normModel(b.model ?? r.model), (b.repo ?? r.repo).trim(), (b.branch ?? r.branch).trim() || 'main',
-    (b.prompt ?? r.prompt).trim(), ownerColor(owner), initialsOf(owner), next, schedule, JSON.stringify(filters), JSON.stringify(reactions),
-    b.effort != null ? normEffort(b.effort) : (r.effort || ''),
-    b.memory != null ? (b.memory ? 1 : 0) : r.memory,
-    JSON.stringify(b.concurrency != null ? cleanConcurrency(b.concurrency) : (jObj(r.concurrency) || {})),
-    b.retries != null ? normRetries(b.retries) : r.retries,
-    r.slug
-  );
-  res.json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', r.slug)));
-});
-
-app.delete('/api/routines/:slug', (req, res) => {
-  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  run('DELETE FROM routines WHERE slug=?', r.slug);
-  run('DELETE FROM runs WHERE routine_slug=?', r.slug);
-  res.json({ ok: true });
-});
-
-app.post('/api/routines/:slug/enable', (req, res) => {
-  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  const en = req.body?.enabled ? 1 : 0;
-  run('UPDATE routines SET enabled=?, state=? WHERE slug=?', en, en ? (r.state === 'disabled' ? 'idle' : r.state) : 'disabled', r.slug);
-  res.json({ ok: true, enabled: !!en });
-});
-
-app.post('/api/routines/:slug/dispatch', (req, res) => {
-  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
-  const event = req.body?.event ?? { event: 'manual', routine: r.slug, dispatched_at: new Date().toISOString() };
-  res.json({ ok: true, runId: executeRoutine(r, event, 'manual'), status: 'running' });
-});
-
-// Dry-run preview: the exact prompt the agent would get + whether an event matches — $0.
-app.post('/api/routines/:slug/preview', (req, res) => {
-  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  const event = req.body?.event && Object.keys(req.body.event).length ? req.body.event : { event: 'manual', routine: r.slug };
-  const tools = j(r.connectors);
-  const prompt = buildPrompt({ ...r, connectors: tools }, event, policyConstraints(), {});
-  const triggerType = event.event || event.type || 'manual';
-  const wouldMatch = triggerHit(j(r.triggers), triggerType, event) && repoMatches(r, event) && filtersMatch(r, event);
-  const { key } = leaseFor(r, event);
-  res.json({ prompt, tools, wouldMatch, leaseKey: key, allowedTools: allowedToolsFor(tools), promptChars: prompt.length, estTokens: Math.round(prompt.length / 4) });
-});
-
-app.post('/api/routines/:slug/validate', async (req, res) => {
-  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  const st = await integrationStatus();
-  const tools = j(r.connectors);
-  const checks = [
-    { label: 'Identity', ok: !!r.name && !!r.slug, detail: `${r.name} · ${r.slug}.routine.md` },
-    { label: 'Triggers', ok: j(r.triggers).length > 0, detail: j(r.triggers).join(', ') || 'no triggers — manual only' },
-    { label: 'Instruction', ok: !!(r.prompt && r.prompt.trim().length > 12), detail: `${(r.prompt || '').length} chars` },
-    { label: 'Model', ok: MODEL_IDS.includes(r.model), detail: MODEL_IDS.includes(r.model) ? `${MODELS.find((m) => m.id === r.model)?.label || r.model}${r.effort ? ` · ${r.effort} effort` : ''}` : `unknown model "${r.model}" — pick a valid one` },
-  ];
-  if (tools.includes('github')) checks.push({ label: 'Tool · gh', ok: st.github.connected, detail: st.github.connected ? `authed as @${st.github.account}` : 'gh not authed — run `gh auth login`' });
-  if (tools.includes('slack')) checks.push({ label: 'Tool · slack-post', ok: st.slack.connected, detail: st.slack.connected ? `${st.slack.team} · @${st.slack.bot}` : 'SLACK_BOT_TOKEN not set' });
-  if (tools.includes('web') || tools.includes('webfetch')) checks.push({ label: 'Tool · web', ok: true, detail: 'WebFetch / WebSearch' });
-  // Custom MCP servers are real grants too (loaded via --mcp-config).
-  const mcpSet = mcpNameSet();
-  tools.filter((c) => mcpSet.has(c)).forEach((c) => checks.push({ label: `Tool · ${c}`, ok: true, detail: `custom MCP · mcp__${c}__*` }));
-  // Flag only grants the runner truly can't provide.
-  const known = new Set(['github', 'slack', 'web', 'webfetch']);
-  const phantom = tools.filter((c) => !known.has(c) && !mcpSet.has(c));
-  if (phantom.length) checks.push({ label: 'Tools', ok: false, detail: `not wired: ${phantom.join(', ')} — add it on the Connectors page, or remove it` });
-  // Schedule cron must be present and parseable, else the routine silently never fires.
-  if (j(r.triggers).includes('schedule')) {
-    const parts = String(r.schedule || '').trim().split(/\s+/);
-    const okCron = parts.length === 5 && parts.every((f) => /^[\d*,/?-]+$/.test(f));
-    checks.push({ label: 'Schedule cron', ok: okCron, detail: r.schedule ? (okCron ? r.schedule : `"${r.schedule}" is not a valid 5-field cron`) : 'no cron set — will never fire' });
-  }
-  (j(r.chain)).forEach((c) => checks.push({ label: `Chain → ${c}`, ok: !!one('SELECT 1 FROM routines WHERE slug=?', c), detail: one('SELECT 1 FROM routines WHERE slug=?', c) ? 'resolves' : 'no such routine' }));
-  res.json({ ok: checks.every((c) => c.ok), checks });
-});
-
-// Guardrails injected into EVERY session prompt as hard constraints (when on).
-const DEFAULT_POLICIES = [
-  { key: 'deny_merge', title: 'Never merge pull requests', desc: 'Every session is told to never run `gh pr merge` or any merge command.', on: true },
-  { key: 'pr_not_push', title: 'Changes via pull request, not direct push', desc: 'Sessions must open a PR for changes instead of pushing to a protected branch.', on: true },
-  { key: 'no_destructive', title: 'No destructive git/history ops', desc: 'Sessions must not force-push, delete branches, or rewrite history.', on: true },
-];
-function policyConstraints() {
-  const saved = jObj(meta('policies', 'null')) || {};
-  const on = (k) => (k in saved ? !!saved[k] : !!DEFAULT_POLICIES.find((p) => p.key === k)?.on);
-  const c = [];
-  if (on('deny_merge')) c.push('Never merge a pull request — do not run `gh pr merge` or any merge command.');
-  if (on('pr_not_push')) c.push('Do not push directly to a protected or default branch; open a pull request for any change.');
-  if (on('no_destructive')) c.push('Do not force-push, delete branches, or rewrite git history.');
-  return c;
-}
-app.get('/api/settings', async (_q, res) => {
-  const st = await integrationStatus();
-  const claude = await claudeAccount();
-  const saved = jObj(meta('policies', 'null'));
-  const policies = DEFAULT_POLICIES.map((p) => ({ ...p, on: saved && p.key in saved ? !!saved[p.key] : p.on }));
-  res.json({ identities: { ...st, claude }, policies });
-});
-app.post('/api/settings', (req, res) => {
-  const policies = req.body?.policies || {};
-  setMeta('policies', JSON.stringify(policies));
-  res.json({ ok: true });
-});
-
-app.get('/api/runs', (_q, res) =>
-  res.json(all(`SELECT runs.*, routines.name AS routine_name FROM runs
-                LEFT JOIN routines ON routines.slug = runs.routine_slug
-                ORDER BY runs.created_at DESC, runs.ord DESC LIMIT 100`)
-    .map((x) => ({ id: x.id, routineSlug: x.routine_slug, routineName: x.routine_name ?? x.routine_slug, status: x.status, ago: relTime(x.created_at), dur: x.dur, trigger: x.trigger })))
-);
-
-// Live trace stream (SSE): replays the captured steps, then pushes each new one as it
-// happens and a final `done` — so the run page fills in with no polling lag.
-app.get('/api/runs/:id/stream', (req, res) => {
-  const id = req.params.id;
-  const x = one('SELECT status FROM runs WHERE id=?', id);
-  if (!x) return res.status(404).json({ error: 'not found' });
-  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
-  res.flushHeaders?.();
-  const send = (m) => res.write(`data: ${JSON.stringify(m)}\n\n`);
-  for (const e of all('SELECT * FROM run_events WHERE run_id=? ORDER BY seq', id)) {
-    let pl; try { pl = JSON.parse(e.payload); } catch { pl = { d: e.payload }; }
-    send({ kind: 'event', event: { seq: e.seq, t: fmtOffset(e.t_offset), ms: e.t_offset, type: e.type, tool: e.tool, ok: e.ok, text: pl.d, truncated: !!pl.truncated } });
-  }
-  if (['succeeded', 'failed', 'skipped', 'coalesced', 'canceled'].includes(x.status)) { send({ kind: 'done', status: x.status }); return res.end(); }
-  const ping = setInterval(() => res.write(':\n\n'), 25_000);
-  const onMsg = (m) => { send(m); if (m.kind === 'done') { cleanup(); res.end(); } };
-  const cleanup = () => { clearInterval(ping); runBus.off(id, onMsg); };
-  runBus.on(id, onMsg);
-  req.on('close', cleanup);
-});
-
-// The running agent's inbox — events coalesced onto this run's lease. POST claims them
-// (the `inbox` tool), so the agent fetches new work before wrapping up.
-const runLeaseKey = (x) => { const r = one('SELECT * FROM routines WHERE slug=?', x.routine_slug); return r ? leaseFor(r, jObj(x.event) || {}).key : null; };
-app.post('/api/runs/:id/inbox', (req, res) => {
-  const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
-  if (!x) return res.status(404).json({ error: 'not found' });
-  const key = runLeaseKey(x);
-  const pend = key ? pendingTasks(x.routine_slug, key) : [];
-  claimTasks(pend.map((t) => t.id), x.id);
-  res.json({ key, tasks: pend.map((t) => ({ id: t.id, summary: t.summary, event: jObj(t.payload) })) });
-});
-
-// Reproducibility: re-execute a run with its EXACT original event payload.
-app.post('/api/runs/:id/replay', (req, res) => {
-  const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
-  if (!x) return res.status(404).json({ error: 'not found' });
-  const r = one('SELECT * FROM routines WHERE slug=?', x.routine_slug);
-  if (!r) return res.status(404).json({ error: 'routine no longer exists' });
-  if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
-  const ev = jObj(x.event) || {};
-  delete ev._attempt;
-  const runId = executeRoutine(r, { ...ev, _replay: true, upstream: { routine: r.slug, run: x.id } }, `replay · ${x.id}`);
-  res.json({ ok: true, runId });
-});
-
-// Cancel a running run: kill its live session, mark it failed, free its lease.
-app.post('/api/runs/:id/cancel', (req, res) => {
-  const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
-  if (!x) return res.status(404).json({ error: 'not found' });
-  if (!['running', 'waiting'].includes(x.status)) return res.status(409).json({ error: `run is ${x.status}, not running` });
-  canceledRuns.add(x.id);
-  const child = liveChildren.get(x.id);
-  if (child) { try { child.kill('SIGKILL'); } catch { /* already gone */ } liveChildren.delete(x.id); }
-  run("UPDATE runs SET status='failed', dur='—', output=? WHERE id=?", 'canceled by user', x.id);
-  run('DELETE FROM leases WHERE run_id=?', x.id);
-  run("UPDATE routines SET state='idle', last_status='failing' WHERE slug=? AND state='running'", x.routine_slug);
-  logActivity(`${x.routine_slug} run ${x.id} canceled`, 'failing');
-  res.json({ ok: true, killed: !!child });
-});
-
-app.get('/api/runs/:id', (req, res) => {
-  const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
-  if (!x) return res.status(404).json({ error: 'not found' });
-  const r = one('SELECT * FROM routines WHERE slug=?', x.routine_slug);
-  const running = x.status === 'running';
-  const ok = x.status === 'succeeded';
-  const tools = j(r?.connectors);
-
-  // Real step-level trace, straight from the captured stream-json events.
-  const evts = all('SELECT * FROM run_events WHERE run_id=? ORDER BY seq', x.id);
-  const trace = evts.map((e) => {
-    let pl; try { pl = JSON.parse(e.payload); } catch { pl = { d: e.payload, truncated: false }; }
-    return { seq: e.seq, t: fmtOffset(e.t_offset), ms: e.t_offset, type: e.type, tool: e.tool, ok: e.ok, text: pl.d, truncated: !!pl.truncated };
-  });
-
-  // Lineage: who kicked this run off, and what it kicked off (chains + reactions).
-  // Kind comes from the structured event flags, not the human-readable trigger label.
-  const ev = jObj(x.event) || {};
-  const kindOf = (e) => (e?._replay ? 'replay' : e?.event === 'reaction' ? 'reaction' : e?.upstream ? 'chain' : 'trigger');
-  const triggeredBy = ev.upstream?.run ? { runId: ev.upstream.run, routine: ev.upstream.routine, kind: kindOf(ev) } : null;
-  const downstream = all('SELECT id, routine_slug, status, dur, event FROM runs WHERE upstream_run=? ORDER BY created_at', x.id)
-    .map((d) => ({ runId: d.id, routine: d.routine_slug, status: d.status, dur: d.dur, kind: kindOf(jObj(d.event)) }));
-  const watches = all('SELECT * FROM watches WHERE origin_run=? ORDER BY created_at', x.id)
-    .map((w) => ({ target: w.target_slug, source: w.source, kind: w.kind, when: w.when_cond, status: w.status, detail: w.detail }));
-  // Inbox: tasks coalesced onto this run's lease (claimed by it, or still pending on its key).
-  const lkey = runLeaseKey(x);
-  const inbox = lkey
-    ? all("SELECT * FROM run_tasks WHERE routine_slug=? AND lease_key=? AND (handled_by=? OR handled_by='') ORDER BY created_at", x.routine_slug, lkey, x.id)
-        .map((t) => ({ summary: t.summary, ago: relTime(t.created_at), pending: !t.handled_by }))
-    : [];
-
-  const toolBreakdown = all("SELECT tool, SUM(CASE WHEN type='tool_use' THEN 1 ELSE 0 END) AS calls, SUM(CASE WHEN type='tool_result' AND ok=0 THEN 1 ELSE 0 END) AS errors FROM run_events WHERE run_id=? AND tool IS NOT NULL AND tool != '' GROUP BY tool ORDER BY calls DESC", x.id)
-    .map((t) => ({ tool: t.tool, calls: t.calls, errors: t.errors })).filter((t) => t.calls > 0 || t.errors > 0);
-  res.json({
-    id: x.id, routine: x.routine_slug, status: x.status, trigger: x.trigger, triggerKind: kindOf(ev),
-    started: new Date(x.created_at).toLocaleTimeString(), elapsed: x.dur, model: x.model_used || r?.model || 'claude',
-    cost: x.cost_usd, turns: x.num_turns, sessionId: x.session_id,
-    inTokens: x.in_tokens ?? null, outTokens: x.out_tokens ?? null,
-    matchExplain: r && ev ? explainMatch(r, ev) : null,
-    stdout: x.output, event: ev, trace, inbox, toolBreakdown,
-    lineage: { triggeredBy, downstream, watches },
-    awaiting: running ? 'auto-mode session running…' : null,
-    summary: {
-      result: running ? 'Running…' : ok ? (x.output.split('\n').pop()?.slice(0, 80) || 'Completed') : 'Failed',
-      surface: tools.join(', ') || 'session',
-    },
-  });
-});
-
-// Connectors reflect REAL integration status (gh + Slack), live.
-app.get('/api/connectors', async (_q, res) => {
-  const st = await integrationStatus();
-  const rows = all('SELECT connectors FROM routines WHERE enabled=1');
-  const uses = (key) => rows.filter((r) => j(r.connectors).includes(key)).length;
-  // 7-day usage attributed to a connector via the routines that grant it.
-  const since7 = now() - 7 * 86_400_000;
-  const runAgg = {};
-  for (const x of all('SELECT routine_slug, cost_usd FROM runs WHERE created_at > ?', since7)) { const e = (runAgg[x.routine_slug] ||= { runs: 0, cost: 0 }); e.runs++; e.cost += x.cost_usd || 0; }
-  const allR = all('SELECT slug, connectors FROM routines');
-  const usageFor = (key) => { let runs = 0, cost = 0; for (const r of allR) { if (j(r.connectors).includes(key)) { const a = runAgg[r.slug]; if (a) { runs += a.runs; cost += a.cost; } } } return { runs7d: runs, cost7d: +cost.toFixed(2) }; };
-  const out = [
-    { code: 'GH', name: 'GitHub', kind: 'CLI · gh', health: st.github.connected ? 'ok' : 'off', auth: st.github.connected ? `gh · @${st.github.account}` : 'run `gh auth login`', scopes: 'read/write PRs, issues, checks, gists', routines: uses('github'), ...usageFor('github'), avColor: '#7f9bd1', testable: true, configKey: '' },
-    { code: 'SL', name: 'Slack', kind: 'Bot', health: st.slack.connected ? 'ok' : 'off', auth: st.slack.connected ? `${st.slack.team} · @${st.slack.bot}` : 'set a bot token', scopes: 'post messages via slack-post', routines: uses('slack'), ...usageFor('slack'), avColor: '#c9a24a', testable: true, configKey: 'slack' },
-    { code: 'WB', name: 'Web fetch', kind: 'Built-in', health: 'ok', auth: 'no auth needed', scopes: 'fetch & read public URLs', routines: uses('web'), ...usageFor('web'), avColor: '#8aa0b8', testable: true, configKey: '' },
-  ];
-  for (const s of all('SELECT name, config, auth FROM mcp_servers ORDER BY name')) {
-    const cfg = jObj(s.config) || {};
-    const authed = !!(jObj(s.auth) || {}).token;
-    const remote = isMcpRemote(cfg);
-    const transport = remote ? `remote · ${mcpRemoteUrl(cfg)}` : cfg.command ? `stdio · ${cfg.command}` : cfg.url ? `http · ${cfg.url}` : 'custom MCP';
-    out.push({ code: s.name, name: s.name, kind: remote ? 'MCP · remote' : 'MCP', health: 'ok', auth: `${transport}${authed ? ' · 🔑 token' : ''}`, scopes: `mcp__${s.name}__*`, routines: uses(s.name), ...usageFor(s.name), avColor: '#b49ae6', testable: true, configKey: '', mcp: true, authed, remote });
-  }
-  res.json(out);
-});
-
-// Live connectivity test for a connector (gh user / slack / web / MCP server).
-app.post('/api/connectors/:code/test', async (req, res) => {
-  const t0 = now();
-  const result = mcpNameSet().has(req.params.code) ? await testMcp(req.params.code) : await testConnector(req.params.code, req.body || {});
-  res.json({ ...result, latencyMs: now() - t0 });
-});
-// Configure a connector's token (slack/atlassian) — stored in meta, loaded into env now.
-app.post('/api/connectors/:code/config', (req, res) => {
-  const code = String(req.params.code || '').toLowerCase();
-  const envKey = TOKEN_ENV[code];
-  if (!envKey) return res.status(400).json({ error: 'this connector has no configurable token' });
-  const token = String(req.body?.token || '').trim();
-  if (token) { setMeta(`token_${code}`, token); process.env[envKey] = token; }
-  else { run('DELETE FROM meta WHERE key=?', `token_${code}`); if (ENV_BASE[envKey]) process.env[envKey] = ENV_BASE[envKey]; else delete process.env[envKey]; }
-  bustStatus();
-  res.json({ ok: true, configured: !!token });
-});
-
-// Custom MCP servers — drop in a config + auth (env/headers); routines grant them by name.
-app.get('/api/mcp', (_q, res) => res.json(all('SELECT * FROM mcp_servers ORDER BY name').map((s) => {
-  const auth = jObj(s.auth) || {};
-  const cfg = jObj(s.config) || {};
-  return { name: s.name, config: maskConfig(cfg), remote: isMcpRemote(cfg), url: mcpRemoteUrl(cfg), auth: { configured: !!auth.token, scheme: auth.scheme || 'bearer', header: auth.header || '' } };
-})));
-// Authenticate an MCP server — store a bearer token / API key, injected at runtime
-// into the server's headers (http) or env (stdio). Masked in all responses.
-app.post('/api/mcp/:name/auth', (req, res) => {
-  if (!one('SELECT 1 FROM mcp_servers WHERE name=?', req.params.name)) return res.status(404).json({ error: 'not found' });
-  const token = String(req.body?.token || '').trim();
-  const scheme = ['bearer', 'raw'].includes(req.body?.scheme) ? req.body.scheme : 'bearer';
-  const header = String(req.body?.header || '').trim();
-  run('UPDATE mcp_servers SET auth=? WHERE name=?', JSON.stringify(token ? { scheme, header, token } : {}), req.params.name);
-  res.json({ ok: true, configured: !!token });
-});
 app.post('/api/mcp', (req, res) => {
   const b = req.body || {};
-  // Remote mode: just a URL → wrapped with mcp-remote (handles OAuth + token auth).
   if (b.remote && b.url) {
     let url; try { url = new URL(String(b.url).trim()).toString(); } catch { return res.status(400).json({ error: 'enter a valid https URL' }); }
     const host = new URL(url).hostname.split('.');
-    const sld = host.length >= 2 ? host[host.length - 2] : host[0]; // mcp.betterstack.com → betterstack
+    const sld = host.length >= 2 ? host[host.length - 2] : host[0];
     const name = (String(b.name || '').trim() || sld).replace(/[^a-z0-9_-]/gi, '');
     if (!name) return res.status(400).json({ error: 'a server name is required' });
-    run('INSERT INTO mcp_servers (name,config,created_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET config=excluded.config', name, JSON.stringify(mcpRemoteDef(url)), now());
+    upsertConnector(ROUTINES_DIR, name, { kind: 'mcp', config: mcpRemoteDef(url), detail: 'remote MCP (added in UI)' });
+    daemon.reload();
     return res.json({ ok: true, name, remote: true });
   }
   let parsed;
@@ -1294,12 +898,18 @@ app.post('/api/mcp', (req, res) => {
   const name = String(parsed.name || '').trim().replace(/[^a-z0-9_-]/gi, '');
   if (!name) return res.status(400).json({ error: 'a server name is required — type one, or paste a { "name": { … } } config' });
   if (!isDef(parsed.def)) return res.status(400).json({ error: 'config needs a "command" (stdio) or a "url" (http/sse)' });
-  run('INSERT INTO mcp_servers (name,config,created_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET config=excluded.config', name, JSON.stringify(parsed.def), now());
+  upsertConnector(ROUTINES_DIR, name, { kind: 'mcp', config: parsed.def, detail: 'custom MCP (added in UI)' });
+  daemon.reload();
   res.json({ ok: true, name });
 });
-// MCP Registry (registry.modelcontextprotocol.io) — search & add servers without
-// hand-pasting JSON. Adding uses the registry's canonical URL/package (no typo-spoof
-// surface); remote OAuth issuer is validated downstream by mcp-remote per RFC 9207.
+app.delete('/api/mcp/:name', (req, res) => {
+  removeConnector(ROUTINES_DIR, req.params.name);
+  delete secrets.mcpAuth[req.params.name];
+  saveSecrets(secrets);
+  daemon.reload();
+  res.json({ ok: true });
+});
+
 const RUNTIME_CMD = {
   npx: (id) => ({ command: 'npx', args: ['-y', id] }),
   uvx: (id) => ({ command: 'uvx', args: [id] }),
@@ -1319,10 +929,10 @@ app.get('/api/mcp/registry', async (req, res) => {
     const seen = new Set(); const servers = [];
     for (const row of data.servers || []) {
       const s = row.server || {};
-      if (!s.name || seen.has(s.name)) continue; seen.add(s.name); // one entry per server (newest first)
+      if (!s.name || seen.has(s.name)) continue; seen.add(s.name);
       const remote = (s.remotes || [])[0];
       const pkg = (s.packages || []).find((p) => RUNTIME_CMD[p.runtimeHint]) || (s.packages || [])[0];
-      if (!remote && !(pkg && RUNTIME_CMD[pkg.runtimeHint])) continue; // skip un-runnable here
+      if (!remote && !(pkg && RUNTIME_CMD[pkg.runtimeHint])) continue;
       servers.push({ id: s.name, name: String(s.name).split('/').pop(), description: s.description || '', version: s.version || '',
         remoteUrl: remote?.url || '', transport: remote?.type || pkg?.transport?.type || 'stdio', runtime: pkg?.runtimeHint || '', identifier: pkg?.identifier || '' });
     }
@@ -1337,19 +947,18 @@ app.post('/api/mcp/registry/add', (req, res) => {
   if (b.remoteUrl) { try { def = mcpRemoteDef(new URL(String(b.remoteUrl)).toString()); } catch { return res.status(400).json({ error: 'invalid remote URL' }); } }
   else if (b.runtime && RUNTIME_CMD[b.runtime] && b.identifier) def = RUNTIME_CMD[b.runtime](String(b.identifier));
   else return res.status(400).json({ error: 'this server has no remote URL or runnable package' });
-  run('INSERT INTO mcp_servers (name,config,created_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET config=excluded.config', name, JSON.stringify(def), now());
+  upsertConnector(ROUTINES_DIR, name, { kind: 'mcp', config: def, detail: 'from MCP registry' });
+  daemon.reload();
   res.json({ ok: true, name, remote: !!b.remoteUrl });
 });
-// Kick off the mcp-remote OAuth flow. We run it with piped output, watch for the
-// "Please authorize…" URL (or a connect/error), and hand the URL back to the UI so the
-// user can click it — far more reliable than auto-opening a browser from a headless
-// server. mcp-remote keeps running to catch the callback and saves the token to ~/.mcp-auth.
+
+// mcp-remote OAuth bootstrap: run the proxy, surface the authorize URL to the UI.
 const authProcs = new Map();
 app.post('/api/mcp/:name/oauth', (req, res) => {
   const name = req.params.name;
-  const row = one('SELECT config FROM mcp_servers WHERE name=?', name);
-  if (!row) return res.status(404).json({ error: 'not found' });
-  const url = mcpRemoteUrl(jObj(row.config) || {});
+  const c = customConnectors().find((x) => x.id === name);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  const url = mcpRemoteUrl(c.config || {});
   if (!url) return res.status(400).json({ error: 'this server has no remote URL — add it in Remote or Registry mode to use OAuth' });
   const prev = authProcs.get(name); if (prev) { try { prev.kill(); } catch { /* ignore */ } authProcs.delete(name); }
   let child;
@@ -1373,95 +982,30 @@ app.post('/api/mcp/:name/oauth', (req, res) => {
   child.on('error', (e) => finish({ ok: false, error: `couldn't start mcp-remote: ${e.message}` }));
   child.on('exit', () => { if (authProcs.get(name) === child) authProcs.delete(name); if (!done) finish({ ok: false, error: 'mcp-remote exited before producing an auth URL — check the server URL.' }); });
   const timer = setTimeout(() => finish({ ok: true, detail: 'mcp-remote is running; if no browser tab opened, retry.' }), 25_000);
-  setTimeout(kill, 5 * 60_000); // don't leave the auth proxy running forever
-});
-app.delete('/api/mcp/:name', (req, res) => { run('DELETE FROM mcp_servers WHERE name=?', req.params.name); res.json({ ok: true }); });
-
-app.get('/api/activity', (_q, res) =>
-  res.json(all('SELECT * FROM activity ORDER BY ord DESC LIMIT 40').map((a) => ({ time: a.time, text: a.text, state: a.state })))
-);
-
-const shapeWatch = (w) => ({
-  id: w.id, origin: w.origin_routine, target: w.target_slug, source: w.source, kind: w.kind, when: w.when_cond,
-  entity: jObj(w.entity) || {}, status: w.status, detail: w.detail, attempts: w.attempts, ago: relTime(w.created_at),
+  setTimeout(kill, 5 * 60_000);
 });
 
-// Generic event ingress — any trigger type. POST /api/events/push, /pull_request, etc.
-app.post('/api/events/:type', (req, res) => {
-  const type = req.params.type;
-  const payload = type === 'push' && (!req.body || !Object.keys(req.body).length) ? SAMPLE_PUSH() : req.body;
-  const out = dispatchEvent(type, payload);
-  if (out.error) return res.status(409).json(out);
-  res.json(out);
+// ── Activity / settings ──
+app.get('/api/activity', (_q, res) => res.json(activity.slice(0, 40)));
+
+app.get('/api/settings', async (_q, res) => {
+  const st = await integrationStatus();
+  const claude = await claudeAccount();
+  const saved = state.policies;
+  const policies = DEFAULT_POLICIES.map((p) => ({ ...p, on: saved && p.key in saved ? !!saved[p.key] : p.on }));
+  res.json({ identities: { ...st, claude }, policies });
+});
+app.post('/api/settings', (req, res) => {
+  const policies = req.body?.policies || {};
+  state.policies = policies;
+  daemon.log.append('control.policies', { policies });
+  res.json({ ok: true });
 });
 
-// Idempotency: GitHub retries the same delivery id on timeout — drop repeats within 10m.
-const _recentDeliveries = new Map();
-function isDuplicateDelivery(key) {
-  if (!key) return false;
-  const prev = _recentDeliveries.get(key);
-  _recentDeliveries.set(key, now());
-  if (_recentDeliveries.size > 1000) for (const [k, v] of _recentDeliveries) if (now() - v > 600_000) _recentDeliveries.delete(k);
-  return prev != null && now() - prev < 600_000;
-}
-// Real GitHub webhook receiver — dispatches by the X-GitHub-Event header.
-app.post('/api/webhooks/github', (req, res) => {
-  if (!githubSignatureValid(req)) return res.status(401).json({ error: 'invalid webhook signature' });
-  const type = req.get('x-github-event') || 'push';
-  if (type === 'ping') return res.json({ ok: true, pong: true });
-  const deliveryId = req.get('x-github-delivery') || '';
-  if (isDuplicateDelivery(deliveryId)) {
-    logActivity(`webhook ${type} ${deliveryId.slice(0, 8)} dropped · duplicate delivery`, 'idle');
-    return res.json({ ok: true, duplicate: true });
-  }
-  const out = dispatchEvent(type, req.body || {});
-  if (out.error) return res.status(409).json(out);
-  res.json({ ok: true, ...out });
-});
+// Unknown route + uncaught error → the {error} JSON contract, never HTML.
+app.use((req, res) => res.status(404).json({ error: `no such endpoint: ${req.method} ${req.path}` }));
+app.use((err, _req, res, _next) => { console.error('[switchboard]', err); res.status(500).json({ error: err.message || 'internal error' }); });
 
-// Webhook setup: the receiver URL (behind whatever public URL the user provides) + secret.
-const receiverUrl = () => { const base = meta('webhook_public_url', ''); return base ? base.replace(/\/$/, '') + '/api/webhooks/github' : ''; };
-app.get('/api/webhooks/config', (_q, res) => res.json({
-  publicUrl: meta('webhook_public_url', ''),
-  receiverUrl: receiverUrl(),
-  secretSet: !!(process.env.GITHUB_WEBHOOK_SECRET || meta('webhook_secret', '')),
-}));
-app.post('/api/webhooks/config', (req, res) => {
-  const url = String(req.body?.publicUrl || '').trim().replace(/\/$/, '');
-  if (url) { try { new URL(url); } catch { return res.status(400).json({ error: 'invalid URL' }); } }
-  setMeta('webhook_public_url', url);
-  res.json({ ok: true, publicUrl: url, receiverUrl: receiverUrl() });
-});
-app.post('/api/webhooks/secret', (_q, res) => {
-  const secret = crypto.randomBytes(24).toString('hex');
-  setMeta('webhook_secret', secret);
-  process.env.GITHUB_WEBHOOK_SECRET = secret;
-  res.json({ ok: true, secretSet: true }); // never returns the secret
-});
-
-function SAMPLE_PUSH() {
-  return {
-    event: 'push',
-    repository: 'fabioelia/harness-this-shit',
-    ref: 'refs/heads/feat/oauth-login',
-    pusher: 'fabio',
-    head_commit: { id: 'a1b9f3c', message: 'wire up the OAuth callback handler' },
-    pull_request: { number: 42, title: 'Add OAuth login flow', state: 'open', base: 'main' },
-  };
-}
-
-app.post('/api/kill-switch', (req, res) => {
-  const engaged = !!req.body?.engaged;
-  setMeta('kill_switch', engaged ? 'true' : 'false');
-  res.json({ killSwitch: engaged });
-});
-
-// First boot: an empty store ships with the runnable example fleet — the same
-// definitions "Load examples" installs, through the same insertRoutine path.
-if (!one('SELECT 1 FROM routines LIMIT 1')) {
-  const fill = (s) => String(s || '').split('__REPO__').join(DEFAULT_REPO);
-  for (const rt of SAMPLE_ROUTINES) insertRoutine({ ...rt, repo: fill(rt.repo), prompt: fill(rt.prompt) });
-  logActivity(`seeded ${SAMPLE_ROUTINES.length} example routines`, 'success');
-}
-
-app.listen(PORT, () => console.log(`Switchboard API on http://localhost:${PORT} · gh:${process.env.PATH ? 'path-ok' : '?'} · slack:${process.env.SLACK_BOT_TOKEN ? 'token' : 'none'}`));
+// Same-machine control surface: bind loopback unless deliberately exposed.
+const HOST = process.env.SWITCHBOARD_BIND || '127.0.0.1';
+app.listen(PORT, HOST, () => console.log(`Switchboard API on http://${HOST}:${PORT} · engine: @switchboard/harness (embedded) · routines: ${ROUTINES_DIR} · log: ${join(ROUTINES_DIR, '.harness')}`));

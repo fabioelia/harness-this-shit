@@ -1,0 +1,9 @@
+# Harness daemon config for this folder (all optional).
+port: 7717            # control API + webhook listener
+tick_seconds: 20      # scheduler resolution (cron fires at most once per matching minute)
+flow_tick_seconds: 45 # PR-subscription reconcile loop
+dedupe_window: 1h     # default window for trigger dedupe_key guards
+trace: compact        # run step trace in .harness: off | compact | full
+# model: claude-opus-4-8   # default model when a routine doesn't pin one
+# secrets:                 # vault:// reference → env indirection
+#   "vault://platform/slack/bot-token": "env://SLACK_BOT_TOKEN"

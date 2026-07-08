@@ -1,0 +1,32 @@
+#!/usr/bin/env node
+// Granted tool: read recent messages from a Slack channel.
+// Usage: slack-read '#channel-or-Cxxxx' [limit]
+const [, , channel, limitArg] = process.argv;
+const token = process.env.SLACK_BOT_TOKEN;
+if (!channel) { console.error("usage: slack-read '#channel-or-Cxxxx' [limit]"); process.exit(64); }
+if (!token) { console.error('SLACK_BOT_TOKEN not set'); process.exit(1); }
+const api = async (method, params) => {
+  const res = await fetch(`https://slack.com/api/${method}?${new URLSearchParams(params)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.json();
+};
+
+let id = channel;
+if (channel.startsWith('#')) {
+  let cursor = '', found = null;
+  for (let i = 0; i < 20 && !found; i++) {
+    const r = await api('conversations.list', { limit: 200, cursor, types: 'public_channel,private_channel' });
+    if (!r.ok) { console.error(`slack error: ${r.error}`); process.exit(2); }
+    found = r.channels.find((c) => c.name === channel.slice(1));
+    cursor = r.response_metadata?.next_cursor || '';
+    if (!cursor) break;
+  }
+  if (!found) { console.error(`channel ${channel} not found (or bot lacks access)`); process.exit(2); }
+  id = found.id;
+}
+const h = await api('conversations.history', { channel: id, limit: Math.min(parseInt(limitArg, 10) || 30, 200) });
+if (!h.ok) { console.error(`slack error: ${h.error}${h.error === 'not_in_channel' ? ` — invite the bot to ${channel}` : ''}`); process.exit(2); }
+for (const m of h.messages.reverse()) {
+  console.log(`[${new Date(m.ts * 1000).toISOString()}] ${m.user ?? m.bot_id ?? '?'}: ${(m.text ?? '').replace(/\n/g, ' ')}`);
+}
