@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useConnectors, useTestConnector, useConfigConnector, useMcp, useAddMcp, useDeleteMcp, useAuthMcp, useMcpOauth, useMcpRegistry, useAddFromRegistry } from '@/lib/api';
+import { useConnectors, useTestConnector, useConfigConnector, useAddMcp, useDeleteMcp, useAuthMcp, useMcpOauth, useMcpRegistry, useAddFromRegistry } from '@/lib/api';
 import { Pill, Dot, Empty, SIGNAL } from '@/components/sb';
 import { cn } from '@/lib/utils';
 import type { Connector } from '@/types';
@@ -211,7 +211,7 @@ export function ConnectorsPage() {
         <AddMcpServer />
         <div className="mt-3.5 flex items-center gap-[9px] font-sans text-[11.5px] font-medium text-dim-2">
           <svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="var(--dim-2)" strokeWidth="1.6"><circle cx="9" cy="9" r="6.5" /><line x1="9" y1="8" x2="9" y2="12.5" strokeLinecap="round" /><circle cx="9" cy="5.6" r="0.6" fill="var(--dim-2)" /></svg>
-          <span><span className="font-semibold text-t2">Test</span> checks a connector live; <span className="font-semibold text-t2">Configure</span> stores a token (Slack/Atlassian) — it's kept in the harness store and loaded into the session env, never the routine file. GitHub uses your <span className="font-mono">gh</span> login.</span>
+          <span><span className="font-semibold text-t2">Test</span> checks a connector live; <span className="font-semibold text-t2">Configure</span> stores a token (Slack) — it's kept in the harness store and loaded into the session env, never the routine file. GitHub uses your <span className="font-mono">gh</span> login.</span>
         </div>
       </div>
     </div>

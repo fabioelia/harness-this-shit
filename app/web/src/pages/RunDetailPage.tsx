@@ -1,74 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRun, useDispatchRoutine, useReplayRun, useRunDiff, useRunCompare, useRerunRun, useCancelRun, useSetBaseline, useReplayModel, useModels, useAssignRun, useVerdictRun, useBookmarkRun, useReactRun } from '@/lib/api';
+import { useRun, useDispatchRoutine, useReplayRun, useCancelRun } from '@/lib/api';
 import { Pill, Dot, Empty, stateMeta } from '@/components/sb';
 import { cn } from '@/lib/utils';
-import { useOperator } from '@/lib/operator';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
 const LABEL = 'font-display text-[10px] font-semibold uppercase tracking-[0.1em] text-dim';
-
-// LCS line diff: marks each line common / added / removed.
-function lineDiff(a: string, b: string): { sign: ' ' | '-' | '+'; text: string }[] {
-  const A = a.split('\n'), B = b.split('\n');
-  const m = A.length, n = B.length;
-  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-  for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--) dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-  const out: { sign: ' ' | '-' | '+'; text: string }[] = [];
-  let i = 0, j = 0;
-  while (i < m && j < n) {
-    if (A[i] === B[j]) { out.push({ sign: ' ', text: A[i] }); i++; j++; }
-    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push({ sign: '-', text: A[i] }); i++; }
-    else { out.push({ sign: '+', text: B[j] }); j++; }
-  }
-  while (i < m) out.push({ sign: '-', text: A[i++] });
-  while (j < n) out.push({ sign: '+', text: B[j++] });
-  return out;
-}
-
-function DiffCard({ runId }: { runId: string }) {
-  const [open, setOpen] = useState(false);
-  const [otherId, setOtherId] = useState('');
-  const { data } = useRunDiff(runId, open && !otherId.trim());
-  const cmp = useRunCompare(runId, open ? otherId : '');
-  return (
-    <div className={CARD}>
-      <button onClick={() => setOpen((v) => !v)} className={`${LABEL} flex w-full items-center justify-between hover:text-t2`}>
-        <span>Diff vs {otherId.trim() ? 'another run' : 'previous run'}</span><span className="font-mono text-dim">{open ? '▾' : '▸'}</span>
-      </button>
-      {open && (
-        <div className="mt-2 mb-1 flex items-center gap-2">
-          <input value={otherId} onChange={(e) => setOtherId(e.target.value)} placeholder="compare with run id (blank = previous)" className="h-7 flex-1 rounded-md border border-line bg-surface-2 px-2 font-mono text-[11px] text-fg focus:border-brand/60 focus:outline-none" />
-        </div>
-      )}
-      {open && otherId.trim() && (
-        cmp.isError ? <div className="mt-2 font-mono text-[12px] text-bad">run not found.</div> : cmp.data ? (
-          <div className="mt-2">
-            <div className="mb-2 font-mono text-[11px] text-dim-2">vs <Link to={`/runs/${cmp.data.b.id}`} className="text-brand-soft">{cmp.data.b.id}</Link> ({cmp.data.b.slug} · {cmp.data.b.ago})</div>
-            <pre className="max-h-[320px] overflow-auto rounded-md bg-code px-3 py-2 font-mono text-[11px] leading-[1.55]">{lineDiff(cmp.data.b.output, cmp.data.a.output).map((l, i) => <div key={i} className={l.sign === '+' ? 'text-ok' : l.sign === '-' ? 'text-bad' : 'text-dim-2'}>{l.sign} {l.text || ' '}</div>)}</pre>
-          </div>
-        ) : <div className="mt-2 font-mono text-[12px] text-dim">loading…</div>
-      )}
-      {open && !otherId.trim() && data && (
-        !data.previous ? <div className="mt-3 font-mono text-[12px] text-dim">no earlier run of this routine to compare.</div> : (
-          <div className="mt-3">
-            <div className="mb-2 flex flex-wrap gap-3 font-mono text-[11px] text-dim-2">
-              <span>prev <Link to={`/runs/${data.previous.id}`} className="text-brand-soft">{data.previous.id}</Link> · {data.previous.ago}</span>
-              {data.previous.cost != null && data.current?.cost != null && <span>Δcost ${(data.current.cost - data.previous.cost).toFixed(4)}</span>}
-              {data.previous.turns != null && data.current?.turns != null && <span>Δturns {data.current.turns - data.previous.turns}</span>}
-            </div>
-            <pre className="max-h-[320px] overflow-auto rounded-md bg-code px-3 py-2 font-mono text-[11px] leading-[1.55]">
-              {lineDiff(data.previous.output, data.current?.output || '').map((l, i) => (
-                <div key={i} className={l.sign === '+' ? 'text-ok' : l.sign === '-' ? 'text-bad' : 'text-dim-2'}>{l.sign} {l.text || ' '}</div>
-              ))}
-            </pre>
-          </div>
-        )
-      )}
-    </div>
-  );
-}
 
 type TE = { seq: number; t: string; ms: number; type: string; tool: string | null; ok: number | null; text: string; truncated: boolean };
 const dotForTrace = (e: TE) => e.type === 'tool_use' ? '#e6b052' : e.type === 'system' ? '#7f8a80' : e.type === 'text' ? '#5b9ee6' : (e.ok === 0 ? '#e5736b' : '#5fbf86');
@@ -87,22 +25,11 @@ const pretty = (e: TE): string => { try { return JSON.stringify(JSON.parse(e.tex
 export function RunDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [op] = useOperator();
-  const { data: r, isLoading } = useRun(id, op);
-  const react = useReactRun();
+  const { data: r, isLoading } = useRun(id);
   const dispatch = useDispatchRoutine();
   const replay = useReplayRun();
-  const rerun = useRerunRun();
   const cancel = useCancelRun();
-  const setBaseline = useSetBaseline();
-  const assign = useAssignRun();
-  const verdict = useVerdictRun();
-  const bookmark = useBookmarkRun();
-  const replayModel = useReplayModel();
-  const { data: models } = useModels();
-  const [editEvent, setEditEvent] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
-  const [assignee, setAssignee] = useState("");
   const qc = useQueryClient();
   // Live trace over SSE — fills in with no polling lag, then refetches on done.
   const [liveTrace, setLiveTrace] = useState<TE[]>([]);
@@ -139,29 +66,12 @@ export function RunDetailPage() {
 
   return (
     <div className="font-sans text-fg animate-fade-up">
-      {editEvent !== null && (
-        <div className="fixed inset-0 z-[100] flex items-start justify-center bg-black/55 p-8" onClick={() => setEditEvent(null)}>
-          <div className="mt-[10vh] w-full max-w-[640px] overflow-hidden rounded-xl border border-line bg-surface shadow-pop" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b border-line-soft px-4 py-2.5">
-              <span className="font-mono text-[12px] font-medium text-t2">Edit event &amp; re-run</span>
-              <button onClick={() => setEditEvent(null)} className="font-mono text-[12px] text-dim hover:text-fg">esc ✕</button>
-            </div>
-            <textarea value={editEvent} onChange={(e) => setEditEvent(e.target.value)} spellCheck={false} className="h-[44vh] w-full resize-none bg-code px-4 py-3 font-mono text-[12px] leading-[1.5] text-muted focus:outline-none" />
-            <div className="flex items-center justify-between gap-2 border-t border-line-soft px-4 py-2.5">
-              {rerun.isError ? <span className="font-mono text-[11px] text-bad">{(rerun.error as Error).message}</span> : <span className="font-mono text-[11px] text-dim-2">Tweak the payload, then re-run through the matcher.</span>}
-              <button onClick={() => rerun.mutate({ id: r.id, event: editEvent }, { onSuccess: (res) => { setEditEvent(null); navigate(`/runs/${res.runId}`); } })} disabled={rerun.isPending} className="h-8 rounded-md border border-brand/50 bg-brand/10 px-3.5 font-display text-[12px] font-semibold text-brand-soft hover:bg-brand/20 disabled:opacity-40">{rerun.isPending ? 'Running…' : 'Re-run'}</button>
-            </div>
-          </div>
-        </div>
-      )}
       <div className="border-b border-line-soft bg-head px-[26px] py-[22px]">
         <div className="mb-3 font-mono text-[12px] font-medium text-dim"><Link to="/runs" className="text-brand">Runs</Link> › {r.id}</div>
         <div className="flex items-center justify-between gap-4">
           <div className="flex min-w-0 items-center gap-3">
             <span className="font-mono text-[22px] font-bold tracking-tight">{r.id}</span>
             <Pill label={m.label} color={m.color} />
-            {r.slaBreach && <span title={`took ${r.slaBreach.actual}s vs the ${r.slaBreach.expected}s SLA`} className="rounded-md border border-warn/40 bg-warn/10 px-2 py-0.5 font-mono text-[11px] font-semibold text-warn">SLA +{r.slaBreach.actual - r.slaBreach.expected}s</span>}
-            {r.baseline && <span title="line-level divergence from the routine's golden baseline" className={`rounded-md border px-2 py-0.5 font-mono text-[11px] font-semibold ${r.baseline.drift > 40 ? 'border-bad/40 bg-bad/10 text-bad' : r.baseline.drift > 0 ? 'border-warn/40 bg-warn/10 text-warn' : 'border-ok/40 bg-ok/10 text-ok'}`}>{r.baseline.drift}% drift</span>}
           </div>
           <div className="flex items-center gap-2">
             {(r.status === 'running' || r.status === 'waiting') && (
@@ -176,25 +86,6 @@ export function RunDetailPage() {
               <svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M3 9a6 6 0 1 1 1.8 4.3" /><path d="M3 13v-3h3" /></svg>
               {replay.isPending ? 'Replaying…' : 'Replay'}
             </button>
-            {models && models.models.length > 1 && (
-              <select defaultValue="" onChange={(e) => { const model = e.target.value; e.target.value = ''; if (model) replayModel.mutate({ id: r.id, model }, { onSuccess: (res) => navigate(`/runs/${res.runId}`) }); }} title="Replay this exact event on a different model (A/B cost & quality)" className="h-[34px] rounded-md border border-line bg-surface-2 px-2 font-display text-[12px] font-semibold text-dim hover:border-hair focus:outline-none" style={{ colorScheme: 'dark' }}>
-                <option value="">replay on…</option>
-                {models.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-              </select>
-            )}
-            {r.event && (
-              <button onClick={() => setEditEvent(JSON.stringify(r.event, null, 2))} title="Edit this run's event payload and re-run with the tweaks" className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Edit &amp; re-run</button>
-            )}
-            <div className="flex h-[34px] items-center gap-0.5 rounded-md border border-line bg-surface-2 px-1.5">
-              {r.reactions.map((rx) => (
-                <button key={rx.emoji} onClick={() => react.mutate({ id: r.id, emoji: rx.emoji, by: op || 'anon' })} title={rx.who.length ? rx.who.join(', ') : 'react'} className={`flex items-center gap-0.5 rounded px-1 py-0.5 text-[13px] leading-none ${rx.mine ? 'bg-brand/15' : 'hover:bg-white/[0.05]'}`}>
-                  <span>{rx.emoji}</span>{rx.count > 0 && <span className={`font-mono text-[10px] ${rx.mine ? 'text-brand-soft' : 'text-dim'}`}>{rx.count}</span>}
-                </button>
-              ))}
-            </div>
-            <button onClick={() => { if (r.bookmarked) bookmark.mutate({ id: r.id, on: false }); else { const label = prompt('Bookmark this run for the team — optional label:', '') ?? ''; bookmark.mutate({ id: r.id, on: true, label, by: op || 'anon' }); } }} title={r.bookmarked ? 'remove bookmark' : 'bookmark this run for the team'} className={`flex h-[34px] items-center rounded-md border px-[13px] font-display text-[12.5px] font-semibold ${r.bookmarked ? 'border-brand/50 bg-brand/10 text-brand-soft' : 'border-line bg-surface-2 text-dim hover:border-hair hover:text-t2'}`}>{r.bookmarked ? '★ saved' : '☆ save'}</button>
-            <a href={`/api/runs/${r.id}/bundle`} download={`${r.id}.json`} title="Download the full run bundle (event, output, trace, metrics)" className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-dim hover:border-hair hover:text-t2">JSON ↓</a>
-            {r.status === 'succeeded' && <button onClick={() => setBaseline.mutate(r.id)} disabled={setBaseline.isPending} title="Pin this output as the routine's golden baseline; future runs report drift from it" className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-dim hover:border-hair hover:text-t2">{setBaseline.isPending ? 'Pinning…' : '◎ Set baseline'}</button>}
             <button
               onClick={() => dispatch.mutate(r.routine, { onSuccess: (res) => navigate(`/runs/${res.runId}`) })}
               disabled={dispatch.isPending}
@@ -307,24 +198,6 @@ export function RunDetailPage() {
             </div>
           </div>
 
-          {r.assertResult && (
-            <div className={CARD} style={{ borderColor: r.assertResult.passed ? 'rgba(95,191,134,.3)' : 'rgba(229,115,107,.3)' }}>
-              <div className="mb-3 flex items-center justify-between">
-                <span className={LABEL}>Assertions</span>
-                <span className={`rounded-full border px-2 py-0.5 font-display text-[10px] font-semibold ${r.assertResult.passed ? 'border-ok/30 bg-ok/10 text-ok' : 'border-bad/30 bg-bad/10 text-bad'}`}>{r.assertResult.passed ? 'all passed' : `${r.assertResult.results.filter((x) => !x.ok).length} failed`}</span>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                {r.assertResult.results.map((a, i) => (
-                  <div key={i} className="flex items-center gap-2 font-mono text-[11.5px]">
-                    <span className={a.ok ? 'text-ok' : 'text-bad'}>{a.ok ? '✓' : '✗'}</span>
-                    <span className="text-dim-2">{a.type}{a.value ? ` ${a.value}` : ''}</span>
-                    <span className="ml-auto text-dim">{a.detail}</span>
-                  </div>
-                ))}
-              </div>
-              {!r.assertResult.passed && <div className="mt-2 text-[11px] text-dim-2">Failed assertions gated this run's chains and reactions.</div>}
-            </div>
-          )}
           {r.inbox.length > 0 && (
             <div className={CARD}>
               <div className={`${LABEL} mb-3`}>Inbox · also on its plate <span className="font-mono lowercase tracking-normal text-dim">{r.inbox.length} coalesced</span></div>
@@ -368,23 +241,6 @@ export function RunDetailPage() {
               </div>
             </div>
           )}
-          <div className={CARD}>
-            <div className={`${LABEL} mb-3`}>Triage{r.triage ? ` · ${r.triage}` : ''}</div>
-            <div className="flex flex-wrap items-center gap-2">
-              <input value={assignee} onChange={(e) => setAssignee(e.target.value)} placeholder={op ? `assign (you: ${op})` : "assign to…"} className="h-8 w-36 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
-              {(['open', 'investigating', 'resolved'] as const).map((st) => (
-                <button key={st} onClick={() => assign.mutate({ id: r.id, assignee: assignee.trim() || r.assignee || op, triage: st })} className={`h-8 rounded-md border px-2.5 font-mono text-[11.5px] font-semibold ${r.triage === st ? (st === 'resolved' ? 'border-ok/50 bg-ok/10 text-ok' : st === 'investigating' ? 'border-warn/50 bg-warn/10 text-warn' : 'border-bad/50 bg-bad/10 text-bad') : 'border-line text-dim hover:text-t2'}`}>{st}</button>
-              ))}
-            </div>
-            {r.assignee && <div className="mt-2 font-mono text-[11.5px] text-dim-2">assigned to <span className="text-brand-soft">{r.assignee}</span></div>}
-            <div className="mt-3 flex items-center gap-2 border-t border-line-soft pt-3">
-              <span className="font-mono text-[11px] text-dim">sign-off:</span>
-              <button onClick={() => verdict.mutate({ id: r.id, verdict: r.verdict === 'good' ? '' : 'good', by: op || 'anon' })} className={`h-7 rounded-md border px-2.5 font-mono text-[12px] ${r.verdict === 'good' ? 'border-ok/50 bg-ok/10 text-ok' : 'border-line text-dim hover:text-t2'}`}>👍 good</button>
-              <button onClick={() => verdict.mutate({ id: r.id, verdict: r.verdict === 'bad' ? '' : 'bad', by: op || 'anon' })} className={`h-7 rounded-md border px-2.5 font-mono text-[12px] ${r.verdict === 'bad' ? 'border-bad/50 bg-bad/10 text-bad' : 'border-line text-dim hover:text-t2'}`}>👎 bad</button>
-              {r.verdict && r.verdictBy && <span className="font-mono text-[11px] text-dim-2">by {r.verdictBy}</span>}
-            </div>
-          </div>
-          <DiffCard runId={r.id} />
           {(r.lineage.triggeredBy || r.lineage.downstream.length > 0 || r.lineage.watches.length > 0) && (
             <div className={CARD}>
               <div className={`${LABEL} mb-3`}>Lineage · follow the work</div>

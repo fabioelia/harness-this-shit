@@ -2,8 +2,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { existsSync } from 'node:fs';
-import { seed } from './seed.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.SWITCHBOARD_DB || join(__dirname, '..', 'switchboard.db');
@@ -25,8 +23,6 @@ CREATE TABLE IF NOT EXISTS routines (
   success INTEGER,             -- nullable
   spend TEXT NOT NULL,
   enabled INTEGER NOT NULL,
-  meta_short TEXT NOT NULL,
-  lease_ref TEXT NOT NULL,
   avg TEXT NOT NULL,
   av_color TEXT NOT NULL,
   initials TEXT NOT NULL,
@@ -35,13 +31,14 @@ CREATE TABLE IF NOT EXISTS routines (
   model TEXT NOT NULL DEFAULT 'claude-opus-4-8',
   repo TEXT NOT NULL DEFAULT '',
   branch TEXT NOT NULL DEFAULT 'main',
-  sinks TEXT NOT NULL DEFAULT '[]',   -- deprecated, unused (the session does its own delivery)
   chain TEXT NOT NULL DEFAULT '[]',   -- json: downstream routine slugs
   schedule TEXT NOT NULL DEFAULT '',  -- 5-field cron for the schedule trigger
-  filters TEXT NOT NULL DEFAULT '{}', -- json: actions/branches event sub-filters
+  filters TEXT NOT NULL DEFAULT '{}', -- json: event sub-filters
   reactions TEXT NOT NULL DEFAULT '[]', -- json: [{source,kind,when,run}] follow-the-work
   effort TEXT NOT NULL DEFAULT '',      -- session reasoning effort (low|medium|high|xhigh|max), '' = CLI default
-  memory INTEGER NOT NULL DEFAULT 0     -- 1 = grant a persistent memory.md the session can read/update
+  memory INTEGER NOT NULL DEFAULT 0,    -- 1 = grant a persistent memory.md the session can read/update
+  concurrency TEXT NOT NULL DEFAULT '{}', -- json: { scope, onConflict }
+  retries INTEGER NOT NULL DEFAULT 0      -- auto-retry failed runs (0-3)
 );
 CREATE TABLE IF NOT EXISTS watches (
   id TEXT PRIMARY KEY,
@@ -60,7 +57,7 @@ CREATE TABLE IF NOT EXISTS watches (
 );
 CREATE INDEX IF NOT EXISTS idx_watches_status ON watches(status);
 CREATE TABLE IF NOT EXISTS leases (
-  key TEXT PRIMARY KEY,             -- concurrency group: pr:<repo>#<n> | repo:<r> | routine:<slug>
+  key TEXT PRIMARY KEY,             -- concurrency group: <slug>@pr:<repo>#<n> | <slug>@repo:<r> | routine:<slug>
   run_id TEXT NOT NULL,
   routine_slug TEXT NOT NULL,
   head_sha TEXT NOT NULL DEFAULT '',
@@ -70,7 +67,7 @@ CREATE TABLE IF NOT EXISTS leases (
 CREATE TABLE IF NOT EXISTS run_tasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   routine_slug TEXT NOT NULL,
-  lease_key TEXT NOT NULL,                -- the concurrency key the task belongs to (pr:…/repo:…/routine:…)
+  lease_key TEXT NOT NULL,                -- the concurrency key the task belongs to
   summary TEXT NOT NULL,                  -- human handoff line shown to the running agent
   payload TEXT NOT NULL DEFAULT '{}',     -- the coalesced event
   origin_run TEXT NOT NULL DEFAULT '',    -- the run whose dispatch was coalesced
@@ -81,16 +78,7 @@ CREATE INDEX IF NOT EXISTS idx_run_tasks_key ON run_tasks(routine_slug, lease_ke
 CREATE TABLE IF NOT EXISTS mcp_servers (
   name TEXT PRIMARY KEY,
   config TEXT NOT NULL,            -- json server def: {command,args,env} (stdio) | {type,url,headers} (http/sse)
-  created_at INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS agents (
-  name TEXT PRIMARY KEY,
-  role TEXT NOT NULL DEFAULT '',       -- the agent's persona / standing instructions
-  summary TEXT NOT NULL DEFAULT '',    -- one-line what it's for
-  connectors TEXT NOT NULL DEFAULT '[]',
-  model TEXT NOT NULL DEFAULT 'claude-opus-4-8',
-  memory INTEGER NOT NULL DEFAULT 0,
-  av_color TEXT NOT NULL DEFAULT '#b49ae6',
+  auth TEXT NOT NULL DEFAULT '{}', -- json: { scheme, header, token }
   created_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS activity (
@@ -111,13 +99,15 @@ CREATE TABLE IF NOT EXISTS runs (
   output TEXT NOT NULL DEFAULT '',
   event TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL DEFAULT 0,
-  sinks_result TEXT NOT NULL DEFAULT '[]',   -- deprecated, unused
-  exec_mode TEXT NOT NULL DEFAULT 'local',   -- runs are local sessions
   prompt TEXT NOT NULL DEFAULT '',           -- resolved session prompt (for the trace)
-  cloud_url TEXT NOT NULL DEFAULT '',        -- deprecated, unused
   cost_usd REAL,                             -- total_cost_usd from the session
   num_turns INTEGER,                         -- model turns
-  session_id TEXT NOT NULL DEFAULT ''        -- claude session id (resume handle)
+  session_id TEXT NOT NULL DEFAULT '',       -- claude session id (resume handle)
+  dur_ms INTEGER,
+  model_used TEXT NOT NULL DEFAULT '',
+  in_tokens INTEGER,
+  out_tokens INTEGER,
+  upstream_run TEXT NOT NULL DEFAULT ''      -- run id that chained/reacted into this one
 );
 CREATE TABLE IF NOT EXISTS run_events (
   id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,77 +126,34 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 let _db;
 export function getDb() {
   if (_db) return _db;
-  const fresh = !existsSync(DB_PATH);
   _db = new DatabaseSync(DB_PATH);
   _db.exec('PRAGMA journal_mode = WAL;');
   _db.exec(SCHEMA);
   // Guarded migration: CREATE TABLE IF NOT EXISTS won't add columns to an existing db.
   const cols = (t) => new Set(_db.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name));
   const ensure = (t, name, ddl) => { if (!cols(t).has(name)) _db.exec(`ALTER TABLE ${t} ADD COLUMN ${ddl}`); };
-  ensure('runs', 'cost_usd', 'cost_usd REAL');
-  ensure('runs', 'num_turns', 'num_turns INTEGER');
-  ensure('runs', 'session_id', "session_id TEXT NOT NULL DEFAULT ''");
-  ensure('routines', 'schedule', "schedule TEXT NOT NULL DEFAULT ''");
-  ensure('routines', 'filters', "filters TEXT NOT NULL DEFAULT '{}'");
-  ensure('routines', 'reactions', "reactions TEXT NOT NULL DEFAULT '[]'");
-  ensure('routines', 'effort', "effort TEXT NOT NULL DEFAULT ''");
-  ensure('routines', 'memory', 'memory INTEGER NOT NULL DEFAULT 0');
   ensure('routines', 'concurrency', "concurrency TEXT NOT NULL DEFAULT '{}'");
-  ensure('mcp_servers', 'auth', "auth TEXT NOT NULL DEFAULT '{}'");
-  ensure('agents', 'effort', "effort TEXT NOT NULL DEFAULT ''");
-  ensure('routines', 'script_mode', 'script_mode INTEGER NOT NULL DEFAULT 0');
-  ensure('routines', 'script', "script TEXT NOT NULL DEFAULT ''");
-  ensure('routines', 'script_lang', "script_lang TEXT NOT NULL DEFAULT 'bash'");
-  ensure('routines', 'script_stale', 'script_stale INTEGER NOT NULL DEFAULT 0');
   ensure('routines', 'retries', 'retries INTEGER NOT NULL DEFAULT 0');
-  ensure('routines', 'assertions', "assertions TEXT NOT NULL DEFAULT '[]'");
-  ensure('routines', 'alert_on_fail', 'alert_on_fail INTEGER NOT NULL DEFAULT 0');
-  ensure('routines', 'alert_target', "alert_target TEXT NOT NULL DEFAULT ''");
-  ensure('routines', 'timeout_s', 'timeout_s INTEGER NOT NULL DEFAULT 0');
-  ensure('routines', 'snooze_until', 'snooze_until INTEGER NOT NULL DEFAULT 0');
-  ensure('routines', 'snooze_reason', "snooze_reason TEXT NOT NULL DEFAULT ''");
-  ensure('routines', 'env', "env TEXT NOT NULL DEFAULT '{}'");
-  ensure('routines', 'tags', "tags TEXT NOT NULL DEFAULT '[]'");
-  ensure('routines', 'rate_limit', 'rate_limit INTEGER NOT NULL DEFAULT 0');
-  ensure('routines', 'max_fails', 'max_fails INTEGER NOT NULL DEFAULT 0');
-  ensure('routines', 'fail_streak', 'fail_streak INTEGER NOT NULL DEFAULT 0');
-  ensure('routines', 'notes', "notes TEXT NOT NULL DEFAULT ''");
-  ensure('routines', 'pinned', 'pinned INTEGER NOT NULL DEFAULT 0');
-  ensure('routines', 'active_window', "active_window TEXT NOT NULL DEFAULT ''");
-  ensure('routines', 'baseline', "baseline TEXT NOT NULL DEFAULT ''");
-  ensure('routines', 'sla_s', 'sla_s INTEGER NOT NULL DEFAULT 0');
-  ensure('routines', 'archived', 'archived INTEGER NOT NULL DEFAULT 0');
-  ensure('routines', 'lifecycle', "lifecycle TEXT NOT NULL DEFAULT 'active'");
-  ensure('routines', 'tier', "tier TEXT NOT NULL DEFAULT 'standard'");
-  ensure('routines', 'escalation', "escalation TEXT NOT NULL DEFAULT ''");
-  ensure('routines', 'links', "links TEXT NOT NULL DEFAULT '[]'");
-  ensure('routines', 'sunset_at', 'sunset_at INTEGER NOT NULL DEFAULT 0');
-  ensure('routines', 'review_status', "review_status TEXT NOT NULL DEFAULT ''");
-  ensure('routines', 'gate_review', 'gate_review INTEGER NOT NULL DEFAULT 0');
-  ensure('routines', 'reviewed_by', "reviewed_by TEXT NOT NULL DEFAULT ''");
-  ensure('routines', 'reviewed_at', 'reviewed_at INTEGER NOT NULL DEFAULT 0');
-  _db.exec('CREATE TABLE IF NOT EXISTS prompt_history (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, prompt TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)');
-  _db.exec('CREATE TABLE IF NOT EXISTS routine_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, summary TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)');
-  _db.exec('CREATE TABLE IF NOT EXISTS comments (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, author TEXT NOT NULL DEFAULT \'\', body TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)');
-  _db.exec('CREATE INDEX IF NOT EXISTS idx_comments_slug ON comments(slug, id)');
-  ensure('comments', 'pinned', 'pinned INTEGER NOT NULL DEFAULT 0');
-  _db.exec('CREATE TABLE IF NOT EXISTS mentions (id INTEGER PRIMARY KEY AUTOINCREMENT, mentioned TEXT NOT NULL, by TEXT NOT NULL DEFAULT \'\', slug TEXT NOT NULL, snippet TEXT NOT NULL DEFAULT \'\', created_at INTEGER NOT NULL DEFAULT 0)');
-  _db.exec('CREATE TABLE IF NOT EXISTS bookmarks (run_id TEXT PRIMARY KEY, slug TEXT NOT NULL, label TEXT NOT NULL DEFAULT \'\', by TEXT NOT NULL DEFAULT \'\', created_at INTEGER NOT NULL DEFAULT 0)');
-  _db.exec('CREATE TABLE IF NOT EXISTS routine_watch (who TEXT NOT NULL, slug TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(who, slug))');
-  _db.exec('CREATE TABLE IF NOT EXISTS run_reactions (run_id TEXT NOT NULL, emoji TEXT NOT NULL, by TEXT NOT NULL DEFAULT \'\', PRIMARY KEY(run_id, emoji, by))');
-  _db.exec('CREATE INDEX IF NOT EXISTS idx_routine_audit_slug ON routine_audit(slug, id)');
-  _db.exec('CREATE INDEX IF NOT EXISTS idx_prompt_history_slug ON prompt_history(slug, id)');
-  ensure('runs', 'assert_result', "assert_result TEXT NOT NULL DEFAULT ''");
+  ensure('mcp_servers', 'auth', "auth TEXT NOT NULL DEFAULT '{}'");
   ensure('runs', 'dur_ms', 'dur_ms INTEGER');
   ensure('runs', 'model_used', "model_used TEXT NOT NULL DEFAULT ''");
-  ensure('runs', 'assignee', "assignee TEXT NOT NULL DEFAULT ''");
-  ensure('runs', 'verdict', "verdict TEXT NOT NULL DEFAULT ''");
-  ensure('runs', 'verdict_by', "verdict_by TEXT NOT NULL DEFAULT ''");
-  ensure('runs', 'triage', "triage TEXT NOT NULL DEFAULT ''");
   ensure('runs', 'in_tokens', 'in_tokens INTEGER');
   ensure('runs', 'out_tokens', 'out_tokens INTEGER');
-  const n = _db.prepare('SELECT COUNT(*) AS n FROM routines').get();
-  if (fresh || n.n === 0) seed(_db);
+  ensure('runs', 'upstream_run', "upstream_run TEXT NOT NULL DEFAULT ''");
+  _db.exec('CREATE INDEX IF NOT EXISTS idx_runs_upstream ON runs(upstream_run)'); // after ensure: legacy DBs gain the column above
+  // Downgrade migration: databases created before the big simplification carry columns the
+  // INSERTs no longer supply — meta_short/lease_ref were NOT NULL with no default, so routine
+  // creation would break on an upgraded install. Drop every retired column (best-effort).
+  const drop = (t, name) => { if (cols(t).has(name)) { try { _db.exec(`ALTER TABLE ${t} DROP COLUMN ${name}`); } catch { /* keep working even if a legacy index blocks the drop */ } } };
+  ['meta_short', 'lease_ref', 'sinks', 'script_mode', 'script', 'script_lang', 'script_stale', 'assertions',
+    'alert_on_fail', 'alert_target', 'timeout_s', 'snooze_until', 'snooze_reason', 'env', 'tags', 'rate_limit',
+    'max_fails', 'fail_streak', 'notes', 'pinned', 'active_window', 'baseline', 'sla_s', 'archived', 'lifecycle',
+    'tier', 'escalation', 'links', 'sunset_at', 'review_status', 'gate_review', 'reviewed_by', 'reviewed_at',
+  ].forEach((c) => drop('routines', c));
+  ['sinks_result', 'exec_mode', 'cloud_url', 'assert_result', 'assignee', 'verdict', 'verdict_by', 'triage']
+    .forEach((c) => drop('runs', c));
+  for (const t of ['agents', 'prompt_history', 'routine_audit', 'comments', 'mentions', 'bookmarks', 'routine_watch', 'run_reactions'])
+    _db.exec(`DROP TABLE IF EXISTS ${t}`);
   return _db;
 }
 export const all = (sql, ...p) => getDb().prepare(sql).all(...p);

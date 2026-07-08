@@ -7,11 +7,9 @@ type Item = { label: string; sub: string; to: string; kind: string };
 const PAGES: Item[] = [
   { label: 'Fleet', sub: 'all routines', to: '/', kind: 'page' },
   { label: 'Runs', sub: 'execution history', to: '/runs', kind: 'page' },
-  { label: 'Insights', sub: 'spend · schedule · concurrency', to: '/insights', kind: 'page' },
-  { label: 'Team', sub: 'agents', to: '/team', kind: 'page' },
   { label: 'Activity', sub: 'live event log', to: '/activity', kind: 'page' },
   { label: 'Connectors', sub: 'integrations', to: '/connectors', kind: 'page' },
-  { label: 'Settings', sub: 'identities · webhooks · digest', to: '/settings', kind: 'page' },
+  { label: 'Settings', sub: 'identities · webhooks · policies', to: '/settings', kind: 'page' },
   { label: 'New routine', sub: 'create', to: '/routines/new', kind: 'action' },
 ];
 

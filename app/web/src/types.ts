@@ -29,41 +29,7 @@ export interface Routine {
   spend: string;
   avg: string;
   inbox: number;
-  scriptMode: boolean;
-  scriptLang: string;
-  compiled: boolean;
-  scriptStale: boolean;
   retries: number;
-  assertions: { type: string; value: string }[];
-  alertOnFail: boolean;
-  alertTarget: string;
-  timeout: number;
-  snoozedUntil: number;
-  snoozeReason: string;
-  env: Record<string, string>;
-  tags: string[];
-  rateLimit: number;
-  maxFails: number;
-  failStreak: number;
-  notes: string;
-  pinned: boolean;
-  lastSuccessAgo: string;
-  staleSuccess: boolean;
-  longRunning: boolean;
-  activeWindow: { start: number | null; end: number | null; days: number[] } | null;
-  sla: number;
-  archived: boolean;
-  lifecycle: string;
-  reviewStatus: string;
-  reviewedBy: string;
-  reviewedAgo: string;
-  gateReview: boolean;
-  tier: string;
-  escalation: string;
-  links: { label: string; url: string }[];
-  sunsetAt: number;
-  sunsetOverdue: boolean;
-  commentCount: number;
 }
 
 export interface FrontMatter {
@@ -91,15 +57,7 @@ export interface RoutineDetail extends Routine {
   watches: Watch[];
   leases: { key: string; runId: string; sha: string; held: string; ttl: string }[];
   inboxTasks: { summary: string; key: string; ago: string }[];
-  script: string;
   lastError: { runId: string; output: string; ago: string } | null;
-  costTrend: number[];
-  dependents: { slug: string; name: string; enabled: boolean; via: string }[];
-  upstream: { slug: string; name: string; enabled: boolean; lastStatus: string; missing: boolean }[];
-  mttr: { value: string; incidents: number; openIncident: boolean; downSince: string | null } | null;
-  runsByDay: { date: string; runs: number; fails: number }[];
-  lastTouched: { summary: string; ago: string } | null;
-  watchers: string[];
 }
 
 export interface RegistryServer {
@@ -130,26 +88,11 @@ export interface RunDetail {
   trace: TraceEvent[];
   toolBreakdown: { tool: string; calls: number; errors: number }[];
   matchExplain: { fired: boolean; checks: { label: string; ok: boolean; detail: string }[] } | null;
-  baseline: { drift: number } | null;
-  slaBreach: { expected: number; actual: number } | null;
-  assignee: string;
-  triage: string;
-  verdict: string;
-  verdictBy: string;
-  bookmarked: boolean;
-  reactions: { emoji: string; count: number; mine: boolean; who: string[] }[];
   inbox: { summary: string; ago: string; pending: boolean }[];
-  assertResult: { passed: boolean; results: { type: string; value: string; ok: boolean; detail: string }[] } | null;
   lineage: RunLineage;
   awaiting: string | null;
   summary: { result: string; surface: string };
 }
-export interface Agent {
-  name: string; role: string; summary: string; connectors: string[]; model: string; effort: string; memory: boolean; avColor: string;
-  status: 'idle' | 'working'; currentTask: string | null; lastActive: string; taskCount: number;
-}
-export interface AgentTask { id: string; task: string; status: string; ago: string; dur: string; result: string }
-export interface AgentDetail extends Agent { tasks: AgentTask[] }
 export interface Stats {
   wordmark: string; killSwitch: boolean; total: number; enabled: number; teams: number;
   running: number; failing: number; runsToday: number;

@@ -1,27 +1,14 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { useActivity, useMentions, useInbox, useGlobalAudit, useStandup, usePostStandup } from '@/lib/api';
+import { useActivity } from '@/lib/api';
 import { Dot, Empty } from '@/components/sb';
 import { cn } from '@/lib/utils';
-import { useOperator } from '@/lib/operator';
-
-const STATE_GROUPS: Record<string, string[]> = { success: ['success'], failing: ['failing'], idle: ['idle'], queued: ['queued'] };
 
 export function ActivityPage() {
   const { data: activity } = useActivity();
-  const { data: mentions } = useMentions();
-  const [operator] = useOperator();
-  const { data: inbox } = useInbox(operator);
-  const { data: audit } = useGlobalAudit();
-  const { data: standup } = useStandup(1);
-  const postStandup = usePostStandup();
-  const [showAudit, setShowAudit] = useState(false);
   const [q, setQ] = useState('');
   const [state, setState] = useState('all');
-  const PEOPLE_RE = /commented|mentioned|approved|handed over|review requested|signed off|snoozed|handover/i;
   const filtered = (activity ?? []).filter((a) => {
-    if (state === 'people') { if (!PEOPLE_RE.test(a.text)) return false; }
-    else if (state !== 'all' && !STATE_GROUPS[state]?.includes(a.state)) return false;
+    if (state !== 'all' && a.state !== state) return false;
     if (q.trim() && !a.text.toLowerCase().includes(q.toLowerCase())) return false;
     return true;
   });
@@ -33,82 +20,12 @@ export function ActivityPage() {
         <div className="mt-1 text-[13px] text-muted-2">The live event log — runs that fired, and dispatch decisions (skips, kill-switch drops).</div>
       </div>
       <div className="mx-auto max-w-[860px] px-[26px] py-6">
-        {operator && inbox && inbox.count > 0 && (
-          <div className="mb-5 overflow-hidden rounded-xl border border-ok/30 bg-ok/[0.04]">
-            <div className="border-b border-line-soft px-4 py-2 font-display text-[11px] font-semibold uppercase tracking-[0.07em] text-ok">For you, {operator} · {inbox.count}</div>
-            {inbox.assigned.map((a) => (
-              <Link key={a.id} to={`/runs/${a.id}`} className="flex items-center gap-3 border-b border-line-soft px-4 py-2 last:border-0 font-mono text-[11.5px] hover:bg-white/[0.015]">
-                <span className="shrink-0 rounded bg-bad/15 px-1.5 py-px text-[10px] font-semibold text-bad">assigned · {a.triage}</span>
-                <span className="flex-1 truncate text-t2">{a.slug} · {a.id}</span><span className="shrink-0 text-dim">{a.ago}</span>
-              </Link>
-            ))}
-            {inbox.mentions.map((mn, i) => (
-              <Link key={'m' + i} to={`/routines/${mn.slug}`} className="flex items-center gap-3 border-b border-line-soft px-4 py-2 last:border-0 font-mono text-[11.5px] hover:bg-white/[0.015]">
-                <span className="shrink-0 rounded bg-brand/15 px-1.5 py-px text-[10px] font-semibold text-brand-soft">mention</span>
-                <span className="text-dim">{mn.by} on {mn.slug}:</span><span className="flex-1 truncate text-dim-2">“{mn.snippet}”</span><span className="shrink-0 text-dim">{mn.ago}</span>
-              </Link>
-            ))}
-            {inbox.watchedFails.map((f, i) => (
-              <Link key={'wf' + i} to={`/runs/${f.id}`} className="flex items-center gap-3 border-b border-line-soft px-4 py-2 last:border-0 font-mono text-[11.5px] hover:bg-white/[0.015]">
-                <span className="shrink-0 rounded bg-bad/15 px-1.5 py-px text-[10px] font-semibold text-bad">👁 failed</span>
-                <span className="w-[120px] shrink-0 truncate text-t2">{f.slug}</span><span className="flex-1 truncate text-dim">a watched routine failed · {f.id}</span><span className="shrink-0 text-dim">{f.ago}</span>
-              </Link>
-            ))}
-            {inbox.watched.map((w, i) => (
-              <Link key={'w' + i} to={`/routines/${w.slug}`} className="flex items-center gap-3 border-b border-line-soft px-4 py-2 last:border-0 font-mono text-[11.5px] hover:bg-white/[0.015]">
-                <span className="shrink-0 rounded bg-lease/15 px-1.5 py-px text-[10px] font-semibold text-lease">👁 watching</span>
-                <span className="w-[120px] shrink-0 truncate text-t2">{w.slug}</span><span className="flex-1 truncate text-dim-2">{w.summary}</span><span className="shrink-0 text-dim">{w.ago}</span>
-              </Link>
-            ))}
-          </div>
-        )}
-        {standup && Object.values(standup.counts).some((n) => n > 0) && (
-          <div className="mb-5 rounded-xl border border-line bg-surface px-4 py-3">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="font-display text-[11px] font-semibold uppercase tracking-[0.07em] text-dim-2">Team standup · last 24h</span>
-              <button onClick={() => postStandup.mutate()} className="font-mono text-[11px] text-dim hover:text-brand">{postStandup.isPending ? 'posting…' : postStandup.data ? (postStandup.data.sent ? `posted → ${postStandup.data.channel}` : 'set a digest channel first') : 'post to Slack ↗'}</button>
-            </div>
-            <div className="flex flex-wrap gap-4 font-mono text-[12px]">
-              {([['changes', 'edits'], ['approvals', 'approvals'], ['comments', 'comments'], ['signoffs', 'sign-offs'], ['resolved', 'incidents resolved']] as const).map(([k, label]) => (
-                <span key={k} className="text-dim-2"><span className="font-semibold text-t2">{standup.counts[k]}</span> {label}</span>
-              ))}
-            </div>
-          </div>
-        )}
-        {audit && audit.entries.length > 0 && (
-          <div className="mb-5 overflow-hidden rounded-xl border border-line bg-surface">
-            <div className="flex w-full items-center gap-2 px-4 py-2">
-              <button onClick={() => setShowAudit((v) => !v)} className="flex flex-1 items-center justify-between font-display text-[11px] font-semibold uppercase tracking-[0.07em] text-dim-2 hover:text-t2"><span>Change log · all routines</span><span className="font-mono">{showAudit ? '▾' : '▸'}</span></button>
-              <a href="/api/audit.csv" download title="export change log as CSV" className="font-mono text-[11px] text-dim hover:text-brand">CSV ↓</a>
-            </div>
-            {showAudit && audit.entries.slice(0, 30).map((e, i) => (
-              <Link key={i} to={`/routines/${e.slug}`} className="flex items-center gap-3 border-t border-line-soft px-4 py-1.5 font-mono text-[11.5px] hover:bg-white/[0.015]">
-                <span className="w-[130px] shrink-0 truncate text-brand-soft">{e.slug}</span>
-                <span className="flex-1 truncate text-t2">{e.summary}</span>
-                <span className="shrink-0 text-dim">{e.ago}</span>
-              </Link>
-            ))}
-          </div>
-        )}
-        {mentions && mentions.mentions.length > 0 && (
-          <div className="mb-5 overflow-hidden rounded-xl border border-brand/30 bg-brand/[0.04]">
-            <div className="border-b border-line-soft px-4 py-2 font-display text-[11px] font-semibold uppercase tracking-[0.07em] text-brand-soft">@ Mentions</div>
-            {mentions.mentions.slice(0, 6).map((mn, i) => (
-              <Link key={i} to={`/routines/${mn.slug}`} className="flex items-start gap-2 border-b border-line-soft px-4 py-2 last:border-0 font-mono text-[11.5px] hover:bg-white/[0.015]">
-                <span className="shrink-0 font-semibold text-brand-soft">@{mn.mentioned}</span>
-                <span className="text-dim">by {mn.by} on {mn.slug}</span>
-                <span className="flex-1 truncate text-dim-2">“{mn.snippet}”</span>
-                <span className="shrink-0 text-dim">{mn.ago}</span>
-              </Link>
-            ))}
-          </div>
-        )}
         <div className="mb-3 flex flex-wrap items-center gap-2.5">
           <Dot color="#5fbf86" size={8} pulse />
           <span className="font-display text-[11px] font-semibold uppercase tracking-[0.1em] text-t2">Live activity</span>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="filter…" className="h-8 min-w-[180px] flex-1 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
           <span className="inline-flex overflow-hidden rounded-md border border-line text-[11px] font-semibold">
-            {[['all', 'all'], ['people', 'people'], ['success', 'ran'], ['failing', 'failed'], ['idle', 'skips'], ['queued', 'queued']].map(([v, l]) => (
+            {[['all', 'all'], ['success', 'ran'], ['failing', 'failed'], ['idle', 'skips'], ['queued', 'queued']].map(([v, l]) => (
               <button key={v} onClick={() => setState(v)} className={cn('px-2 py-1 font-mono', state === v ? 'bg-brand/15 text-brand-soft' : 'text-dim hover:text-t2')}>{l}</button>
             ))}
           </span>

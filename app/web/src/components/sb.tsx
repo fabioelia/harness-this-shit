@@ -13,8 +13,6 @@ export const SIGNAL = {
   idle: '#7f8a80',
 } as const;
 
-export type StateKey = keyof typeof SIGNAL;
-
 const STATE_META: Record<string, { label: string; color: string; pulse?: boolean }> = {
   idle: { label: 'Idle', color: SIGNAL.idle },
   success: { label: 'Success', color: SIGNAL.success },
@@ -71,54 +69,6 @@ export function StatePill({ state }: { state: string }) {
   return <Pill label={m.label} color={m.color} />;
 }
 
-/** 14-bar history sparkline. hist entries are state keys, or '_' for empty. */
-export function Spark({ hist, h = 16 }: { hist: string[]; h?: number }) {
-  return (
-    <span className="inline-flex items-end gap-[2px]">
-      {hist.map((st, i) => (
-        <span
-          key={i}
-          style={{
-            display: 'inline-block',
-            width: 3,
-            height: h,
-            borderRadius: 1.5,
-            background: st === '_' ? 'rgba(255,255,255,.09)' : (SIGNAL as Record<string, string>)[st] ?? SIGNAL.idle,
-          }}
-        />
-      ))}
-    </span>
-  );
-}
-
-/** Deterministic history from success-rate + state + seed (ports mkHist). */
-export function makeHist(pct: number | null, state: string, seed: number): string[] {
-  const n = 14;
-  const a: string[] = [];
-  let s = seed * 7 + 19;
-  const rnd = () => {
-    s = (s * 1103515245 + 12345) & 0x7fffffff;
-    return s / 0x7fffffff;
-  };
-  for (let i = 0; i < n; i++) a.push(rnd() * 100 > 100 - (pct == null ? 100 : pct) ? 'success' : 'failing');
-  if (state === 'disabled') for (let i = 0; i < n; i++) a[i] = '_';
-  if (state === 'running' || state === 'lease') a[n - 1] = 'running';
-  return a;
-}
-
-export function Sbar({ pct }: { pct: number | null }) {
-  if (pct == null) return <span className="font-mono text-[11.5px] text-dim-3">no data</span>;
-  const col = pct >= 90 ? SIGNAL.success : pct >= 75 ? '#5b9ee6' : SIGNAL.failing;
-  return (
-    <span className="inline-flex items-center gap-2">
-      <span className="relative overflow-hidden rounded-[3px]" style={{ width: 58, height: 5, background: 'rgba(255,255,255,.09)' }}>
-        <span className="absolute left-0 top-0 bottom-0 rounded-[3px]" style={{ width: `${pct}%`, background: col }} />
-      </span>
-      <span className="font-mono text-[11.5px]" style={{ color: 'var(--code-accent)', minWidth: 30 }}>{pct}%</span>
-    </span>
-  );
-}
-
 export function Avatar({ color, initials, size = 24 }: { color: string; initials: string; size?: number }) {
   return (
     <span
@@ -128,11 +78,6 @@ export function Avatar({ color, initials, size = 24 }: { color: string; initials
       {initials}
     </span>
   );
-}
-
-export function initialsOf(name: string) {
-  const p = name.trim().split(/\s+/);
-  return (p.length === 1 ? p[0].slice(0, 2) : p[0][0] + p[p.length - 1][0]).toUpperCase();
 }
 
 export function Toggle({ on, onCheckedChange }: { on: boolean; onCheckedChange?: (v: boolean) => void }) {

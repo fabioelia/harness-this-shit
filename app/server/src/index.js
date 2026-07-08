@@ -3,17 +3,18 @@ import cors from 'cors';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-// In-process bus so the run trace can stream live over SSE (no DB polling lag).
-const runBus = new EventEmitter();
-runBus.setMaxListeners(0);
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync, unlinkSync, statSync } from 'node:fs';
+import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { getDb, all, one, run } from './db.js';
 import { runClaude, buildPrompt, allowedToolsFor } from './runner.js';
 import { integrationStatus, listRepos, listOrgs, listChecks, claudeAccount, testConnector, bustStatus, gh } from './integrations.js';
-import { SAMPLE_ROUTINES, SAMPLE_AGENTS } from './samples.js';
+import { SAMPLE_ROUTINES, DEFAULT_REPO } from './samples.js';
+
+// In-process bus so the run trace can stream live over SSE (no DB polling lag).
+const runBus = new EventEmitter();
+runBus.setMaxListeners(0);
 
 const app = express();
 // Same-machine tool: only allow the local web origin to call the API from a browser.
@@ -21,9 +22,16 @@ app.use(cors({ origin: [/^http:\/\/localhost(:\d+)?$/, /^http:\/\/127\.0\.0\.1(:
 app.use(express.json({ limit: '2mb', verify: (req, _res, buf) => { req.rawBody = buf; } }));
 getDb();
 
+const PORT = process.env.PORT || 4317;
+const now = () => Date.now();
+const j = (s) => { try { const v = JSON.parse(s); return Array.isArray(v) ? v : []; } catch { return []; } };
+const jObj = (s) => { try { return JSON.parse(s); } catch { return null; } };
+const meta = (k, d) => one('SELECT value FROM meta WHERE key=?', k)?.value ?? d;
+const setMeta = (k, v) => run('INSERT INTO meta (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', k, String(v));
+
 // Verify a GitHub webhook HMAC (X-Hub-Signature-256) when a secret is configured.
 function githubSignatureValid(req) {
-  const secret = process.env.GITHUB_WEBHOOK_SECRET || metaGet('webhook_secret', '');
+  const secret = process.env.GITHUB_WEBHOOK_SECRET || meta('webhook_secret', '');
   if (!secret) return process.env.NODE_ENV !== 'production'; // fail-closed in prod, accept in local/dev
   const sig = req.get('x-hub-signature-256') || '';
   if (!sig) return false; // a secret is set → an unsigned request is rejected
@@ -34,25 +42,6 @@ function githubSignatureValid(req) {
 if (process.env.NODE_ENV === 'production' && !process.env.GITHUB_WEBHOOK_SECRET)
   console.warn('[switchboard] NODE_ENV=production but GITHUB_WEBHOOK_SECRET is unset — /api/webhooks/github will reject all requests until you set it.');
 
-const PORT = process.env.PORT || 4317;
-const j = (s) => { try { const v = JSON.parse(s); return Array.isArray(v) ? v : []; } catch { return []; } };
-const jObj = (s) => { try { return JSON.parse(s); } catch { return null; } };
-const meta = (k, d) => one('SELECT value FROM meta WHERE key=?', k)?.value ?? d;
-const metaGet = meta; // alias used before `meta` is in scope in hoisted fns
-const setMeta = (k, v) => run("INSERT INTO meta (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", k, String(v));
-// Automatic cost guardrail: a daily spend cap that pauses dispatch when reached.
-const todaySpend = () => { const s = new Date(now()); s.setHours(0, 0, 0, 0); return one('SELECT COALESCE(SUM(cost_usd),0) AS s FROM runs WHERE created_at > ?', s.getTime()).s || 0; };
-const budgetCap = () => parseFloat(metaGet('daily_budget', '')) || 0;
-const overBudget = () => { const cap = budgetCap(); return cap > 0 && todaySpend() >= cap; };
-// Per-team daily budgets — throttle only the offending team, not the whole fleet.
-const readTeamBudgets = () => { try { return JSON.parse(metaGet('team_budgets', '{}')); } catch { return {}; } };
-function teamSpendToday(team) {
-  const s = new Date(now()); s.setHours(0, 0, 0, 0);
-  const slugs = all('SELECT slug FROM routines WHERE team=?', team).map((x) => x.slug);
-  if (!slugs.length) return 0;
-  return one(`SELECT COALESCE(SUM(cost_usd),0) AS s FROM runs WHERE created_at > ? AND routine_slug IN (${slugs.map(() => '?').join(',')})`, s.getTime(), ...slugs).s || 0;
-}
-function teamOverBudget(team) { const cap = parseFloat(readTeamBudgets()[team]) || 0; return cap > 0 && teamSpendToday(team) >= cap; }
 // UI-configured secrets are stored in meta; load them into the process env so the
 // runner's child sessions and the integrations both see them (env wins if already set).
 const TOKEN_ENV = { slack: 'SLACK_BOT_TOKEN', atlassian: 'ATLASSIAN_API_TOKEN' };
@@ -61,7 +50,6 @@ for (const [k, envKey] of Object.entries(TOKEN_ENV)) {
   ENV_BASE[envKey] = process.env[envKey];
   const v = meta(`token_${k}`, ''); if (v && !process.env[envKey]) process.env[envKey] = v;
 }
-const now = () => Date.now();
 
 // ── Custom MCP servers: user drops in a config + auth; routines grant them ──────
 const mcpNameSet = () => new Set(all('SELECT name FROM mcp_servers').map((s) => s.name));
@@ -144,6 +132,8 @@ function ensureMemory(slug) {
   if (!existsSync(md)) writeFileSync(md, `# Memory — ${slug}\n\nThe index of what this routine has learned across runs. Add durable facts below; link supporting files like [decisions](decisions.md).\n\n## Facts\n\n`);
   return dir;
 }
+
+// ── Config normalizers ──────────────────────────────────────────────────────────
 const cleanFilters = (f) => {
   const o = f && typeof f === 'object' ? f : {};
   const arr = (x) => (Array.isArray(x) ? x.map((s) => String(s).trim()).filter(Boolean) : []);
@@ -163,37 +153,13 @@ const cleanFilters = (f) => {
   return { actions: arr(o.actions), branches: arr(o.branches), labels: arr(o.labels), mode: o.mode === 'or' ? 'or' : 'and' };
 };
 const normRetries = (n) => Math.max(0, Math.min(3, parseInt(n, 10) || 0));
-const cleanEnv = (e) => { const o = e && typeof e === 'object' ? e : {}; const out = {}; for (const [k, v] of Object.entries(o)) { const K = String(k).trim().replace(/[^A-Z0-9_]/gi, '_').toUpperCase(); if (K && !K.startsWith('SB_')) out[K] = String(v); } return out; };
-// Output assertions: checked harness-side over the run result + trace (not self-reported).
-const ASSERT_TYPES = ['contains', 'not_contains', 'matches', 'max_cost', 'max_turns', 'min_length', 'no_tool_errors'];
-const cleanAssertions = (a) => (Array.isArray(a) ? a : [])
-  .map((x) => ({ type: ASSERT_TYPES.includes(x?.type) ? x.type : 'contains', value: String(x?.value ?? '').trim() }))
-  .filter((x) => x.type === 'no_tool_errors' || x.value);
-function evalAssertions(routine, ctx) {
-  let list; try { list = JSON.parse(routine.assertions || '[]'); } catch { list = []; }
-  if (!Array.isArray(list) || !list.length) return null;
-  const out = String(ctx.output || '');
-  const lc = out.toLowerCase();
-  const results = list.map((a) => {
-    const v = a.value; let ok = true; let detail = '';
-    switch (a.type) {
-      case 'contains': ok = lc.includes(String(v).toLowerCase()); detail = ok ? `contains "${v}"` : `"${v}" not in output`; break;
-      case 'not_contains': ok = !lc.includes(String(v).toLowerCase()); detail = ok ? `no "${v}"` : `"${v}" present`; break;
-      case 'matches': try { ok = new RegExp(v).test(out); } catch { ok = false; } detail = ok ? `matches /${v}/` : `/${v}/ no match`; break;
-      case 'max_cost': ok = (ctx.costUsd || 0) <= Number(v); detail = `$${(ctx.costUsd || 0).toFixed(4)} ${ok ? '≤' : '>'} $${v}`; break;
-      case 'max_turns': ok = (ctx.numTurns || 0) <= Number(v); detail = `${ctx.numTurns || 0} ${ok ? '≤' : '>'} ${v} turns`; break;
-      case 'min_length': ok = out.length >= Number(v); detail = `${out.length} ${ok ? '≥' : '<'} ${v} chars`; break;
-      case 'no_tool_errors': ok = (ctx.toolErrors || 0) === 0; detail = ctx.toolErrors ? `${ctx.toolErrors} tool error(s)` : 'no tool errors'; break;
-      default: ok = true;
-    }
-    return { type: a.type, value: v, ok, detail };
-  });
-  return { passed: results.every((r) => r.ok), results };
-}
 const cleanConcurrency = (c) => {
   const o = c && typeof c === 'object' ? c : {};
   return { scope: ['auto', 'pr', 'repo', 'routine', 'off'].includes(o.scope) ? o.scope : 'auto', onConflict: ['wait', 'drop', 'coalesce'].includes(o.onConflict) ? o.onConflict : 'wait' };
 };
+const cleanReactions = (arr) => (Array.isArray(arr) ? arr : [])
+  .map((x) => ({ source: String(x.source || '').trim(), kind: String(x.kind || '').trim(), when: String(x.when || '').trim(), check: String(x.check || '').trim(), run: String(x.run || '').trim() }))
+  .filter((x) => x.source && x.kind && x.run);
 
 function relTime(ts) {
   if (!ts) return '—';
@@ -207,7 +173,7 @@ function relTime(ts) {
 const fmtDur = (ms) => (ms == null ? '…' : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`);
 const fmtOffset = (ms) => `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, '0')}`;
 
-// ── Concurrency leases: no two routines act on the same entity at once ──────────
+// ── Concurrency leases: no two runs act on the same entity at once ──────────────
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const LEASE_TTL = 15 * 60_000; // a crashed run's lease frees itself after this
 const eventSha = (e) => e?.pull_request?.head?.sha || e?.after || e?.check_suite?.head_sha || e?.workflow_run?.head_sha || e?.head_commit?.id || '';
@@ -221,10 +187,10 @@ function leaseFor(routine, event) {
   const sha = eventSha(event);
   // Keys are per-routine so a routine never overlaps itself on an entity, but distinct
   // routines act on the same PR independently (and coalesce hands off to its OWN agent).
-  if (scope === 'off') return { key: null, onConflict, sha: '' };
-  if (scope === 'pr' && pr) return { key: `${routine.slug}@pr:${pr.repo}#${pr.pr}`, onConflict, sha };
-  if (scope === 'repo') { const repo = pr?.repo || repoTargets(routine)[0] || eventRepo(event); return { key: repo ? `${routine.slug}@repo:${repo}` : `routine:${routine.slug}`, onConflict, sha }; }
-  return { key: `routine:${routine.slug}`, onConflict, sha };
+  if (scope === 'off') return { key: null, onConflict, sha: '', prRef: null };
+  if (scope === 'pr' && pr) return { key: `${routine.slug}@pr:${pr.repo}#${pr.pr}`, onConflict, sha, prRef: pr };
+  if (scope === 'repo') { const repo = pr?.repo || repoTargets(routine)[0] || eventRepo(event); return { key: repo ? `${routine.slug}@repo:${repo}` : `routine:${routine.slug}`, onConflict, sha, prRef: null }; }
+  return { key: `routine:${routine.slug}`, onConflict, sha, prRef: null };
 }
 // Atomic (node:sqlite is synchronous): steals an expired lease, else reports the holder.
 function acquireLease(key, runId, slug, sha) {
@@ -263,7 +229,6 @@ const addTask = (slug, key, event, originRun, triggerLabel) =>
 const pendingTasks = (slug, key) => all("SELECT * FROM run_tasks WHERE routine_slug=? AND lease_key=? AND handled_by='' ORDER BY created_at", slug, key);
 const claimTasks = (ids, runId) => { if (ids.length) run(`UPDATE run_tasks SET handled_by=? WHERE id IN (${ids.map(() => '?').join(',')})`, runId, ...ids); };
 
-// Redact obvious secrets before a trace event is ever written to disk.
 // Runtime options the CLI actually accepts (verified against `claude --model/--effort`).
 const MODELS = [
   { id: 'claude-opus-4-8', label: 'Opus 4.8' },
@@ -277,6 +242,7 @@ const DEFAULT_MODEL = 'claude-opus-4-8';
 const normModel = (m) => (MODEL_IDS.includes((m || '').trim()) ? m.trim() : DEFAULT_MODEL);
 const normEffort = (e) => (EFFORTS.includes((e || '').trim()) ? e.trim() : '');
 
+// Redact obvious secrets before a trace event is ever written to disk.
 const MAX_PAYLOAD = 16_000;
 const redact = (s) => String(s)
   .replace(/xox[baprs]-[A-Za-z0-9-]+/g, 'xoxb-***')
@@ -297,14 +263,8 @@ const shapeRoutine = (r) => {
     state: r.enabled ? r.state : 'disabled', enabled: !!r.enabled,
     lastAgo: r.last_ago, lastStatus: r.last_status, next: r.next,
     recent, successRate, spend: r.spend, avg: r.avg, runCount: recent.length,
+    retries: r.retries || 0,
     inbox: one("SELECT COUNT(*) AS n FROM run_tasks WHERE routine_slug=? AND handled_by=''", r.slug).n,
-    scriptMode: !!r.script_mode, scriptLang: r.script_lang || 'bash', compiled: !!(r.script && r.script.trim()), scriptStale: !!r.script_stale,
-    retries: r.retries || 0, assertions: j(r.assertions), tags: j(r.tags), rateLimit: r.rate_limit || 0, maxFails: r.max_fails || 0, failStreak: r.fail_streak || 0, notes: r.notes || '', pinned: !!r.pinned, activeWindow: jObj(r.active_window) || null, sla: r.sla_s || 0, archived: !!r.archived, lifecycle: r.lifecycle || 'active',
-    reviewStatus: r.review_status || '', reviewedBy: r.reviewed_by || '', reviewedAgo: r.reviewed_at ? relTime(r.reviewed_at) : '', gateReview: !!r.gate_review, tier: r.tier || 'standard', escalation: r.escalation || '', links: (() => { try { return JSON.parse(r.links || '[]'); } catch { return []; } })(), sunsetAt: r.sunset_at || 0, sunsetOverdue: !!(r.sunset_at && r.enabled && r.sunset_at < now()), commentCount: one('SELECT COUNT(*) AS n FROM comments WHERE slug=?', r.slug).n,
-    longRunning: (() => { const t = one("SELECT MIN(created_at) AS t FROM runs WHERE routine_slug=? AND status IN ('running','waiting')", r.slug)?.t; return !!(t && now() - t > 8 * 60_000); })(),
-    lastSuccessAgo: (() => { const t = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND status='succeeded'", r.slug)?.t || 0; return t ? relTime(t) : ''; })(),
-    staleSuccess: (() => { const t = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND status='succeeded'", r.slug)?.t || 0; return !!r.enabled && t > 0 && (now() - t) > 7 * 86_400_000; })(),
-    alertOnFail: !!r.alert_on_fail, alertTarget: r.alert_target || '', timeout: r.timeout_s || 0, env: jObj(r.env) || {}, snoozedUntil: r.snooze_until && r.snooze_until > now() ? r.snooze_until : 0, snoozeReason: r.snooze_until && r.snooze_until > now() ? (r.snooze_reason || '') : '',
   };
 };
 
@@ -318,7 +278,7 @@ function detailOf(r) {
     frontMatter: {
       on: j(r.triggers).map((t) => ({ key: `trigger · ${t}`, detail: t === 'schedule' && r.schedule ? r.schedule : '' })),
       tools: conns.map((c) => ({ sign: '+', name: c, tone: 'ok' })),
-      runtime: [r.model || 'claude-opus-4-8', `${r.effort ? `· ${r.effort} effort ` : ''}· repos ${repos.join(', ') || '*'}`, `· branch ${r.branch || 'main'}`],
+      runtime: [r.model || DEFAULT_MODEL, `${r.effort ? `· ${r.effort} effort ` : ''}· repos ${repos.join(', ') || '*'}`, `· branch ${r.branch || 'main'}`],
       filters: { actions: flt.actions || [], branches: flt.branches || [] },
     },
     // trigger → session → (tools), reflecting the real shape only.
@@ -342,98 +302,9 @@ function logActivity(text, state) {
     new Date().toISOString().slice(11, 19), text, state, (one('SELECT MAX(ord) AS m FROM activity').m ?? -1) + 1);
 }
 
-// ── Deterministic script routines: the FIRST run is an agent that builds a reusable
-//    extractor script; every run after just executes that script ($0, fast, identical). ─
-const SCRIPT_TOOLS_DIR = join(__dirname, '..', 'tools');
-function execCapture(cmd, args, { env, cwd, timeoutMs = 90_000 } = {}) {
-  return new Promise((resolve) => {
-    let out = '', err = '', done = false, child;
-    const finish = (code) => { if (done) return; done = true; clearTimeout(t); resolve({ code, out, err }); };
-    try { child = spawn(cmd, args, { env, cwd, stdio: ['ignore', 'pipe', 'pipe'] }); }
-    catch (e) { return resolve({ code: -1, out: '', err: e.message }); }
-    const t = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* */ } err += '\n(timed out)'; finish(124); }, timeoutMs);
-    child.stdout.on('data', (d) => { out += d; if (out.length > 200_000) out = out.slice(-200_000); });
-    child.stderr.on('data', (d) => { err += d; if (err.length > 50_000) err = err.slice(-50_000); });
-    child.on('error', (e) => { err += e.message; finish(-1); });
-    child.on('close', (code) => finish(code));
-  });
-}
-async function runCompiledScript(r, event, id, t0) {
-  run("UPDATE runs SET status='running' WHERE id=?", id);
-  run('UPDATE routines SET state=?, last_ago=?, last_status=? WHERE slug=?', 'running', 'now', 'running', r.slug);
-  const lang = r.script_lang === 'node' ? 'node' : 'bash';
-  const file = join(tmpdir(), `sb-run-${id}.${lang === 'node' ? 'mjs' : 'sh'}`);
-  writeFileSync(file, r.script);
-  const env = { ...process.env, ...(jObj(r.env) || {}), PATH: `${SCRIPT_TOOLS_DIR}:${process.env.PATH}`, SB_REPO: repoTargets(r)[0] || eventRepo(event) || '', SB_EVENT: JSON.stringify(event || {}), SB_RUN_ID: id };
-  const res = await execCapture(lang, [file], { env, cwd: tmpdir(), timeoutMs: 90_000 });
-  try { unlinkSync(file); } catch { /* */ }
-  const ms = now() - t0;
-  const ok = res.code === 0;
-  const output = redact((res.out.trim() || res.err.trim() || `script exited ${res.code}`)).slice(0, 8000);
-  run('UPDATE runs SET status=?, dur=?, dur_ms=?, output=?, cost_usd=0, num_turns=0 WHERE id=?', ok ? 'succeeded' : 'failed', fmtDur(ms), ms, output, id);
-  run('INSERT INTO run_events (run_id,seq,t_offset,type,tool,ok,payload) VALUES (?,?,?,?,?,?,?)',
-    id, 0, 0, 'tool_result', `${lang} extractor`, ok ? 1 : 0, JSON.stringify({ d: output.slice(0, 3000), truncated: output.length > 3000 }));
-  runBus.emit(id, { kind: 'done', status: ok ? 'succeeded' : 'failed' });
-  const agg = one('SELECT COALESCE(SUM(cost_usd),0) AS spend, AVG(dur_ms) AS avgms FROM runs WHERE routine_slug=?', r.slug);
-  run('UPDATE routines SET state=?, last_ago=?, last_status=?, success=?, spend=?, avg=? WHERE slug=?',
-    'idle', 'just now', ok ? 'success' : 'failing', ok ? 100 : 0, `$${Number(agg.spend || 0).toFixed(2)}`, agg.avgms ? fmtDur(agg.avgms) : '—', r.slug);
-  logActivity(`${r.slug} ran extractor · ${ok ? (output.split('\n').pop() || '').slice(0, 50) : 'failed — recompile?'}`, ok ? 'success' : 'failing');
-  if (ok) recordOutcome(r, true);
-  else if (!maybeRetry(r, event, `script · ${r.slug}`, event?._attempt || 0)) { alertFailure(r, output, `script · ${r.slug}`); recordOutcome(r, false); }
-  if (ok) for (const slug of j(r.chain)) { const dr = one('SELECT * FROM routines WHERE slug=? AND enabled=1', slug); if (dr) executeRoutine(dr, { ...(event ?? {}), upstream: { routine: r.slug, run: id, output } }, `after · ${r.slug}`); }
-}
-
 // Live session processes by run id — so a run can be cancelled mid-flight.
 const liveChildren = new Map();
-const canceledRuns = new Set(); // run ids the user canceled — finalize skips retry/alert
-// Active window: restrict event/schedule triggers to allowed hours + weekdays.
-function inWindow(r) {
-  let w; try { w = JSON.parse(r.active_window || 'null'); } catch { w = null; }
-  if (!w || (w.start == null && w.end == null && !(w.days && w.days.length))) return true;
-  const d = new Date();
-  if (w.days && w.days.length && !w.days.includes(d.getDay())) return false;
-  if (w.start != null && w.end != null && w.start !== w.end) {
-    const h = d.getHours();
-    return w.start <= w.end ? (h >= w.start && h < w.end) : (h >= w.start || h < w.end);
-  }
-  return true;
-}
-const cleanWindow = (w) => {
-  if (!w || typeof w !== 'object') return '';
-  const start = w.start == null || w.start === '' ? null : Math.max(0, Math.min(23, parseInt(w.start, 10)));
-  const end = w.end == null || w.end === '' ? null : Math.max(0, Math.min(24, parseInt(w.end, 10)));
-  const days = Array.isArray(w.days) ? [...new Set(w.days.map(Number).filter((n) => n >= 0 && n <= 6))] : [];
-  if (start == null && end == null && !days.length) return '';
-  return JSON.stringify({ start, end, days });
-};
-// Circuit breaker: track consecutive failures; auto-disable a routine that won't stop failing.
-function recordOutcome(r, ok) {
-  if (ok) { run('UPDATE routines SET fail_streak=0 WHERE slug=?', r.slug); return; }
-  const streak = (one('SELECT fail_streak FROM routines WHERE slug=?', r.slug)?.fail_streak || 0) + 1;
-  run('UPDATE routines SET fail_streak=? WHERE slug=?', streak, r.slug);
-  const max = r.max_fails || 0;
-  if (max > 0 && streak >= max && one('SELECT enabled FROM routines WHERE slug=?', r.slug)?.enabled) {
-    run('UPDATE routines SET enabled=0 WHERE slug=?', r.slug);
-    logActivity(`${r.slug} auto-disabled · circuit breaker tripped (${streak} consecutive failures)`, 'failing');
-    alertFailure(r, `auto-disabled after ${streak} consecutive failures — circuit breaker`, 'circuit breaker');
-  }
-}
-// Notify Slack when a run finally fails (after retries are exhausted) — no human polling.
-const _lastAlert = new Map();
-function alertFailure(r, output, label) {
-  if (!r.alert_on_fail) return;
-  const target = (r.alert_target || '').trim() || (r.owner && r.owner !== 'unassigned' ? `@${r.owner}` : '');
-  if (!target) return;
-  const prev = _lastAlert.get(r.slug);
-  if (prev && now() - prev < 30 * 60_000) { logActivity(`${r.slug} fail-alert throttled (sent <30m ago)`, 'idle'); return; }
-  _lastAlert.set(r.slug, now());
-  const tail = String(output || '').split('\n').filter(Boolean).slice(-3).join(' ').slice(0, 220);
-  const cc = (r.escalation || '').trim();
-  const text = `:warning: *${r.name}* failed (${label || 'run'})${cc ? ` — cc ${cc}` : ''}\n${tail || 'no output'}`;
-  execCapture('slack-post', [target, text], { env: { ...process.env, PATH: `${SCRIPT_TOOLS_DIR}:${process.env.PATH}` }, timeoutMs: 15_000 })
-    .then((res) => logActivity(`${r.slug} fail-alert ${res.code === 0 ? `sent → ${target}` : `error: ${(res.err || '').slice(0, 50)}`}`, 'idle'))
-    .catch(() => {});
-}
+const canceledRuns = new Set(); // run ids the user canceled — finalize skips retry
 
 // Auto-retry a failed run (transient: claude/gh/timeout) with backoff, up to r.retries.
 const RETRY_DELAYS = [5_000, 20_000, 60_000];
@@ -444,7 +315,12 @@ function maybeRetry(r, rawEvent, triggerLabel, attempt) {
   const delay = RETRY_DELAYS[attempt] || 60_000;
   const base = String(triggerLabel || '').replace(/^retry \d+\/\d+ · /, '');
   logActivity(`${r.slug} failed — auto-retry ${next}/${max} in ${Math.round(delay / 1000)}s`, 'queued');
-  setTimeout(() => executeRoutine(r, { ...(rawEvent || {}), _attempt: next }, `retry ${next}/${max} · ${base}`), delay).unref?.();
+  setTimeout(() => {
+    // Re-fetch at fire time: the user may have disabled or edited the routine meanwhile.
+    const fresh = one('SELECT * FROM routines WHERE slug=? AND enabled=1', r.slug);
+    if (fresh) executeRoutine(fresh, { ...(rawEvent || {}), _attempt: next }, `retry ${next}/${max} · ${base}`);
+    else logActivity(`${r.slug} retry ${next}/${max} dropped · routine disabled or deleted`, 'idle');
+  }, delay).unref?.();
   return true;
 }
 
@@ -453,36 +329,23 @@ function executeRoutine(r, rawEvent, triggerLabel) {
   const id = runId();
   const created = now();
   const ord = (one('SELECT MAX(ord) AS m FROM runs').m ?? -1) + 1;
-  run(`INSERT INTO runs (id,routine_slug,status,ago,dur,trigger,ord,output,event,created_at,sinks_result)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-    id, r.slug, 'running', 'now', '…', triggerLabel, ord, '', JSON.stringify(rawEvent ?? {}), created, '[]');
+  run(`INSERT INTO runs (id,routine_slug,status,ago,dur,trigger,ord,output,event,created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    id, r.slug, 'running', 'now', '…', triggerLabel, ord, '', JSON.stringify(rawEvent ?? {}), created);
+  run('UPDATE runs SET upstream_run=? WHERE id=?', rawEvent?.upstream?.run || '', id);
   run('UPDATE routines SET state=?, last_ago=?, last_status=? WHERE slug=?', 'running', 'now', 'running', r.slug);
 
-  // Active window: skip event/schedule-driven runs fired outside allowed hours/days.
-  const manualish = ['manual', 'agent-message'].includes(rawEvent?.event) || rawEvent?._replay || rawEvent?._rerun || rawEvent?._recompile;
-  if (!manualish && !inWindow(r)) {
-    run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", 'outside active window — skipped', id);
+  // Kill switch is authoritative HERE, not just at the ingress endpoints — async re-entry
+  // paths (queued retries, chain follow-ups, inbox drains, in-flight reaction ticks) all
+  // funnel into executeRoutine, so this is the one check they can't bypass.
+  if (meta('kill_switch', 'false') === 'true') {
+    run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", 'kill switch engaged — skipped', id);
     run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
-    logActivity(`${r.slug} skipped · outside active window`, 'idle');
-    return id;
-  }
-  // Approval gate: block dispatch of an unreviewed change (manual run is allowed through).
-  // Critical-tier routines always gate (two-person rule), even without the explicit flag.
-  if ((r.gate_review || r.tier === 'critical') && r.review_status === 'needs_review' && !manualish) {
-    run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", 'awaiting approval — config changed since last review', id);
-    run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
-    logActivity(`${r.slug} skipped · awaiting approval`, 'idle');
-    return id;
-  }
-  // Per-team budget: skip this routine if its team's daily cap is reached (others keep running).
-  if (r.team && teamOverBudget(r.team)) {
-    run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", `team "${r.team}" daily budget reached — skipped`, id);
-    run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
-    logActivity(`${r.slug} skipped · team ${r.team} budget reached`, 'idle');
+    logActivity(`${r.slug} skipped · kill switch engaged`, 'failing');
     return id;
   }
   // Auto-pause: if a required connector is offline, skip (don't burn a session that'll fail).
-  if (metaGet('skip_on_connector_down', '1') === '1') {
+  if (meta('skip_on_connector_down', '1') === '1') {
     const need = j(r.connectors); const down = [];
     if (need.includes('github') && _intCache.github && _intCache.github.connected === false) down.push('github');
     if (need.includes('slack') && _intCache.slack && _intCache.slack.connected === false) down.push('slack');
@@ -493,29 +356,11 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       return id;
     }
   }
-  // Rate limit: drop if this routine already ran rate_limit times in the past hour.
-  if ((r.rate_limit || 0) > 0) {
-    const n = one("SELECT COUNT(*) AS n FROM runs WHERE routine_slug=? AND created_at > ? AND status NOT IN ('skipped','coalesced','waiting')", r.slug, created - 3_600_000).n;
-    if (n >= r.rate_limit) {
-      run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", `rate limited — ${n}/${r.rate_limit} runs in the last hour`, id);
-      run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
-      logActivity(`${r.slug} rate limited · ${n}/${r.rate_limit} this hour`, 'idle');
-      return id;
-    }
-  }
-  // Script routine that's already compiled (and not stale) → just run the extractor.
-  const scriptMode = !!r.script_mode;
-  const compiled = scriptMode && r.script && r.script.trim() && !r.script_stale;
-  const recompile = !!rawEvent?._recompile;
-  if (compiled && !recompile) {
-    runCompiledScript(r, rawEvent ?? {}, id, created).catch((e) => run("UPDATE runs SET status='failed', output=? WHERE id=?", `script error: ${e.message}`, id));
-    return id;
-  }
 
   (async () => {
     // Concurrency guard: acquire the routine's lease before doing any work so two
-    // routines never act on the same entity (PR / repo / routine) at once.
-    const { key: leaseK, onConflict, sha } = leaseFor(r, rawEvent ?? {});
+    // runs never act on the same entity (PR / repo / routine) at once.
+    const { key: leaseK, onConflict, sha, prRef } = leaseFor(r, rawEvent ?? {});
     if (leaseK) {
       let lease = acquireLease(leaseK, id, r.slug, sha);
       if (!lease.ok) {
@@ -536,7 +381,14 @@ function executeRoutine(r, rawEvent, triggerLabel) {
         run("UPDATE runs SET status='waiting', dur=? WHERE id=?", `waiting · ${leaseK}`, id);
         logActivity(`${r.slug} waiting · ${leaseK} held by ${lease.holder}`, 'queued');
         const deadline = now() + LEASE_TTL;
-        while (now() < deadline) { await sleep(3000); lease = acquireLease(leaseK, id, r.slug, sha); if (lease.ok) break; }
+        while (now() < deadline) {
+          await sleep(3000);
+          if (canceledRuns.has(id)) break; // canceled while waiting — don't take the lease
+          lease = acquireLease(leaseK, id, r.slug, sha);
+          if (lease.ok) break;
+        }
+        // A cancel that landed while we waited already finalized the run row — stand down.
+        if (canceledRuns.delete(id)) { releaseLease(leaseK, id); return; }
         if (!lease.ok) {
           run("UPDATE runs SET status='failed', dur='—', output=? WHERE id=?", `gave up waiting for ${leaseK}`, id);
           run("UPDATE routines SET state='idle', last_status='failing' WHERE slug=?", r.slug);
@@ -545,12 +397,11 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       }
       // SHA barrier: once we hold the lease, if the PR's head moved past the SHA this
       // event was for (someone pushed, e.g. while we waited), stand down as stale.
-      const prm = sha && leaseK.startsWith('pr:') && leaseK.slice(3).match(/^(.+)#(\d+)$/);
-      if (prm) {
-        const live = await livePrHeadSha(prm[1], prm[2]);
+      if (sha && prRef) {
+        const live = await livePrHeadSha(prRef.repo, prRef.pr);
         if (live && live !== sha) {
           releaseLease(leaseK, id);
-          run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", `stood down — ${prm[1]}#${prm[2]} head moved to ${live.slice(0, 7)} (this run was for ${sha.slice(0, 7)})`, id);
+          run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", `stood down — ${prRef.repo}#${prRef.pr} head moved to ${live.slice(0, 7)} (this run was for ${sha.slice(0, 7)})`, id);
           run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
           logActivity(`${r.slug} stood down · ${leaseK} head ${sha.slice(0, 7)}→${live.slice(0, 7)} (stale)`, 'idle');
           return;
@@ -565,17 +416,11 @@ function executeRoutine(r, rawEvent, triggerLabel) {
     // only routes, captures the trace, and enforces guardrails.
     const tools = j(r.connectors);
     const memoryDir = r.memory ? ensureMemory(r.slug) : null;
-    const mcpGranted = tools.filter((c) => !['github', 'slack', 'web', 'webfetch', 'team'].includes(c));
+    const mcpGranted = tools.filter((c) => !['github', 'slack', 'web', 'webfetch'].includes(c));
     const mcpConfig = mcpGranted.length ? writeMcpConfig(mcpGranted) : null;
-    const agents = tools.includes('team') ? all('SELECT name, role, summary FROM agents ORDER BY name') : [];
     const coalesce = onConflict === 'coalesce' && !!leaseK;
     const seedTasks = Array.isArray(rawEvent?.tasks) ? rawEvent.tasks : [];
-    // Compile mode: this agent run must BUILD a reusable extractor and write it to scriptPath.
-    const compile = scriptMode;
-    const scriptLang = r.script_lang === 'node' ? 'node' : 'bash';
-    const scriptPath = compile ? join(tmpdir(), `sb-build-${id}.${scriptLang === 'node' ? 'mjs' : 'sh'}`) : null;
-    const priorScript = compile ? (r.script || '') : ''; // current extractor to revise (if any)
-    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints(), { memoryDir, agents, coalesce, seedTasks, compile, scriptLang, scriptPath, priorScript, env: jObj(r.env) || {} });
+    const prompt = buildPrompt({ ...r, connectors: tools }, rawEvent ?? {}, policyConstraints(), { memoryDir, coalesce, seedTasks });
     run('UPDATE runs SET prompt=? WHERE id=?', prompt, id);
 
     // Step-level trace: normalize each stream-json event into a run_events row,
@@ -615,16 +460,9 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       } catch { /* one malformed event must not kill the run */ }
     };
 
-    const res = await runClaude(prompt, { tools, onEvent, onChild: (c) => liveChildren.set(id, c), model: normModel(r.model), effort: normEffort(r.effort), memoryDir, mcpConfig, runId: id, coalesce, scriptPath, compile, timeoutMs: (r.timeout_s || 0) > 0 ? r.timeout_s * 1000 : undefined, extraEnv: jObj(r.env) || {} });
+    const res = await runClaude(prompt, { tools, onEvent, onChild: (c) => liveChildren.set(id, c), model: normModel(r.model), effort: normEffort(r.effort), memoryDir, mcpConfig, runId: id, coalesce });
     liveChildren.delete(id);
     if (mcpConfig) try { unlinkSync(mcpConfig); } catch { /* ignore */ }
-    // Compile: capture the extractor the agent just wrote so future runs are deterministic.
-    if (compile && scriptPath) {
-      let built = ''; try { built = readFileSync(scriptPath, 'utf8'); } catch { /* not written */ }
-      try { unlinkSync(scriptPath); } catch { /* */ }
-      if (built.trim()) { run("UPDATE routines SET script=?, script_stale=0 WHERE slug=?", built, r.slug); logActivity(`${r.slug} ${priorScript ? 'revised' : 'compiled'} its ${scriptLang} extractor (${built.length} chars) — future runs are deterministic`, 'success'); }
-      else logActivity(`${r.slug} compile run produced no script — keeping the previous one`, 'idle');
-    }
     const canceled = canceledRuns.delete(id);
     const ok = !canceled && !res.isError && !!res.finalText;
     const rawOut = canceled ? 'canceled by user'
@@ -643,23 +481,13 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       'idle', 'just now', ok ? 'success' : 'failing', ok ? 100 : 0,
       `$${Number(agg.spend || 0).toFixed(2)}`, agg.avgms ? fmtDur(agg.avgms) : '—', r.slug);
     logActivity(`${r.slug} ${ok ? 'ran · ' + output.split('\n').pop().slice(0, 60) : 'failed'} · ${triggerLabel}`, ok ? 'success' : 'failing');
-    if (ok) recordOutcome(r, true);
-    else if (!canceled && !maybeRetry(r, rawEvent, triggerLabel, rawEvent?._attempt || 0)) { alertFailure(r, output, triggerLabel); recordOutcome(r, false); }
-
-    // Output assertions: checked over the result + trace, gate the downstream if they fail.
-    const toolErrors = one("SELECT COUNT(*) AS n FROM run_events WHERE run_id=? AND type='tool_result' AND ok=0", id).n;
-    const assertResult = ok ? evalAssertions(r, { output, costUsd: res.costUsd, numTurns: res.numTurns, toolErrors }) : null;
-    if (assertResult) {
-      run('UPDATE runs SET assert_result=? WHERE id=?', JSON.stringify(assertResult), id);
-      if (!assertResult.passed) logActivity(`${r.slug} assertions FAILED (${assertResult.results.filter((x) => !x.ok).length}/${assertResult.results.length}) — chain & reactions gated`, 'failing');
-    }
-    const gatePass = !assertResult || assertResult.passed;
+    if (!ok && !canceled) maybeRetry(r, rawEvent, triggerLabel, rawEvent?._attempt || 0);
 
     // reactions: arm watches on the entity this run touched (PR checks/review/merge, timeout…)
-    if (gatePass) try { await armReactions(r, rawEvent ?? {}, id); } catch (e) { logActivity(`reactions error · ${r.slug}: ${e.message}`, 'failing'); }
+    try { await armReactions(r, rawEvent ?? {}, id); } catch (e) { logActivity(`reactions error · ${r.slug}: ${e.message}`, 'failing'); }
 
     // chain: kick off downstream routines, guarding against cycles + runaway depth.
-    if (ok && gatePass) {
+    if (ok) {
       const path = Array.isArray(rawEvent?._chainPath) ? rawEvent._chainPath : [];
       const nextPath = [...path, r.slug];
       if (nextPath.length > 8) {
@@ -694,6 +522,7 @@ function executeRoutine(r, rawEvent, triggerLabel) {
   return id;
 }
 
+// ── Event matching: trigger type + repo target + optional sub-filters ────────────
 const eventRepo = (e) => (typeof e?.repository === 'object' ? e.repository?.full_name : e?.repository) || null;
 // A routine targets repos via its `repo` field (comma-separated owner/repo).
 // Empty = any repo. If the event carries a repo, it must be in the target set.
@@ -705,7 +534,6 @@ function repoMatches(r, event) {
   return !er || targets.includes(er);
 }
 
-// Optional event sub-filters (opt-in): only enforce when configured.
 const branchOf = (e) => (e?.ref ? String(e.ref).replace('refs/heads/', '') : null) || e?.pull_request?.head?.ref || e?.branch || null;
 const eventStates = (e) => [
   e?.action, e?.conclusion, e?.state,
@@ -720,6 +548,9 @@ const labelsOf = (e) => [...new Set([
 // A "labeled"/"unlabeled" pull_request/issues delivery also satisfies the `label` trigger.
 const LABEL_TYPES = new Set(['pull_request', 'pull_request_target', 'issues']);
 const isLabelEvent = (type, e) => LABEL_TYPES.has(type) && (e?.action === 'labeled' || e?.action === 'unlabeled');
+// The one trigger test everyone uses — dispatch, dry-run preview, and run-page explain
+// must agree, label aliasing included.
+const triggerHit = (triggers, type, event) => triggers.includes(type) || (isLabelEvent(type, event) && triggers.includes('label'));
 // A condition's field → the event's value(s) for it (always an array).
 const FILTER_FIELDS = {
   action: (e) => eventStates(e),
@@ -769,22 +600,12 @@ function filtersMatch(r, event) {
   if (!checks.length) return true;
   return mode === 'or' ? checks.some(Boolean) : checks.every(Boolean);
 }
-
-// Match preview: given a synthetic event, which routines across the fleet would fire?
-app.post('/api/match-preview', (req, res) => {
-  const type = String(req.body?.type || 'manual');
-  const event = { ...(req.body?.event && typeof req.body.event === 'object' ? req.body.event : {}), event: type };
-  const matched = all('SELECT * FROM routines WHERE enabled=1 AND archived=0')
-    .filter((r) => j(r.triggers).includes(type) && repoMatches(r, event) && filtersMatch(r, event))
-    .map((r) => ({ slug: r.slug, name: r.name, team: r.team }));
-  res.json({ type, matched });
-});
 // Explain why a run matched (or would match): trigger + repo + each filter condition.
 function explainMatch(r, event) {
   const checks = [];
   const type = event?.event || event?.type || 'manual';
   const triggers = j(r.triggers);
-  checks.push({ label: `trigger is "${type}"`, ok: triggers.includes(type), detail: `listens for [${triggers.join(', ') || 'none'}]` });
+  checks.push({ label: `trigger is "${type}"`, ok: triggerHit(triggers, type, event), detail: `listens for [${triggers.join(', ') || 'none'}]` });
   const targets = repoTargets(r);
   if (targets.length) checks.push({ label: 'repository in target', ok: repoMatches(r, event), detail: `target [${targets.join(', ')}]` });
   let f; try { f = JSON.parse(r.filters || '{}'); } catch { f = {}; }
@@ -794,7 +615,7 @@ function explainMatch(r, event) {
       checks.push({ label: `${c.field} ${c.op} [${(c.values || []).join(', ')}]`, ok: evalCondition(c, event), detail: `event ${c.field}: [${vals.join(', ') || '—'}]` });
     }
   }
-  return { fired: triggers.includes(type) && repoMatches(r, event) && filtersMatch(r, event), checks };
+  return { fired: triggerHit(triggers, type, event) && repoMatches(r, event) && filtersMatch(r, event), checks };
 }
 
 function dispatchEvent(type, payload) {
@@ -802,14 +623,9 @@ function dispatchEvent(type, payload) {
     logActivity(`event ${type} dropped · kill switch engaged`, 'failing');
     return { error: 'kill switch engaged' };
   }
-  if (overBudget()) {
-    logActivity(`event ${type} dropped · daily budget $${budgetCap()} reached ($${todaySpend().toFixed(2)} spent)`, 'failing');
-    return { error: `daily budget $${budgetCap()} reached — dispatch paused` };
-  }
   const event = payload && Object.keys(payload).length ? payload : { event: type };
-  const labelEvt = isLabelEvent(type, event);
   const candidates = all('SELECT * FROM routines WHERE enabled=1')
-    .filter((r) => { if (r.snooze_until > now()) return false; const t = j(r.triggers); return t.includes(type) || (labelEvt && t.includes('label')); });
+    .filter((r) => triggerHit(j(r.triggers), type, event));
   const matched = candidates.filter((r) => repoMatches(r, event) && filtersMatch(r, event));
   // Audit: record why subscribed routines stood down (the "logs of if/how" devs want).
   candidates.filter((r) => !matched.includes(r)).forEach((r) => {
@@ -838,29 +654,21 @@ function cronFieldMatch(field, val, min, max) {
 export function cronMatches(expr, d) {
   const p = String(expr).trim().split(/\s+/);
   if (p.length !== 5) return false;
+  // Standard cron accepts both 0 and 7 for Sunday in the day-of-week field.
+  const dowMatch = cronFieldMatch(p[4], d.getDay(), 0, 6) || (d.getDay() === 0 && cronFieldMatch(p[4], 7, 0, 7));
   return cronFieldMatch(p[0], d.getMinutes(), 0, 59)
     && cronFieldMatch(p[1], d.getHours(), 0, 23)
     && cronFieldMatch(p[2], d.getDate(), 1, 31)
     && cronFieldMatch(p[3], d.getMonth() + 1, 1, 12)
-    && cronFieldMatch(p[4], d.getDay(), 0, 6);
+    && dowMatch;
 }
 const _lastFired = new Map();
 function tickScheduler() {
-  // Daily digest: fire once when the local hour matches digest_hour and it hasn't run today.
-  const dh = parseInt(metaGet('digest_hour', '-1'), 10);
-  if (dh >= 0 && metaGet('digest_channel', '').trim()) {
-    const nd = new Date(); const today = nd.toISOString().slice(0, 10);
-    if (nd.getHours() === dh && metaGet('last_digest', '') !== today) { setMeta('last_digest', today); sendDigest(); }
-  }
-  // Auto-retention: prune old runs once per day.
-  const rd = parseInt(metaGet('retention_days', '0'), 10);
-  if (rd > 0) { const today = new Date().toISOString().slice(0, 10); if (metaGet('last_prune', '') !== today) { setMeta('last_prune', today); const n = pruneRuns(rd); if (n) logActivity(`auto-pruned ${n} runs older than ${rd}d`, 'idle'); } }
-  if (meta('kill_switch', 'false') === 'true' || overBudget()) return;
+  if (meta('kill_switch', 'false') === 'true') return;
   const d = new Date();
   const stamp = `${d.getFullYear()}/${d.getMonth()}/${d.getDate()} ${d.getHours()}:${d.getMinutes()}`;
   for (const r of all('SELECT * FROM routines WHERE enabled=1')) {
     if (!j(r.triggers).includes('schedule') || !r.schedule) continue;
-    if (r.snooze_until > now()) continue;
     if (!cronMatches(r.schedule, d)) continue;
     if (_lastFired.get(r.slug) === stamp) continue; // fire at most once per matching minute
     _lastFired.set(r.slug, stamp);
@@ -894,9 +702,6 @@ setInterval(refreshIntCache, 30_000).unref?.();
 
 // ── Reactions: watch a routine's downstream entity, fire a follow-up routine ────
 const wid = () => 'w_' + Math.random().toString(36).slice(2, 9);
-const cleanReactions = (arr) => (Array.isArray(arr) ? arr : [])
-  .map((x) => ({ source: String(x.source || '').trim(), kind: String(x.kind || '').trim(), when: String(x.when || '').trim(), check: String(x.check || '').trim(), run: String(x.run || '').trim() }))
-  .filter((x) => x.source && x.kind && x.run);
 function durationToMs(s) {
   const m = String(s).trim().match(/^(\d+)\s*(s|sec|m|min|h|hr|d)?$/i);
   if (!m) return null;
@@ -985,7 +790,11 @@ async function pollWatch(w) {
   return { action: 'keep' };
 }
 const WATCH_MAX_ATTEMPTS = 60; // ~45 min at the 45s cadence (timeout watches are exempt)
+let _watchTickRunning = false; // slow gh polls must not overlap the next interval tick
 async function tickWatches() {
+  if (_watchTickRunning) return;
+  _watchTickRunning = true;
+  try {
   if (meta('kill_switch', 'false') === 'true') return;
   for (const w of all("SELECT * FROM watches WHERE status='open' ORDER BY created_at LIMIT 50")) {
     let res; try { res = await pollWatch(w); } catch (e) { res = { action: 'keep', detail: String(e.message).slice(0, 60) }; }
@@ -1007,406 +816,14 @@ async function tickWatches() {
       run('UPDATE watches SET attempts=?, detail=? WHERE id=?', attempts, res.detail || '', w.id);
     }
   }
+  } finally { _watchTickRunning = false; }
 }
 if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(tickWatches, 45_000).unref?.();
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.get('/api/health', (_q, res) => res.json({ ok: true }));
 app.get('/api/models', (_q, res) => res.json({ models: MODELS, efforts: EFFORTS, defaultModel: DEFAULT_MODEL }));
-// Live concurrency leases — who's holding what, on which entity/SHA.
-// Sign-off queue: successful runs awaiting human verdict + review coverage.
-app.get('/api/review-queue', (req, res) => {
-  const rows = all("SELECT id, routine_slug, verdict, created_at FROM runs WHERE status='succeeded' AND created_at > ? ORDER BY created_at DESC LIMIT 200", now() - 7 * 86_400_000);
-  const total = rows.length; const reviewed = rows.filter((r) => r.verdict).length;
-  const pending = rows.filter((r) => !r.verdict).slice(0, 20).map((r) => ({ id: r.id, slug: r.routine_slug, ago: relTime(r.created_at) }));
-  res.json({ total, reviewed, coverage: total ? Math.round((100 * reviewed) / total) : 0, pending });
-});
-// Triage queue: recent failed runs not yet resolved — the team's shared work list.
-app.get('/api/triage', (req, res) => {
-  const rows = all("SELECT id, routine_slug, output, assignee, triage, created_at FROM runs WHERE status='failed' AND created_at > ? AND triage != 'resolved' ORDER BY created_at DESC LIMIT 50", now() - 14 * 86_400_000);
-  res.json({ items: rows.map((x) => ({ id: x.id, slug: x.routine_slug, assignee: x.assignee || '', triage: x.triage || 'open', ago: relTime(x.created_at), summary: (String(x.output || '').split('\n').filter(Boolean).pop() || '').slice(0, 90) })) });
-});
-// Currently-active runs across the fleet (running or waiting), with elapsed time.
-app.get('/api/runs/active', (_q, res) => {
-  const rows = all("SELECT id, routine_slug, trigger, status, created_at FROM runs WHERE status IN ('running','waiting') ORDER BY created_at");
-  res.json({ active: rows.map((x) => ({ id: x.id, slug: x.routine_slug, trigger: x.trigger, status: x.status, elapsed: fmtDur(now() - x.created_at), longRunning: now() - x.created_at > 8 * 60_000 })) });
-});
-// Manually release a stuck lease.
-app.delete('/api/leases', (req, res) => {
-  const key = String(req.query.key || '');
-  if (!key) return res.status(400).json({ error: 'key required' });
-  run('DELETE FROM leases WHERE key=?', key);
-  logActivity(`lease ${key} released manually`, 'idle');
-  res.json({ ok: true });
-});
-// Live concurrency: leases currently held + inbox tasks waiting to be picked up.
-app.get('/api/leases', (_q, res) => {
-  const leases = all('SELECT * FROM leases WHERE expires_at > ? ORDER BY acquired_at DESC', now())
-    .map((l) => ({ key: l.key, runId: l.run_id, slug: l.routine_slug, sha: l.head_sha ? l.head_sha.slice(0, 7) : '', held: relTime(l.acquired_at), ttl: fmtDur(Math.max(0, l.expires_at - now())) }));
-  const pending = all("SELECT * FROM run_tasks WHERE handled_by='' ORDER BY created_at DESC LIMIT 40")
-    .map((t) => ({ slug: t.routine_slug, key: t.lease_key, summary: t.summary, ago: relTime(t.created_at) }));
-  res.json({ leases, pending });
-});
 
-// The user's real GitHub repos — so the UI can see & target repositories.
-// ?owner=<org|*> & ?q=<search> for cross-org browse / GitHub-wide search.
-app.get('/api/github/repos', async (req, res) => res.json({ repos: await listRepos({ owner: String(req.query.owner || ''), q: String(req.query.q || '') }) }));
-app.get('/api/github/orgs', async (_q, res) => res.json({ orgs: await listOrgs() }));
-// Possible check names for a repo — so a reaction can target a specific check.
-app.get('/api/github/checks', async (req, res) => res.json({ checks: await listChecks(String(req.query.repo || '')) }));
-// A repo's labels — so the label filter is a pick-list, not free typing.
-app.get('/api/github/labels', async (req, res) => {
-  const repo = String(req.query.repo || '').trim();
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return res.json({ labels: [] });
-  const r = await gh(['api', `repos/${repo}/labels`, '--paginate', '--jq', '.[].name']);
-  res.json({ labels: r.code === 0 ? r.out.split('\n').map((s) => s.trim()).filter(Boolean) : [] });
-});
-
-// Daily digest: a self-posting Slack rollup of the day's runs/spend/failures.
-function buildDigest() {
-  const since = (() => { const s = new Date(now()); s.setHours(0, 0, 0, 0); return s.getTime(); })();
-  const t = one('SELECT COUNT(*) AS runs, COALESCE(SUM(cost_usd),0) AS cost, SUM(CASE WHEN status=\'failed\' THEN 1 ELSE 0 END) AS fails FROM runs WHERE created_at > ?', since);
-  const top = all("SELECT routine_slug, COUNT(*) AS n, COALESCE(SUM(cost_usd),0) AS c FROM runs WHERE created_at > ? GROUP BY routine_slug ORDER BY c DESC LIMIT 3", since);
-  const topStr = top.map((x) => `${x.routine_slug} (${x.n}, $${x.c.toFixed(2)})`).join(', ') || 'none';
-  return `:bar_chart: *Switchboard daily digest* — ${t.runs} runs, $${t.cost.toFixed(2)} spent, ${t.fails || 0} failed today.\nBusiest: ${topStr}.`;
-}
-function sendDigest() {
-  const target = metaGet('digest_channel', '').trim();
-  if (!target) return false;
-  execCapture('slack-post', [target, buildDigest()], { env: { ...process.env, PATH: `${SCRIPT_TOOLS_DIR}:${process.env.PATH}` }, timeoutMs: 15_000 })
-    .then((res) => logActivity(`daily digest ${res.code === 0 ? `sent → ${target}` : `error: ${(res.err || '').slice(0, 50)}`}`, 'idle')).catch(() => {});
-  return true;
-}
-app.post('/api/digest', (req, res) => {
-  const b = req.body || {};
-  if (b.channel != null) setMeta('digest_channel', String(b.channel).trim());
-  if (b.hour != null) setMeta('digest_hour', String(Math.max(-1, Math.min(23, parseInt(b.hour, 10)))));
-  res.json({ channel: metaGet('digest_channel', ''), hour: parseInt(metaGet('digest_hour', '-1'), 10) });
-});
-app.post('/api/digest/send', (_q, res) => res.json({ sent: sendDigest(), preview: buildDigest() }));
-function buildStandup() {
-  const since = now() - 86_400_000;
-  const audit = all('SELECT slug, summary FROM routine_audit WHERE created_at > ? ORDER BY id DESC', since);
-  const approvals = audit.filter((a) => a.summary.startsWith('approved by')).length;
-  const changes = audit.filter((a) => a.summary.startsWith('edited') || a.summary.includes(' edited')).length;
-  const comments = one('SELECT COUNT(*) AS n FROM comments WHERE created_at > ?', since).n;
-  const signoffs = one("SELECT COUNT(*) AS n FROM runs WHERE verdict != '' AND created_at > ?", since).n;
-  const resolved = one("SELECT COUNT(*) AS n FROM runs WHERE triage='resolved' AND created_at > ?", since).n;
-  return `:speech_balloon: *Team standup — last 24h*\n• ${changes} config change(s), ${approvals} approval(s)\n• ${comments} comment(s), ${signoffs} sign-off(s)\n• ${resolved} incident(s) resolved`;
-}
-app.post('/api/standup/send', (_q, res) => {
-  const target = metaGet('digest_channel', '').trim();
-  const preview = buildStandup();
-  if (target) {
-    execCapture('slack-post', [target, preview], { env: { ...process.env, PATH: `${SCRIPT_TOOLS_DIR}:${process.env.PATH}` }, timeoutMs: 15_000 })
-      .then((r) => logActivity(`team standup ${r.code === 0 ? `posted → ${target}` : `error: ${(r.err || '').slice(0, 50)}`}`, 'idle')).catch(() => {});
-  }
-  res.json({ sent: !!target, preview, channel: target });
-});
-// Auto-generated ops report (markdown) — spend, top routines, failures, warnings.
-app.get('/api/report.md', (req, res) => {
-  const days = Math.min(365, Math.max(1, parseInt(req.query.days, 10) || 7));
-  const since = now() - days * 86_400_000;
-  const rows = all("SELECT routine_slug, status, cost_usd, num_turns FROM runs WHERE created_at > ? AND status IN ('succeeded','failed')", since);
-  const totalCost = rows.reduce((a, r) => a + (r.cost_usd || 0), 0);
-  const fails = rows.filter((r) => r.status === 'failed').length;
-  const perR = {};
-  for (const r of rows) { const p = (perR[r.routine_slug] ||= { runs: 0, cost: 0, fails: 0 }); p.runs++; p.cost += r.cost_usd || 0; if (r.status === 'failed') p.fails++; }
-  const top = Object.entries(perR).sort((a, b) => b[1].cost - a[1].cost).slice(0, 5);
-  const slugSet = new Set(all('SELECT slug FROM routines').map((x) => x.slug));
-  const warnings = all('SELECT * FROM routines').flatMap((r) => lintRoutine(r, slugSet).map((w) => `${r.slug}: ${w}`));
-  const stats = one('SELECT COUNT(*) AS total, SUM(enabled) AS enabledN FROM routines');
-  const lines = [
-    `# Switchboard report — last ${days}d`,
-    `_generated ${new Date(now()).toISOString()}_`, '',
-    `- **Routines**: ${stats.total} (${stats.enabledN || 0} enabled)`,
-    `- **Runs**: ${rows.length} · **Spend**: $${totalCost.toFixed(2)} · **Failures**: ${fails} (${rows.length ? Math.round((100 * fails) / rows.length) : 0}%)`,
-    '', '## Top routines by spend',
-    ...(top.length ? top.map(([slug, p]) => `- **${slug}** — ${p.runs} runs, $${p.cost.toFixed(2)}${p.fails ? `, ${p.fails} failed` : ''}`) : ['- _no runs in window_']),
-    '', `## Config warnings (${warnings.length})`,
-    ...(warnings.length ? warnings.map((w) => `- ⚠ ${w}`) : ['- none 🎉']),
-  ];
-  res.setHeader('Content-Type', 'text/markdown');
-  res.setHeader('Content-Disposition', 'attachment; filename="switchboard-report.md"');
-  res.send(lines.join('\n'));
-});
-// Config lint: flag routines that are misconfigured in ways that fail silently.
-function lintRoutine(r, slugSet) {
-  const w = [];
-  const trig = j(r.triggers);
-  if (r.enabled && trig.length === 0) w.push('enabled but has no triggers — it can never fire');
-  if (r.enabled && (!r.owner || r.owner === 'unassigned')) w.push('no owner — nobody is responsible for it');
-  if (r.enabled && r.sunset_at && r.sunset_at < now()) w.push('past its sunset date — should be retired');
-  if (trig.includes('schedule') && !String(r.schedule || '').trim()) w.push('schedule trigger but no cron set');
-  for (const t of j(r.chain)) if (t && !slugSet.has(t)) w.push(`chains to "${t}" which no longer exists`);
-  for (const rx of j(r.reactions)) if (rx.run && !slugSet.has(rx.run)) w.push(`reacts to "${rx.run}" which no longer exists`);
-  if (r.script_mode && !(r.script && r.script.trim())) w.push('script mode but the extractor is not compiled yet');
-  if (r.alert_on_fail && !String(r.alert_target || '').trim() && (!r.owner || r.owner === 'unassigned')) w.push('alert-on-fail set but no target and no owner to notify');
-  if ((r.max_fails || 0) > 0 && (r.retries || 0) >= r.max_fails) w.push('auto-disable threshold ≤ retries — it may never trip');
-  if (r.memory) {
-    try { const mp = join(memDirFor(r.slug), 'memory.md'); if (existsSync(mp)) { const age = now() - statSync(mp).mtimeMs; if (age > 30 * 86_400_000) w.push(`memory not updated in ${Math.round(age / 86_400_000)}d — possibly stale or not being written`); } } catch { /* ignore */ }
-  }
-  return w;
-}
-app.get('/api/lint', (_q, res) => {
-  const rows = all('SELECT * FROM routines');
-  const slugSet = new Set(rows.map((r) => r.slug));
-  // Build the chain+reaction edge graph and find cycles (would loop forever).
-  const edges = {};
-  for (const r of rows) edges[r.slug] = [...j(r.chain), ...j(r.reactions).map((x) => x.run).filter(Boolean)].filter((t) => slugSet.has(t));
-  const inCycle = new Set();
-  const cycleOf = {};
-  const WHITE = 0, GRAY = 1, BLACK = 2; const color = {}; const stack = [];
-  const dfs = (n) => {
-    color[n] = GRAY; stack.push(n);
-    for (const m of edges[n] || []) {
-      if (color[m] === GRAY) { const i = stack.indexOf(m); const cyc = stack.slice(i).concat(m); cyc.forEach((s) => { inCycle.add(s); cycleOf[s] = cyc.join(' → '); }); }
-      else if (!color[m]) dfs(m);
-    }
-    stack.pop(); color[n] = BLACK;
-  };
-  for (const r of rows) if (!color[r.slug]) dfs(r.slug);
-  const issues = rows.map((r) => {
-    const warnings = lintRoutine(r, slugSet);
-    if (inCycle.has(r.slug)) warnings.push(`dependency cycle: ${cycleOf[r.slug]} — fires forever`);
-    return { slug: r.slug, name: r.name, warnings };
-  }).filter((x) => x.warnings.length);
-  res.json({ count: issues.reduce((a, x) => a + x.warnings.length, 0), issues });
-});
-// Routine flow: the chain + reaction edges between routines (the fleet's topology).
-app.get('/api/graph', (_q, res) => {
-  const rows = all('SELECT slug,name,chain,reactions FROM routines WHERE enabled=1');
-  const names = Object.fromEntries(rows.map((r) => [r.slug, r.name]));
-  const exists = (s) => s in names || !!one('SELECT 1 FROM routines WHERE slug=?', s);
-  const edges = [];
-  for (const r of rows) {
-    j(r.chain).forEach((t) => { if (t) edges.push({ from: r.slug, to: t, kind: 'chain', label: 'on success' }); });
-    j(r.reactions).forEach((rx) => { if (rx.run) edges.push({ from: r.slug, to: rx.run, kind: 'reaction', label: `${rx.source}:${rx.kind}${rx.when ? ':' + rx.when : ''}${rx.check ? ` [${rx.check}]` : ''}` }); });
-  }
-  res.json({ edges: edges.map((e) => ({ ...e, fromName: names[e.from] || e.from, toName: names[e.to] || e.to, toExists: exists(e.to) })) });
-});
-// Upcoming scheduled runs — project the next fire times of cron routines forward.
-const relFuture = (ts) => { const d = ts - now(); if (d < 60_000) return 'in <1m'; if (d < 3_600_000) return `in ${Math.round(d / 60_000)}m`; if (d < 86_400_000) return `in ${Math.round(d / 3_600_000)}h`; return `in ${Math.round(d / 86_400_000)}d`; };
-app.get('/api/schedule', (req, res) => {
-  const hours = Math.min(168, Math.max(1, parseInt(req.query.hours, 10) || 48));
-  const rows = all("SELECT slug,name,schedule FROM routines WHERE enabled=1 AND triggers LIKE '%schedule%' AND schedule != ''");
-  const start = new Date(now()); start.setSeconds(0, 0);
-  const upcoming = [];
-  for (const r of rows) {
-    let count = 0;
-    for (let m = 1; m <= hours * 60 && count < 3; m++) {
-      const d = new Date(start.getTime() + m * 60_000);
-      if (cronMatches(r.schedule, d)) {
-        upcoming.push({ slug: r.slug, name: r.name, cron: r.schedule, at: d.getTime(), when: d.toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }), in: relFuture(d.getTime()) });
-        count++;
-      }
-    }
-  }
-  upcoming.sort((a, b) => a.at - b.at);
-  // Missed: a schedule whose most recent expected fire (last 26h) produced no run.
-  const missed = [];
-  for (const r of rows) {
-    let lastExp = null;
-    for (let m = 2; m <= 26 * 60; m++) { const d = new Date(start.getTime() - m * 60_000); if (cronMatches(r.schedule, d)) { lastExp = d.getTime(); break; } }
-    if (!lastExp) continue;
-    const lastRun = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND trigger LIKE 'schedule%'", r.slug)?.t || 0;
-    if (lastRun < lastExp - 60_000) missed.push({ slug: r.slug, name: r.name, cron: r.schedule, expected: lastExp, ago: relTime(lastExp) });
-  }
-  res.json({ hours, count: upcoming.length, upcoming, missed });
-});
-// Failure clustering: group recent failed runs by a normalized error signature.
-app.get('/api/failures', (req, res) => {
-  const days = Math.min(30, Math.max(1, parseInt(req.query.days, 10) || 7));
-  const rows = all("SELECT id, routine_slug, output, created_at FROM runs WHERE created_at > ? AND status='failed'", now() - days * 86_400_000);
-  const sig = (out) => {
-    let s = String(out || '').split('\n').map((l) => l.trim()).filter(Boolean).pop() || 'no output';
-    s = s.replace(/\b[0-9a-f]{7,}\b/gi, '#').replace(/\d+/g, 'N').replace(/(['"`]).*?\1/g, '…').replace(/\s+/g, ' ').trim().slice(0, 90);
-    return s || 'no output';
-  };
-  const groups = {};
-  for (const r of rows) {
-    const k = sig(r.output);
-    const g = (groups[k] ||= { signature: k, count: 0, routines: new Set(), latest: 0, sampleRun: r.id });
-    g.count++; g.routines.add(r.routine_slug); if (r.created_at > g.latest) { g.latest = r.created_at; g.sampleRun = r.id; }
-  }
-  const clusters = Object.values(groups).map((g) => ({ signature: g.signature, count: g.count, routines: [...g.routines], sampleRun: g.sampleRun, ago: relTime(g.latest) })).sort((a, b) => b.count - a.count).slice(0, 12);
-  res.json({ total: rows.length, clusters });
-});
-// Run activity heatmap: counts by day-of-week × hour-of-day (local time).
-app.get('/api/heatmap', (req, res) => {
-  const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 30));
-  const grid = Array.from({ length: 7 }, () => new Array(24).fill(0));
-  for (const r of all('SELECT created_at FROM runs WHERE created_at > ?', now() - days * 86_400_000)) {
-    const d = new Date(r.created_at); grid[d.getDay()][d.getHours()]++;
-  }
-  res.json({ grid, max: Math.max(1, ...grid.flat()), days });
-});
-// Per-team budgets — get current caps + today's spend, set a cap.
-app.get('/api/team-budgets', (_q, res) => {
-  const budgets = readTeamBudgets();
-  const teams = [...new Set(all('SELECT team FROM routines WHERE archived=0').map((x) => (x.team || '').trim() || 'no team'))];
-  res.json({ budgets, today: Object.fromEntries(teams.map((t) => [t, +teamSpendToday(t).toFixed(2)])) });
-});
-app.post('/api/team-budgets', (req, res) => {
-  const team = String(req.body?.team || '').trim();
-  if (!team) return res.status(400).json({ error: 'team required' });
-  const cap = Math.max(0, parseFloat(req.body?.cap) || 0);
-  const b = readTeamBudgets();
-  if (cap > 0) b[team] = cap; else delete b[team];
-  setMeta('team_budgets', JSON.stringify(b));
-  res.json({ ok: true, budgets: b });
-});
-// Contributors — who's doing the review/sign-off/discussion work (last 30d).
-app.get('/api/contributors', (_q, res) => {
-  const since = now() - 30 * 86_400_000;
-  const people = {};
-  const bump = (who, key) => { const w = (who || '').trim(); if (!w || w === 'anon') return; (people[w] ||= { who: w, approvals: 0, comments: 0, signoffs: 0 })[key]++; };
-  for (const a of all("SELECT summary FROM routine_audit WHERE summary LIKE 'approved by %' AND created_at > ?", since)) bump(a.summary.replace('approved by ', ''), 'approvals');
-  for (const c of all('SELECT author FROM comments WHERE created_at > ?', since)) bump(c.author, 'comments');
-  for (const v of all("SELECT verdict_by FROM runs WHERE verdict != '' AND created_at > ?", since)) bump(v.verdict_by, 'signoffs');
-  res.json({ contributors: Object.values(people).map((p) => ({ ...p, total: p.approvals + p.comments + p.signoffs })).sort((a, b) => b.total - a.total).slice(0, 12) });
-});
-// Owner workload: per-person load — routines owned, health, spend, open triage assigned.
-app.get('/api/owners', (req, res) => {
-  const since = now() - 14 * 86_400_000;
-  const runAgg = {};
-  for (const x of all('SELECT routine_slug, status, cost_usd FROM runs WHERE created_at > ?', since)) { const e = (runAgg[x.routine_slug] ||= { runs: 0, fails: 0, cost: 0 }); e.runs++; if (x.status === 'failed') e.fails++; e.cost += x.cost_usd || 0; }
-  const owners = {};
-  for (const r of all('SELECT slug,owner,enabled,last_status FROM routines WHERE archived=0')) {
-    const o = (r.owner || '').trim() || 'unassigned';
-    const e = (owners[o] ||= { owner: o, routines: 0, enabled: 0, failing: 0, runs: 0, cost: 0 });
-    e.routines++; if (r.enabled) e.enabled++; if (r.enabled && r.last_status === 'failing') e.failing++;
-    const a = runAgg[r.slug]; if (a) { e.runs += a.runs; e.cost += a.cost; }
-  }
-  const assigned = {};
-  for (const x of all("SELECT assignee FROM runs WHERE assignee != '' AND triage != 'resolved'")) assigned[x.assignee] = (assigned[x.assignee] || 0) + 1;
-  res.json({ owners: Object.values(owners).map((o) => ({ ...o, cost: +o.cost.toFixed(2), assignedOpen: assigned[o.owner] || 0 })).sort((a, b) => b.routines - a.routines) });
-});
-// Team rollup: per-team ownership, health, and spend — how the org's work divides up.
-app.get('/api/teams', (req, res) => {
-  const since = now() - 14 * 86_400_000;
-  const runAgg = {};
-  for (const x of all('SELECT routine_slug, status, cost_usd FROM runs WHERE created_at > ?', since)) { const e = (runAgg[x.routine_slug] ||= { runs: 0, cost: 0, fails: 0 }); e.runs++; e.cost += x.cost_usd || 0; if (x.status === 'failed') e.fails++; }
-  const teams = {};
-  for (const r of all('SELECT slug,team,owner,enabled FROM routines WHERE archived=0')) {
-    const t = (r.team || '').trim() || 'no team';
-    const e = (teams[t] ||= { team: t, routines: 0, enabled: 0, owners: new Set(), runs: 0, cost: 0, fails: 0 });
-    e.routines++; if (r.enabled) e.enabled++; if (r.owner && r.owner !== 'unassigned') e.owners.add(r.owner);
-    const a = runAgg[r.slug]; if (a) { e.runs += a.runs; e.cost += a.cost; e.fails += a.fails; }
-  }
-  const tb = readTeamBudgets();
-  res.json({ teams: Object.values(teams).map((t) => ({ team: t.team, routines: t.routines, enabled: t.enabled, owners: [...t.owners], runs: t.runs, cost: +t.cost.toFixed(2), failRate: t.runs ? Math.round((100 * t.fails) / t.runs) : 0, budget: parseFloat(tb[t.team]) || 0, spentToday: +teamSpendToday(t.team).toFixed(2) })).sort((a, b) => b.routines - a.routines) });
-});
-// Attention rollup: the single "what needs me right now" summary across signals.
-app.get('/api/attention', (_q, res) => {
-  const rows = all('SELECT * FROM routines WHERE archived=0');
-  const slugSet = new Set(all('SELECT slug FROM routines').map((x) => x.slug));
-  const failing = rows.filter((r) => r.enabled && (r.last_status === 'failing' || r.fail_streak > 0)).map((r) => ({ slug: r.slug, name: r.name }));
-  const critFailing = rows.filter((r) => r.enabled && r.tier === 'critical' && (r.last_status === 'failing' || r.fail_streak > 0)).length;
-  const warnings = rows.reduce((a, r) => a + lintRoutine(r, slugSet).length, 0);
-  const longRunning = all("SELECT routine_slug FROM runs WHERE status IN ('running','waiting') AND created_at < ?", now() - 8 * 60_000).length;
-  const stale = rows.filter((r) => r.enabled).filter((r) => { const t = one("SELECT MAX(created_at) AS t FROM runs WHERE routine_slug=? AND status='succeeded'", r.slug)?.t || 0; return t > 0 && now() - t > 7 * 86_400_000; }).length;
-  const unowned = rows.filter((r) => r.enabled && (!r.owner || r.owner === 'unassigned')).length;
-  const awaitingReview = rows.filter((r) => r.review_status === 'needs_review').length;
-  const items = [];
-  if (critFailing) items.push({ kind: 'critical', n: critFailing, text: `${critFailing} CRITICAL routine${critFailing > 1 ? 's' : ''} failing`, link: '/?tier=critical' });
-  if (failing.length) items.push({ kind: 'failing', n: failing.length, text: `${failing.length} routine${failing.length > 1 ? 's' : ''} failing`, link: '/?needsReview=1' });
-  if (longRunning) items.push({ kind: 'stuck', n: longRunning, text: `${longRunning} run${longRunning > 1 ? 's' : ''} stuck (>8m)`, link: '/insights' });
-  if (warnings) items.push({ kind: 'config', n: warnings, text: `${warnings} config warning${warnings > 1 ? 's' : ''}`, link: '/insights' });
-  if (stale) items.push({ kind: 'stale', n: stale, text: `${stale} routine${stale > 1 ? 's' : ''} stale (>7d)`, link: '/' });
-  if (unowned) items.push({ kind: 'unowned', n: unowned, text: `${unowned} routine${unowned > 1 ? 's' : ''} with no owner`, link: '/?owner=unassigned' });
-  if (awaitingReview) items.push({ kind: 'review', n: awaitingReview, text: `${awaitingReview} change${awaitingReview > 1 ? 's' : ''} awaiting review`, link: '/?needsReview=1' });
-  res.json({ total: items.reduce((a, i) => a + i.n, 0), items });
-});
-// Recommendations: analyze recent runs + config and suggest concrete optimizations.
-app.get('/api/recommendations', (req, res) => {
-  const since = now() - 14 * 86_400_000;
-  const rows = all("SELECT routine_slug, status, cost_usd FROM runs WHERE created_at > ? AND status IN ('succeeded','failed')", since);
-  const byR = {};
-  for (const r of rows) { const e = (byR[r.routine_slug] ||= { runs: 0, cost: 0, fails: 0 }); e.runs++; e.cost += r.cost_usd || 0; if (r.status === 'failed') e.fails++; }
-  const recs = [];
-  for (const r of all('SELECT slug,name,effort,model,retries FROM routines WHERE enabled=1 AND archived=0')) {
-    const s = byR[r.slug]; if (!s || s.runs < 5) continue;
-    const fr = s.fails / s.runs; const perRun = s.cost / s.runs;
-    if (['high', 'xhigh', 'max'].includes(r.effort) && fr < 0.05 && s.runs >= 8) recs.push({ slug: r.slug, name: r.name, kind: 'cost', text: `${r.effort} effort with ${Math.round((1 - fr) * 100)}% success over ${s.runs} runs — try lowering effort to cut cost` });
-    if (fr > 0.4) recs.push({ slug: r.slug, name: r.name, kind: 'reliability', text: `${Math.round(fr * 100)}% failure over ${s.runs} runs — review the prompt${(r.retries || 0) === 0 ? ' or add auto-retries' : ''}` });
-    else if (fr > 0.15 && (r.retries || 0) === 0) recs.push({ slug: r.slug, name: r.name, kind: 'reliability', text: `${Math.round(fr * 100)}% failure and no retries — enable auto-retry to absorb transient failures` });
-    if (r.model === 'claude-opus-4-8' && perRun > 0.3 && fr < 0.1) recs.push({ slug: r.slug, name: r.name, kind: 'cost', text: `$${perRun.toFixed(2)}/run on opus with low failures — a smaller model may handle this` });
-  }
-  res.json({ recommendations: recs.slice(0, 15) });
-});
-// Cost anomalies: successful runs that cost far more than their routine's average.
-app.get('/api/anomalies', (req, res) => {
-  const days = Math.min(60, Math.max(1, parseInt(req.query.days, 10) || 14));
-  const since = now() - days * 86_400_000;
-  const runs = all("SELECT id, routine_slug, cost_usd, num_turns, created_at FROM runs WHERE created_at > ? AND status='succeeded' AND cost_usd > 0", since);
-  const byR = {};
-  for (const r of runs) (byR[r.routine_slug] ||= []).push(r.cost_usd);
-  const avg = {};
-  for (const k in byR) avg[k] = byR[k].reduce((a, b) => a + b, 0) / byR[k].length;
-  const anomalies = runs
-    .filter((r) => byR[r.routine_slug].length >= 4 && r.cost_usd > 3 * avg[r.routine_slug])
-    .map((r) => ({ id: r.id, slug: r.routine_slug, cost: +r.cost_usd.toFixed(4), avg: +avg[r.routine_slug].toFixed(4), x: +(r.cost_usd / avg[r.routine_slug]).toFixed(1), turns: r.num_turns, ago: relTime(r.created_at) }))
-    .sort((a, b) => b.x - a.x).slice(0, 20);
-  res.json({ anomalies });
-});
-// Observability: cost / runs / turns / latency over time and per routine.
-app.get('/api/insights', (req, res) => {
-  const days = Math.min(365, Math.max(1, parseInt(req.query.days, 10) || 14));
-  const since = now() - days * 86_400_000;
-  const rows = all("SELECT routine_slug, status, cost_usd, num_turns, dur_ms, in_tokens, out_tokens, created_at FROM runs WHERE created_at > ? AND status IN ('succeeded','failed')", since);
-  const dayKey = (ts) => new Date(ts).toISOString().slice(0, 10);
-  const daily = {};
-  for (let i = days - 1; i >= 0; i--) { const k = dayKey(now() - i * 86_400_000); daily[k] = { date: k, runs: 0, cost: 0, fails: 0 }; }
-  const perR = {};
-  const T = { runs: 0, cost: 0, turns: 0, ms: 0, nMs: 0, fails: 0, inTok: 0, outTok: 0 };
-  for (const r of rows) {
-    const k = dayKey(r.created_at);
-    if (daily[k]) { daily[k].runs++; daily[k].cost += r.cost_usd || 0; if (r.status === 'failed') daily[k].fails++; }
-    const p = (perR[r.routine_slug] ||= { slug: r.routine_slug, runs: 0, cost: 0, turns: 0, ms: 0, nMs: 0, fails: 0 });
-    p.runs++; p.cost += r.cost_usd || 0; p.turns += r.num_turns || 0; if (r.dur_ms) { p.ms += r.dur_ms; p.nMs++; } if (r.status === 'failed') p.fails++;
-    T.runs++; T.cost += r.cost_usd || 0; T.turns += r.num_turns || 0; if (r.dur_ms) { T.ms += r.dur_ms; T.nMs++; } if (r.status === 'failed') T.fails++; T.inTok += r.in_tokens || 0; T.outTok += r.out_tokens || 0;
-  }
-  const dispatch = {};
-  for (const d of all('SELECT status, COUNT(*) AS n FROM runs WHERE created_at > ? GROUP BY status', since)) dispatch[d.status] = d.n;
-  const effortOf = Object.fromEntries(all('SELECT slug,effort FROM routines').map((x) => [x.slug, x.effort || 'default']));
-  const byE = {};
-  for (const r of rows) { const e = effortOf[r.routine_slug] || 'default'; const o = (byE[e] ||= { effort: e, runs: 0, cost: 0 }); o.runs++; o.cost += r.cost_usd || 0; }
-  const byEffort = Object.values(byE).map((e) => ({ ...e, cost: +e.cost.toFixed(4) })).sort((a, b) => b.cost - a.cost);
-  const tagsOf = Object.fromEntries(all('SELECT slug,tags FROM routines').map((x) => [x.slug, j(x.tags)]));
-  const byT = {};
-  for (const r of rows) for (const t of (tagsOf[r.routine_slug] || [])) { const e = (byT[t] ||= { tag: t, runs: 0, cost: 0 }); e.runs++; e.cost += r.cost_usd || 0; }
-  const byTag = Object.values(byT).map((t) => ({ ...t, cost: +t.cost.toFixed(4) })).sort((a, b) => b.cost - a.cost);
-  const modelOf = Object.fromEntries(all('SELECT slug,model FROM routines').map((x) => [x.slug, x.model]));
-  const byM = {};
-  for (const r of rows) {
-    const m = modelOf[r.routine_slug] || 'unknown';
-    const e = (byM[m] ||= { model: m, runs: 0, cost: 0, ms: 0, nMs: 0, tok: 0 });
-    e.runs++; e.cost += r.cost_usd || 0; if (r.dur_ms) { e.ms += r.dur_ms; e.nMs++; } e.tok += (r.in_tokens || 0) + (r.out_tokens || 0);
-  }
-  const byModel = Object.values(byM).map((m) => ({ model: m.model, runs: m.runs, cost: +m.cost.toFixed(4), avgMs: m.nMs ? Math.round(m.ms / m.nMs) : 0, tokens: m.tok, costPer1k: m.tok ? +(m.cost / (m.tok / 1000)).toFixed(4) : 0 })).sort((a, b) => b.cost - a.cost);
-  const names = Object.fromEntries(all('SELECT slug,name FROM routines').map((x) => [x.slug, x.name]));
-  const perRoutine = Object.values(perR).map((p) => ({
-    slug: p.slug, name: names[p.slug] || p.slug, runs: p.runs, cost: +p.cost.toFixed(4), turns: p.turns,
-    avgMs: p.nMs ? Math.round(p.ms / p.nMs) : 0, fails: p.fails, failRate: p.runs ? Math.round((100 * p.fails) / p.runs) : 0,
-    costPerSuccess: +(p.cost / Math.max(1, p.runs - p.fails)).toFixed(4),
-  })).sort((a, b) => b.cost - a.cost || b.runs - a.runs);
-  res.json({
-    days,
-    daily: Object.values(daily).map((d) => ({ ...d, cost: +d.cost.toFixed(4) })),
-    perRoutine, byModel, byTag, byEffort, dispatch,
-    totals: { runs: T.runs, cost: +T.cost.toFixed(2), turns: T.turns, avgMs: T.nMs ? Math.round(T.ms / T.nMs) : 0, fails: T.fails, failRate: T.runs ? Math.round((100 * T.fails) / T.runs) : 0, inTok: T.inTok, outTok: T.outTok },
-    projection: { perDay: +(T.cost / days).toFixed(2), monthly: +((T.cost / days) * 30).toFixed(2), runsPerDay: +(T.runs / days).toFixed(1) },
-    budget: { cap: budgetCap(), today: +todaySpend().toFixed(2), over: overBudget() },
-    digest: { channel: metaGet('digest_channel', ''), hour: parseInt(metaGet('digest_hour', '-1'), 10) },
-    retentionDays: parseInt(metaGet('retention_days', '0'), 10),
-  });
-});
-app.post('/api/budget', (req, res) => {
-  const cap = Math.max(0, parseFloat(req.body?.cap) || 0);
-  setMeta('daily_budget', cap > 0 ? String(cap) : '');
-  res.json({ ok: true, cap, today: +todaySpend().toFixed(2) });
-});
 app.get('/api/stats', (_q, res) => {
   const rows = all('SELECT * FROM routines');
   const enabled = rows.filter((r) => r.enabled);
@@ -1426,15 +843,21 @@ app.get('/api/stats', (_q, res) => {
   });
 });
 
-app.get('/api/routines', (req, res) => res.json(all(`SELECT * FROM routines ${req.query.archived ? 'WHERE archived=1' : 'WHERE archived=0'} ORDER BY ord`).map(shapeRoutine)));
-app.post('/api/routines/:slug/archive', (req, res) => {
-  const r = one('SELECT slug FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  const archived = req.body?.archived ? 1 : 0;
-  run('UPDATE routines SET archived=?, enabled=CASE WHEN ?=1 THEN 0 ELSE enabled END WHERE slug=?', archived, archived, req.params.slug);
-  logActivity(`${req.params.slug} ${archived ? 'archived' : 'restored'}`, 'idle');
-  res.json({ ok: true, archived: !!archived });
+// The user's real GitHub repos — so the UI can see & target repositories.
+// ?owner=<org|*> & ?q=<search> for cross-org browse / GitHub-wide search.
+app.get('/api/github/repos', async (req, res) => res.json({ repos: await listRepos({ owner: String(req.query.owner || ''), q: String(req.query.q || '') }) }));
+app.get('/api/github/orgs', async (_q, res) => res.json({ orgs: await listOrgs() }));
+// Possible check names for a repo — so a reaction can target a specific check.
+app.get('/api/github/checks', async (req, res) => res.json({ checks: await listChecks(String(req.query.repo || '')) }));
+// A repo's labels — so the label filter is a pick-list, not free typing.
+app.get('/api/github/labels', async (req, res) => {
+  const repo = String(req.query.repo || '').trim();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return res.json({ labels: [] });
+  const r = await gh(['api', `repos/${repo}/labels`, '--paginate', '--jq', '.[].name']);
+  res.json({ labels: r.code === 0 ? r.out.split('\n').map((s) => s.trim()).filter(Boolean) : [] });
 });
+
+app.get('/api/routines', (_q, res) => res.json(all('SELECT * FROM routines ORDER BY ord').map(shapeRoutine)));
 
 app.get('/api/routines/:slug', (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
@@ -1448,28 +871,7 @@ app.get('/api/routines/:slug', (req, res) => {
     .map((t) => ({ summary: t.summary, key: t.lease_key, ago: relTime(t.created_at) }));
   const lf = one("SELECT id, output, created_at FROM runs WHERE routine_slug=? AND status='failed' ORDER BY created_at DESC, ord DESC LIMIT 1", r.slug);
   const lastError = lf ? { runId: lf.id, output: String(lf.output || '').slice(0, 400), ago: relTime(lf.created_at) } : null;
-  const costTrend = all("SELECT cost_usd FROM runs WHERE routine_slug=? AND status='succeeded' AND cost_usd IS NOT NULL AND cost_usd > 0 ORDER BY created_at DESC, ord DESC LIMIT 24", r.slug).reverse().map((x) => +x.cost_usd.toFixed(4));
-  const tpDays = 14; const tp = {};
-  for (let i = tpDays - 1; i >= 0; i--) { const k = new Date(now() - i * 86_400_000).toISOString().slice(0, 10); tp[k] = { date: k, runs: 0, fails: 0 }; }
-  for (const x of all('SELECT status, created_at FROM runs WHERE routine_slug=? AND created_at > ?', r.slug, now() - tpDays * 86_400_000)) { const k = new Date(x.created_at).toISOString().slice(0, 10); if (tp[k]) { tp[k].runs++; if (x.status === 'failed') tp[k].fails++; } }
-  const runsByDay = Object.values(tp);
-  const hist = all("SELECT status, created_at FROM runs WHERE routine_slug=? AND status IN ('succeeded','failed') ORDER BY created_at, ord", r.slug);
-  let failStart = null; const gaps = [];
-  for (const h of hist) {
-    if (h.status === 'failed' && failStart == null) failStart = h.created_at;
-    else if (h.status === 'succeeded' && failStart != null) { gaps.push(h.created_at - failStart); failStart = null; }
-  }
-  const mttr = gaps.length ? { value: fmtDur(Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length)), incidents: gaps.length, openIncident: failStart != null, downSince: failStart != null ? relTime(failStart) : null } : (failStart != null ? { value: '—', incidents: 0, openIncident: true, downSince: relTime(failStart) } : null);
-  const dependents = all('SELECT slug,name,chain,reactions,enabled FROM routines WHERE slug != ?', r.slug)
-    .map((x) => ({ slug: x.slug, name: x.name, enabled: !!x.enabled, viaChain: j(x.chain).includes(r.slug), viaReaction: j(x.reactions).some((rx) => rx.run === r.slug) }))
-    .filter((x) => x.viaChain || x.viaReaction)
-    .map((x) => ({ slug: x.slug, name: x.name, enabled: x.enabled, via: x.viaChain && x.viaReaction ? 'chain + reaction' : x.viaChain ? 'chain' : 'reaction' }));
-  // Upstream feeders — routines this one consumes (its chain targets + reaction sources).
-  const upSlugs = [...new Set([...j(r.chain), ...j(r.reactions).map((rx) => rx.run)].filter(Boolean))].filter((s) => s !== r.slug);
-  const upstream = upSlugs.map((s) => { const u = one('SELECT slug,name,enabled,last_status FROM routines WHERE slug=?', s); return u ? { slug: u.slug, name: u.name, enabled: !!u.enabled, lastStatus: u.last_status || 'idle', missing: false } : { slug: s, name: s, enabled: false, lastStatus: 'idle', missing: true }; });
-  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, script: r.script || '', lastError, costTrend, dependents, upstream, mttr, runsByDay, commentCount: one('SELECT COUNT(*) AS n FROM comments WHERE slug=?', r.slug).n,
-    lastTouched: (() => { const a = one('SELECT summary, created_at FROM routine_audit WHERE slug=? ORDER BY id DESC LIMIT 1', r.slug); return a ? { summary: a.summary, ago: relTime(a.created_at) } : null; })(),
-    watchers: all('SELECT who FROM routine_watch WHERE slug=? ORDER BY who', r.slug).map((x) => x.who) });
+  res.json({ ...shapeRoutine(r), ...detailOf(r), runHistory, watches, leases, inboxTasks, lastError });
 });
 
 function insertRoutine(b) {
@@ -1480,60 +882,48 @@ function insertRoutine(b) {
   const connectors = Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : [];
   const chain = Array.isArray(b.chain) ? b.chain.filter(Boolean) : [];
   const schedule = (b.schedule || '').trim();
-  const filters = cleanFilters(b.filters);
-  const reactions = cleanReactions(b.reactions);
-  const enabled = b.enabled === false ? 0 : 1;
   const ord = (one('SELECT MAX(ord) AS m FROM routines').m ?? -1) + 1;
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
   run(
     `INSERT INTO routines
-      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,meta_short,lease_ref,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,script_mode,script_lang,retries,assertions,alert_on_fail,alert_target,timeout_s,env,tags,rate_limit,max_fails,notes,active_window,sla_s,lifecycle,gate_review,tier,escalation,links,sunset_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      (slug,name,summary,owner,team,triggers,connectors,state,last_ago,last_status,next,success,spend,enabled,avg,av_color,initials,ord,prompt,model,repo,branch,chain,schedule,filters,reactions,effort,memory,concurrency,retries)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     slug, (b.name || '').trim(), (b.summary || '').trim(), owner, team,
     JSON.stringify(triggers), JSON.stringify(connectors),
-    'idle', 'never', 'idle', next, null, '$0.00', enabled, '', '', '—',
+    'idle', 'never', 'idle', next, null, '$0.00', b.enabled === false ? 0 : 1, '—',
     ownerColor(owner), initialsOf(owner), ord,
     (b.prompt || '').trim(), normModel(b.model), (b.repo || '').trim(), (b.branch || 'main').trim(),
-    JSON.stringify(chain), schedule, JSON.stringify(filters), JSON.stringify(reactions), normEffort(b.effort), b.memory ? 1 : 0, JSON.stringify(cleanConcurrency(b.concurrency)),
-    b.scriptMode ? 1 : 0, b.scriptLang === 'node' ? 'node' : 'bash', normRetries(b.retries), JSON.stringify(cleanAssertions(b.assertions)),
-    b.alertOnFail ? 1 : 0, (b.alertTarget || '').trim(), Math.max(0, Math.min(1800, parseInt(b.timeout, 10) || 0)), JSON.stringify(cleanEnv(b.env)), JSON.stringify(Array.isArray(b.tags) ? b.tags.map((t) => String(t).trim()).filter(Boolean) : []), Math.max(0, Math.min(1000, parseInt(b.rateLimit, 10) || 0)), Math.max(0, Math.min(50, parseInt(b.maxFails, 10) || 0)), String(b.notes || '').slice(0, 4000), cleanWindow(b.activeWindow), Math.max(0, Math.min(3600, parseInt(b.sla, 10) || 0)), ['draft','active','deprecated'].includes(b.lifecycle) ? b.lifecycle : 'active', b.gateReview ? 1 : 0, ['critical','standard','experimental'].includes(b.tier) ? b.tier : 'standard', String(b.escalation || '').trim().slice(0, 60), JSON.stringify(Array.isArray(b.links) ? b.links.filter((l) => l && l.url).slice(0, 12).map((l) => ({ label: String(l.label || '').slice(0, 60), url: String(l.url).slice(0, 300) })) : []), Number(b.sunsetAt) || 0
+    JSON.stringify(chain), schedule, JSON.stringify(cleanFilters(b.filters)), JSON.stringify(cleanReactions(b.reactions)),
+    normEffort(b.effort), b.memory ? 1 : 0, JSON.stringify(cleanConcurrency(b.concurrency)), normRetries(b.retries)
   );
   return slug;
 }
+
 // Quick-start templates — common routine shapes that prefill the New form.
 const ROUTINE_TEMPLATES = [
   { id: 'pr-reviewer', name: 'PR reviewer', desc: 'Review opened/updated PRs and comment', icon: '🔎', body: { triggers: ['pull_request'], connectors: ['github'], model: 'claude-opus-4-8', prompt: 'A pull request was opened or updated. Review the diff for bugs, risky changes, and missing tests, then post a concise review comment with `gh pr comment`.' } },
   { id: 'daily-report', name: 'Daily report', desc: 'Scheduled standup summary to Slack', icon: '📊', body: { triggers: ['schedule'], schedule: '0 9 * * 1-5', connectors: ['github', 'slack'], model: 'claude-opus-4-8', prompt: 'Summarize yesterday\'s merged PRs and open issues for the repo, then post a short digest to the team channel with `slack-post`.' } },
   { id: 'ci-watcher', name: 'CI failure watcher', desc: 'Triage failed checks', icon: '🚨', body: { triggers: ['check_run'], connectors: ['github', 'slack'], model: 'claude-opus-4-8', prompt: 'A CI check finished. If it failed, fetch the logs with `gh run view`, summarize the likely cause, and alert the author.' } },
-  { id: 'metric-extractor', name: 'Metric extractor', desc: 'Deterministic number on a schedule (script)', icon: '📈', body: { triggers: ['schedule'], schedule: '0 8 * * *', connectors: ['github'], scriptMode: true, scriptLang: 'bash', model: 'claude-haiku-4-5-20251001', prompt: 'Print the number of open pull requests older than 7 days.' } },
 ];
 app.get('/api/templates', (_q, res) => res.json({ templates: ROUTINE_TEMPLATES }));
-// One-click: seed three real developer flows (routines + agents). Idempotent.
-app.get('/api/samples', (_q, res) => res.json({
-  scenarios: [...new Set(SAMPLE_ROUTINES.map((r) => r.scenario))].map((s) => ({
-    scenario: s, routines: SAMPLE_ROUTINES.filter((r) => r.scenario === s).map((r) => ({ slug: r.slug, name: r.name, summary: r.summary, exists: !!one('SELECT 1 FROM routines WHERE slug=?', r.slug) })),
-  })),
-  agents: SAMPLE_AGENTS.map((a) => ({ name: a.name, summary: a.summary, exists: !!one('SELECT 1 FROM agents WHERE name=?', a.name) })),
-}));
+
+// One-click: seed the sample scenarios. Idempotent.
 app.post('/api/samples/load', async (req, res) => {
-  const repos = await listRepos({});
-  const repo = String(req.body?.repo || '').trim() || repos[0] || '';
-  const fill = (s) => String(s).split('__REPO__').join(repo || 'OWNER/REPO');
-  const routines = [], agents = [], skipped = [];
-  for (const a of SAMPLE_AGENTS) {
-    if (one('SELECT 1 FROM agents WHERE name=?', a.name)) { skipped.push(`@${a.name}`); continue; }
-    run('INSERT INTO agents (name,role,summary,connectors,model,effort,memory,av_color,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-      a.name, fill(a.role), a.summary, JSON.stringify(a.connectors || []), normModel(a.model), normEffort(a.effort), a.memory ? 1 : 0, ownerColor(a.name), now());
-    agents.push(a.name);
-  }
-  for (const rt of SAMPLE_ROUTINES) {
-    if (one('SELECT 1 FROM routines WHERE slug=?', rt.slug)) { skipped.push(rt.slug); continue; }
-    insertRoutine({ ...rt, repo: rt.repo === '__REPO__' ? repo : rt.repo, prompt: fill(rt.prompt) });
-    routines.push(rt.slug);
-  }
-  if (routines.length || agents.length) logActivity(`loaded ${routines.length} example routines + ${agents.length} agents${repo ? ` for ${repo}` : ''}`, 'success');
-  res.json({ repo, routines, agents, skipped });
+  try {
+    const repos = await listRepos({});
+    const repo = String(req.body?.repo || '').trim() || repos[0] || '';
+    const fill = (s) => String(s).split('__REPO__').join(repo || 'OWNER/REPO');
+    const routines = [], skipped = [];
+    for (const rt of SAMPLE_ROUTINES) {
+      if (one('SELECT 1 FROM routines WHERE slug=?', rt.slug)) { skipped.push(rt.slug); continue; }
+      insertRoutine({ ...rt, repo: rt.repo === '__REPO__' ? repo : rt.repo, prompt: fill(rt.prompt) });
+      routines.push(rt.slug);
+    }
+    if (routines.length) logActivity(`loaded ${routines.length} example routines${repo ? ` for ${repo}` : ''}`, 'success');
+    res.json({ repo, routines, skipped });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
 app.post('/api/routines', (req, res) => {
   const b = req.body || {};
   const name = (b.name || '').trim();
@@ -1598,29 +988,8 @@ app.put('/api/routines/:slug', (req, res) => {
   const filters = b.filters != null ? cleanFilters(b.filters) : (jObj(r.filters) || {});
   const reactions = b.reactions != null ? cleanReactions(b.reactions) : j(r.reactions);
   const next = triggers.includes('schedule') ? (schedule || 'scheduled') : triggers.length ? 'on event' : '—';
-  const scriptModeAfter = b.scriptMode != null ? !!b.scriptMode : !!r.script_mode;
-  const promptChanged = b.prompt != null && b.prompt.trim() !== r.prompt;
-  // Editing what to extract on a script routine doesn't throw the script away — it keeps it
-  // as the basis and marks it stale so the LLM regenerates from the current script next.
-  const staleAfter = (scriptModeAfter && promptChanged) ? 1 : r.script_stale;
-  // Snapshot the prior prompt before overwriting it, so edits are reversible + auditable.
-  if (promptChanged && r.prompt && r.prompt.trim()) run('INSERT INTO prompt_history (slug, prompt, created_at) VALUES (?,?,?)', r.slug, r.prompt, now());
-  // Audit trail: record which config fields changed in this edit.
-  const changed = [];
-  const scal = [['name', b.name, r.name], ['summary', b.summary, r.summary], ['owner', b.owner, r.owner], ['model', b.model, r.model], ['effort', b.effort, r.effort], ['repo', b.repo, r.repo], ['schedule', b.schedule, r.schedule]];
-  for (const [f, nv, ov] of scal) if (nv != null && String(nv) !== String(ov)) changed.push(f);
-  const arr = [['triggers', b.triggers, r.triggers], ['connectors', b.connectors, r.connectors], ['chain', b.chain, r.chain], ['tags', b.tags, r.tags], ['reactions', b.reactions, r.reactions]];
-  for (const [f, nv, ov] of arr) if (nv != null && JSON.stringify(nv) !== ov) changed.push(f);
-  if (b.filters != null && JSON.stringify(cleanFilters(b.filters)) !== r.filters) changed.push('filters');
-  if (promptChanged) changed.push('prompt');
-  if (changed.length) {
-    const editor = String(b.editor || '').trim().slice(0, 40);
-    run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', r.slug, `${editor ? editor + ' edited' : 'edited'}: ${changed.join(', ')}`, now());
-    // Substantive change → flag for review (was previously approved or has a reviewer).
-    if (changed.some((f) => ['prompt', 'triggers', 'connectors', 'filters', 'reactions', 'chain', 'model'].includes(f))) run("UPDATE routines SET review_status='needs_review' WHERE slug=?", r.slug);
-  }
   run(
-    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,script_mode=?,script_lang=?,script_stale=?,retries=?,assertions=?,alert_on_fail=?,alert_target=?,timeout_s=?,env=?,tags=?,rate_limit=?,max_fails=?,notes=?,active_window=?,sla_s=?,lifecycle=?,gate_review=?,tier=?,escalation=?,links=?,sunset_at=? WHERE slug=?`,
+    `UPDATE routines SET name=?,summary=?,owner=?,team=?,triggers=?,connectors=?,chain=?,model=?,repo=?,branch=?,prompt=?,av_color=?,initials=?,next=?,schedule=?,filters=?,reactions=?,effort=?,memory=?,concurrency=?,retries=? WHERE slug=?`,
     (b.name ?? r.name).trim() || r.name, (b.summary ?? r.summary).trim(), owner, (b.team ?? r.team).trim() || 'general',
     JSON.stringify(triggers), JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : j(r.connectors)),
     JSON.stringify(Array.isArray(b.chain) ? b.chain.filter(Boolean) : j(r.chain)),
@@ -1629,34 +998,10 @@ app.put('/api/routines/:slug', (req, res) => {
     b.effort != null ? normEffort(b.effort) : (r.effort || ''),
     b.memory != null ? (b.memory ? 1 : 0) : r.memory,
     JSON.stringify(b.concurrency != null ? cleanConcurrency(b.concurrency) : (jObj(r.concurrency) || {})),
-    b.scriptMode != null ? (b.scriptMode ? 1 : 0) : r.script_mode,
-    b.scriptLang ? (b.scriptLang === 'node' ? 'node' : 'bash') : r.script_lang,
-    staleAfter,
     b.retries != null ? normRetries(b.retries) : r.retries,
-    JSON.stringify(b.assertions != null ? cleanAssertions(b.assertions) : j(r.assertions)),
-    b.alertOnFail != null ? (b.alertOnFail ? 1 : 0) : r.alert_on_fail,
-    b.alertTarget != null ? String(b.alertTarget).trim() : r.alert_target,
-    b.timeout != null ? Math.max(0, Math.min(1800, parseInt(b.timeout, 10) || 0)) : r.timeout_s,
-    JSON.stringify(b.env != null ? cleanEnv(b.env) : (jObj(r.env) || {})),
-    JSON.stringify(Array.isArray(b.tags) ? b.tags.map((t) => String(t).trim()).filter(Boolean) : j(r.tags)),
-    b.rateLimit != null ? Math.max(0, Math.min(1000, parseInt(b.rateLimit, 10) || 0)) : r.rate_limit,
-    b.maxFails != null ? Math.max(0, Math.min(50, parseInt(b.maxFails, 10) || 0)) : r.max_fails,
-    b.notes != null ? String(b.notes).slice(0, 4000) : r.notes,
-    b.activeWindow !== undefined ? cleanWindow(b.activeWindow) : r.active_window,
-    b.sla != null ? Math.max(0, Math.min(3600, parseInt(b.sla, 10) || 0)) : r.sla_s,
-    ['draft','active','deprecated'].includes(b.lifecycle) ? b.lifecycle : r.lifecycle,
-    b.gateReview != null ? (b.gateReview ? 1 : 0) : r.gate_review,
-    ['critical','standard','experimental'].includes(b.tier) ? b.tier : r.tier,
-    b.escalation != null ? String(b.escalation).trim().slice(0, 60) : r.escalation,
-    b.links != null ? JSON.stringify(Array.isArray(b.links) ? b.links.filter((l) => l && l.url).slice(0, 12).map((l) => ({ label: String(l.label || '').slice(0, 60), url: String(l.url).slice(0, 300) })) : []) : r.links,
-    b.sunsetAt != null ? (Number(b.sunsetAt) || 0) : r.sunset_at,
     r.slug
   );
-  const updated = one('SELECT * FROM routines WHERE slug=?', r.slug);
-  // Fire the LLM to regenerate the extractor when the instruction changed (keeping the
-  // current script as the starting point, passed in via the compile prompt).
-  if (scriptModeAfter && promptChanged) executeRoutine({ ...updated, script_stale: 1 }, { event: 'recompile', _recompile: true, routine: r.slug }, 'recompile · prompt edited');
-  res.json(shapeRoutine(updated));
+  res.json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', r.slug)));
 });
 
 app.delete('/api/routines/:slug', (req, res) => {
@@ -1667,267 +1012,35 @@ app.delete('/api/routines/:slug', (req, res) => {
   res.json({ ok: true });
 });
 
-// Portability: export a routine's full definition as a JSON bundle, and import one.
-const exportBody = (r) => ({
-  name: r.name, summary: r.summary, owner: r.owner, team: r.team,
-  triggers: j(r.triggers), connectors: j(r.connectors), chain: j(r.chain),
-  schedule: r.schedule, filters: jObj(r.filters) || {}, reactions: j(r.reactions),
-  concurrency: jObj(r.concurrency) || {}, model: r.model, effort: r.effort, memory: !!r.memory,
-  repo: r.repo, prompt: r.prompt, scriptMode: !!r.script_mode, scriptLang: r.script_lang,
-  retries: r.retries, assertions: j(r.assertions), alertOnFail: !!r.alert_on_fail, alertTarget: r.alert_target, tags: j(r.tags), env: jObj(r.env) || {},
-});
-// Snooze: pause a routine's triggers + schedule until a time, then auto-resume.
-app.post('/api/routines/:slug/snooze', (req, res) => {
-  const r = one('SELECT slug FROM routines WHERE slug=?', req.params.slug);
+app.post('/api/routines/:slug/enable', (req, res) => {
+  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
   if (!r) return res.status(404).json({ error: 'not found' });
-  const hours = Math.max(0, Math.min(720, parseFloat(req.body?.hours) || 0));
-  const until = hours > 0 ? now() + hours * 3_600_000 : 0;
-  const reason = String(req.body?.reason || '').trim().slice(0, 200);
-  run('UPDATE routines SET snooze_until=?, snooze_reason=? WHERE slug=?', until, until ? reason : '', req.params.slug);
-  logActivity(`${req.params.slug} ${until ? `snoozed for ${hours}h${reason ? ` · ${reason}` : ''}` : 'snooze cleared'}`, 'idle');
-  res.json({ ok: true, snoozedUntil: until });
+  const en = req.body?.enabled ? 1 : 0;
+  run('UPDATE routines SET enabled=?, state=? WHERE slug=?', en, en ? (r.state === 'disabled' ? 'idle' : r.state) : 'disabled', r.slug);
+  res.json({ ok: true, enabled: !!en });
 });
+
+app.post('/api/routines/:slug/dispatch', (req, res) => {
+  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
+  const event = req.body?.event ?? { event: 'manual', routine: r.slug, dispatched_at: new Date().toISOString() };
+  res.json({ ok: true, runId: executeRoutine(r, event, 'manual'), status: 'running' });
+});
+
 // Dry-run preview: the exact prompt the agent would get + whether an event matches — $0.
 app.post('/api/routines/:slug/preview', (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
   if (!r) return res.status(404).json({ error: 'not found' });
   const event = req.body?.event && Object.keys(req.body.event).length ? req.body.event : { event: 'manual', routine: r.slug };
   const tools = j(r.connectors);
-  const agents = tools.includes('team') ? all('SELECT name, role, summary FROM agents ORDER BY name') : [];
-  const willCompile = !!r.script_mode && !(r.script && r.script.trim());
-  const prompt = buildPrompt({ ...r, connectors: tools }, event, policyConstraints(), { agents, compile: willCompile, scriptLang: r.script_lang });
+  const prompt = buildPrompt({ ...r, connectors: tools }, event, policyConstraints(), {});
   const triggerType = event.event || event.type || 'manual';
-  const wouldMatch = j(r.triggers).includes(triggerType) && repoMatches(r, event) && filtersMatch(r, event);
+  const wouldMatch = triggerHit(j(r.triggers), triggerType, event) && repoMatches(r, event) && filtersMatch(r, event);
   const { key } = leaseFor(r, event);
-  res.json({ prompt, tools, agents: agents.map((a) => a.name), wouldMatch, leaseKey: key, scriptMode: !!r.script_mode, willCompile, allowedTools: allowedToolsFor(tools), promptChars: prompt.length, estTokens: Math.round(prompt.length / 4) });
+  res.json({ prompt, tools, wouldMatch, leaseKey: key, allowedTools: allowedToolsFor(tools), promptChars: prompt.length, estTokens: Math.round(prompt.length / 4) });
 });
-app.get('/api/routines/:slug/export', (req, res) => {
-  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  res.json({ switchboard: 'routine', version: 1, slug: r.slug, routine: exportBody(r) });
-});
-// Bulk re-run recent failed runs (after a transient outage) — replays their stored events.
-app.post('/api/runs/rerun-failed', (req, res) => {
-  if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
-  if (overBudget()) return res.status(409).json({ error: 'daily budget reached' });
-  const slug = req.body?.slug ? String(req.body.slug) : '';
-  const hours = Math.min(168, Math.max(1, parseInt(req.body?.hours, 10) || 24));
-  const since = now() - hours * 3_600_000;
-  const rows = slug
-    ? all("SELECT * FROM runs WHERE status='failed' AND created_at > ? AND routine_slug=? ORDER BY created_at DESC LIMIT 25", since, slug)
-    : all("SELECT * FROM runs WHERE status='failed' AND created_at > ? ORDER BY created_at DESC LIMIT 25", since);
-  let n = 0; const seen = new Set();
-  for (const x of rows) {
-    if (seen.has(x.routine_slug + JSON.stringify(x.event))) continue; // de-dup identical retries
-    seen.add(x.routine_slug + JSON.stringify(x.event));
-    const r = one('SELECT * FROM routines WHERE slug=?', x.routine_slug);
-    if (!r || !r.enabled) continue;
-    const ev = jObj(x.event) || {}; delete ev._attempt;
-    executeRoutine(r, { ...ev, _replay: true, upstream: { routine: r.slug, run: x.id } }, `bulk rerun · ${x.id}`);
-    n++;
-  }
-  if (n) logActivity(`bulk re-ran ${n} failed run${n === 1 ? '' : 's'}`, 'idle');
-  res.json({ rerun: n });
-});
-// Full single-run bundle (event + output + trace + metrics) as JSON.
-app.get('/api/runs/:id/bundle', (req, res) => {
-  const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
-  if (!x) return res.status(404).json({ error: 'not found' });
-  const trace = all('SELECT seq,t_offset,type,tool,ok,payload FROM run_events WHERE run_id=? ORDER BY seq', x.id).map((e) => {
-    let p; try { p = JSON.parse(e.payload); } catch { p = { d: e.payload }; }
-    return { seq: e.seq, ms: e.t_offset, type: e.type, tool: e.tool, ok: e.ok, text: p.d };
-  });
-  const bundle = {
-    id: x.id, routine: x.routine_slug, status: x.status, trigger: x.trigger,
-    created_at: new Date(x.created_at).toISOString(), cost_usd: x.cost_usd, num_turns: x.num_turns,
-    dur: x.dur, session_id: x.session_id, event: jObj(x.event) || null, output: x.output, trace,
-  };
-  res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Content-Disposition', `attachment; filename="${x.id}.json"`);
-  res.send(JSON.stringify(bundle, null, 2));
-});
-// Retention: prune finished runs (+ their trace events) older than N days.
-function pruneRuns(days) {
-  const cutoff = now() - Math.max(1, days) * 86_400_000;
-  const doomed = all("SELECT id FROM runs WHERE created_at < ? AND status NOT IN ('running','waiting')", cutoff).map((x) => x.id);
-  if (!doomed.length) return 0;
-  run("DELETE FROM run_events WHERE run_id IN (SELECT id FROM runs WHERE created_at < ? AND status NOT IN ('running','waiting'))", cutoff);
-  run("DELETE FROM runs WHERE created_at < ? AND status NOT IN ('running','waiting')", cutoff);
-  return doomed.length;
-}
-app.post('/api/runs/prune', (req, res) => {
-  const days = Math.max(1, Math.min(365, parseInt(req.body?.days, 10) || 30));
-  const n = pruneRuns(days);
-  if (n) logActivity(`pruned ${n} run${n === 1 ? '' : 's'} older than ${days}d`, 'idle');
-  res.json({ pruned: n, days });
-});
-app.post('/api/runs/retention', (req, res) => {
-  const days = Math.max(0, Math.min(365, parseInt(req.body?.days, 10) || 0));
-  setMeta('retention_days', String(days));
-  res.json({ retentionDays: days });
-});
-// Export runs as CSV (all, or one routine) for offline analysis.
-app.get('/api/runs.csv', (req, res) => {
-  const slug = req.query.routine ? String(req.query.routine) : '';
-  const rows = slug
-    ? all('SELECT * FROM runs WHERE routine_slug=? ORDER BY created_at DESC LIMIT 5000', slug)
-    : all('SELECT * FROM runs ORDER BY created_at DESC LIMIT 5000');
-  const esc = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  const lines = [['id', 'routine', 'status', 'trigger', 'cost_usd', 'num_turns', 'dur', 'created_at'].join(',')];
-  for (const x of rows) lines.push([x.id, x.routine_slug, x.status, x.trigger, x.cost_usd ?? '', x.num_turns ?? '', x.dur, new Date(x.created_at).toISOString()].map(esc).join(','));
-  res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', `attachment; filename="switchboard-runs${slug ? '-' + slug : ''}.csv"`);
-  res.send(lines.join('\n'));
-});
-// Full-text search across all run outputs (and routine slug).
-app.get('/api/runs/search', (req, res) => {
-  const q = String(req.query.q || '').trim();
-  if (q.length < 2) return res.json({ results: [], q });
-  const like = `%${q}%`;
-  const days = Math.max(0, parseInt(req.query.days, 10) || 0);
-  const since = days ? now() - days * 86_400_000 : 0;
-  const rows = all('SELECT id, routine_slug, status, output, created_at FROM runs WHERE (output LIKE ? OR routine_slug LIKE ?) AND created_at > ? ORDER BY created_at DESC LIMIT 40', like, like, since);
-  const snip = (out) => {
-    const s = String(out || ''); const i = s.toLowerCase().indexOf(q.toLowerCase());
-    if (i < 0) return s.slice(0, 120).replace(/\s+/g, ' ');
-    return `${i > 30 ? '…' : ''}${s.slice(Math.max(0, i - 30), i + q.length + 70).replace(/\s+/g, ' ')}…`;
-  };
-  res.json({ q, results: rows.map((x) => ({ id: x.id, slug: x.routine_slug, status: x.status, ago: relTime(x.created_at), snippet: snip(x.output) })) });
-});
-// Golden output: pin a run's output as the routine's baseline; later runs report drift.
-const lineSet = (s) => new Set(String(s || '').split('\n').map((l) => l.trim()).filter(Boolean));
-function driftPct(baseline, output) {
-  const a = lineSet(baseline), b = lineSet(output);
-  if (!a.size && !b.size) return 0;
-  let inter = 0; for (const x of a) if (b.has(x)) inter++;
-  const union = a.size + b.size - inter;
-  return union ? Math.round(100 * (1 - inter / union)) : 0;
-}
-app.post('/api/runs/:id/baseline', (req, res) => {
-  const x = one('SELECT routine_slug, output, status FROM runs WHERE id=?', req.params.id);
-  if (!x) return res.status(404).json({ error: 'not found' });
-  run('UPDATE routines SET baseline=? WHERE slug=?', x.output || '', x.routine_slug);
-  logActivity(`${x.routine_slug} baseline set from run ${req.params.id}`, 'idle');
-  res.json({ ok: true });
-});
-app.delete('/api/routines/:slug/baseline', (req, res) => {
-  run("UPDATE routines SET baseline='' WHERE slug=?", req.params.slug);
-  res.json({ ok: true });
-});
-// Compare any two runs by id — arbitrary run-vs-run diff.
-app.get('/api/runs/compare', (req, res) => {
-  const brief = (id) => { const x = one('SELECT * FROM runs WHERE id=?', id); return x ? { id: x.id, slug: x.routine_slug, output: x.output || '', cost: x.cost_usd, turns: x.num_turns, status: x.status, ago: relTime(x.created_at) } : null; };
-  const a = brief(String(req.query.a || '')); const b = brief(String(req.query.b || ''));
-  if (!a || !b) return res.status(404).json({ error: 'one or both runs not found' });
-  res.json({ a, b });
-});
-// Diff a run against the previous run of the same routine (output + metric deltas).
-app.get('/api/runs/:id/diff', (req, res) => {
-  const cur = one('SELECT * FROM runs WHERE id=?', req.params.id);
-  if (!cur) return res.status(404).json({ error: 'not found' });
-  const prev = one("SELECT * FROM runs WHERE routine_slug=? AND created_at < ? AND status IN ('succeeded','failed') ORDER BY created_at DESC, ord DESC LIMIT 1", cur.routine_slug, cur.created_at);
-  const brief = (x) => x ? { id: x.id, output: x.output || '', cost: x.cost_usd, turns: x.num_turns, status: x.status, ago: relTime(x.created_at) } : null;
-  res.json({ current: brief(cur), previous: brief(prev) });
-});
-// Prompt history — past versions of a routine's prompt, with restore.
-app.get('/api/routines/:slug/history', (req, res) => {
-  const r = one('SELECT prompt FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  const rows = all('SELECT id, prompt, created_at FROM prompt_history WHERE slug=? ORDER BY id DESC LIMIT 30', req.params.slug);
-  res.json({ current: r.prompt || '', versions: rows.map((x) => ({ id: x.id, ago: relTime(x.created_at), chars: (x.prompt || '').length, prompt: x.prompt || '' })) });
-});
-app.post('/api/routines/:slug/restore/:id', (req, res) => {
-  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  const v = one('SELECT prompt FROM prompt_history WHERE id=? AND slug=?', req.params.id, req.params.slug);
-  if (!v) return res.status(404).json({ error: 'version not found' });
-  if (r.prompt && r.prompt.trim() && r.prompt !== v.prompt) run('INSERT INTO prompt_history (slug, prompt, created_at) VALUES (?,?,?)', r.slug, r.prompt, now());
-  const stale = r.script_mode ? 1 : r.script_stale;
-  run('UPDATE routines SET prompt=?, script_stale=? WHERE slug=?', v.prompt, stale, r.slug);
-  logActivity(`${r.slug} prompt restored from a prior version`, 'idle');
-  res.json({ ok: true });
-});
-// Saved Fleet views — named filter presets persisted in meta.
-const readViews = () => { try { return JSON.parse(metaGet('fleet_views', '[]')); } catch { return []; } };
-app.get('/api/views', (_q, res) => res.json({ views: readViews() }));
-app.post('/api/views', (req, res) => {
-  const name = String(req.body?.name || '').trim().slice(0, 40);
-  if (!name) return res.status(400).json({ error: 'a view name is required' });
-  const params = req.body?.params && typeof req.body.params === 'object' ? req.body.params : {};
-  const next = [...readViews().filter((v) => v.name !== name), { name, params }].slice(-20);
-  setMeta('fleet_views', JSON.stringify(next));
-  res.json({ views: next });
-});
-app.delete('/api/views', (req, res) => {
-  const next = readViews().filter((v) => v.name !== String(req.query.name || ''));
-  setMeta('fleet_views', JSON.stringify(next));
-  res.json({ views: next });
-});
-// Bulk operations across many routines at once.
-app.post('/api/routines/bulk', (req, res) => {
-  const { slugs = [], action, hours, tag } = req.body || {};
-  const list = (Array.isArray(slugs) ? slugs : []).filter((s) => typeof s === 'string');
-  let n = 0;
-  for (const slug of list) {
-    if (!one('SELECT 1 FROM routines WHERE slug=?', slug)) continue;
-    if (action === 'enable') run('UPDATE routines SET enabled=1, fail_streak=0 WHERE slug=?', slug);
-    else if (action === 'disable') run('UPDATE routines SET enabled=0 WHERE slug=?', slug);
-    else if (action === 'snooze') run('UPDATE routines SET snooze_until=? WHERE slug=?', now() + (Number(hours) || 4) * 3_600_000, slug);
-    else if (action === 'unsnooze') run('UPDATE routines SET snooze_until=0 WHERE slug=?', slug);
-    else if (action === 'tag' && tag) { const cur = j(one('SELECT tags FROM routines WHERE slug=?', slug).tags); if (!cur.includes(tag)) run('UPDATE routines SET tags=? WHERE slug=?', JSON.stringify([...cur, String(tag).trim()]), slug); }
-    else if (action === 'owner') run('UPDATE routines SET owner=? WHERE slug=?', String(req.body?.owner || '').trim() || 'unassigned', slug);
-    else if (action === 'delete') run('DELETE FROM routines WHERE slug=?', slug);
-    else continue;
-    n++;
-  }
-  logActivity(`bulk ${action}${tag ? ` #${tag}` : ''} · ${n} routine${n === 1 ? '' : 's'}`, 'idle');
-  res.json({ ok: true, affected: n });
-});
-app.post('/api/routines/:slug/pin', (req, res) => {
-  const r = one('SELECT pinned FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  const pinned = r.pinned ? 0 : 1;
-  run('UPDATE routines SET pinned=? WHERE slug=?', pinned, req.params.slug);
-  res.json({ ok: true, pinned: !!pinned });
-});
-app.post('/api/routines/:slug/clone', (req, res) => {
-  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  const body = exportBody(r);
-  let slug = `${r.slug}-copy`; let n = 1;
-  while (one('SELECT 1 FROM routines WHERE slug=?', slug)) { n++; slug = `${r.slug}-copy-${n}`; }
-  insertRoutine({ ...body, name: `${body.name} (copy)`, slug });
-  res.status(201).json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', slug)));
-});
-app.post('/api/routines/export-bundle', (req, res) => {
-  const slugs = (Array.isArray(req.body?.slugs) ? req.body.slugs : []).filter((s) => typeof s === 'string');
-  const routines = slugs.map((s) => one('SELECT * FROM routines WHERE slug=?', s)).filter(Boolean).map((r) => ({ slug: r.slug, routine: exportBody(r) }));
-  res.json({ switchboard: 'routine-bundle', version: 1, count: routines.length, routines });
-});
-app.post('/api/routines/import', (req, res) => {
-  // A bundle of routines (from export-bundle) → import each.
-  if (req.body && Array.isArray(req.body.routines) && req.body.switchboard === 'routine-bundle') {
-    const out = [];
-    for (const item of req.body.routines) {
-      const body = item.routine && typeof item.routine === 'object' ? item.routine : item;
-      const name = String(body.name || '').trim(); if (!name) continue;
-      let slug = String(item.slug || slugify(name)).replace(/[^a-z0-9_-]/gi, '');
-      if (!slug) continue;
-      if (one('SELECT 1 FROM routines WHERE slug=?', slug)) { let n = 2; while (one('SELECT 1 FROM routines WHERE slug=?', `${slug}-${n}`)) n++; slug = `${slug}-${n}`; }
-      insertRoutine({ ...body, slug }); out.push(slug);
-    }
-    return res.status(201).json({ imported: out });
-  }
-  const b = req.body || {};
-  const body = b.routine && typeof b.routine === 'object' ? b.routine : b;
-  const name = String(body.name || '').trim();
-  if (!name) return res.status(400).json({ error: 'bundle has no routine name' });
-  let slug = String(b.slug || body.slug || slugify(name)).trim().replace(/[^a-z0-9_-]/gi, '');
-  if (!slug) return res.status(400).json({ error: 'could not derive a slug' });
-  if (one('SELECT 1 FROM routines WHERE slug=?', slug)) { let n = 2; while (one('SELECT 1 FROM routines WHERE slug=?', `${slug}-${n}`)) n++; slug = `${slug}-${n}`; }
-  insertRoutine({ ...body, slug });
-  res.status(201).json(shapeRoutine(one('SELECT * FROM routines WHERE slug=?', slug)));
-});
+
 app.post('/api/routines/:slug/validate', async (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
   if (!r) return res.status(404).json({ error: 'not found' });
@@ -1942,15 +1055,11 @@ app.post('/api/routines/:slug/validate', async (req, res) => {
   if (tools.includes('github')) checks.push({ label: 'Tool · gh', ok: st.github.connected, detail: st.github.connected ? `authed as @${st.github.account}` : 'gh not authed — run `gh auth login`' });
   if (tools.includes('slack')) checks.push({ label: 'Tool · slack-post', ok: st.slack.connected, detail: st.slack.connected ? `${st.slack.team} · @${st.slack.bot}` : 'SLACK_BOT_TOKEN not set' });
   if (tools.includes('web') || tools.includes('webfetch')) checks.push({ label: 'Tool · web', ok: true, detail: 'WebFetch / WebSearch' });
-  if (tools.includes('team')) {
-    const n = one('SELECT COUNT(*) AS n FROM agents').n;
-    checks.push({ label: 'Tool · team', ok: n > 0, detail: n > 0 ? `delegate to ${n} agent${n > 1 ? 's' : ''} via agent-message` : 'no agents yet — add some on the Team page' });
-  }
   // Custom MCP servers are real grants too (loaded via --mcp-config).
   const mcpSet = mcpNameSet();
   tools.filter((c) => mcpSet.has(c)).forEach((c) => checks.push({ label: `Tool · ${c}`, ok: true, detail: `custom MCP · mcp__${c}__*` }));
   // Flag only grants the runner truly can't provide.
-  const known = new Set(['github', 'slack', 'web', 'webfetch', 'team']);
+  const known = new Set(['github', 'slack', 'web', 'webfetch']);
   const phantom = tools.filter((c) => !known.has(c) && !mcpSet.has(c));
   if (phantom.length) checks.push({ label: 'Tools', ok: false, detail: `not wired: ${phantom.join(', ')} — add it on the Connectors page, or remove it` });
   // Schedule cron must be present and parseable, else the routine silently never fires.
@@ -1987,76 +1096,16 @@ app.get('/api/settings', async (_q, res) => {
 });
 app.post('/api/settings', (req, res) => {
   const policies = req.body?.policies || {};
-  run("INSERT INTO meta (key,value) VALUES ('policies',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", JSON.stringify(policies));
+  setMeta('policies', JSON.stringify(policies));
   res.json({ ok: true });
 });
 
 app.get('/api/runs', (_q, res) =>
-  res.json(all('SELECT * FROM runs ORDER BY created_at DESC, ord DESC LIMIT 100').map((x) => {
-    const r = one('SELECT name FROM routines WHERE slug=?', x.routine_slug);
-    return { id: x.id, routineSlug: x.routine_slug, routineName: r?.name ?? x.routine_slug, status: x.status, ago: relTime(x.created_at), dur: x.dur, trigger: x.trigger };
-  }))
+  res.json(all(`SELECT runs.*, routines.name AS routine_name FROM runs
+                LEFT JOIN routines ON routines.slug = runs.routine_slug
+                ORDER BY runs.created_at DESC, runs.ord DESC LIMIT 100`)
+    .map((x) => ({ id: x.id, routineSlug: x.routine_slug, routineName: x.routine_name ?? x.routine_slug, status: x.status, ago: relTime(x.created_at), dur: x.dur, trigger: x.trigger })))
 );
-
-// ── Agent teams: named agents that routines (and you) can hand tasks to ─────────
-const agentSlug = (name) => `@${name}`;
-function shapeAgent(a) {
-  const last = one("SELECT status, trigger, created_at FROM runs WHERE routine_slug=? ORDER BY created_at DESC, ord DESC LIMIT 1", agentSlug(a.name));
-  const working = last?.status === 'running';
-  return {
-    name: a.name, role: a.role, summary: a.summary, connectors: j(a.connectors), model: a.model, effort: a.effort || '', memory: !!a.memory, avColor: a.av_color,
-    status: working ? 'working' : 'idle', currentTask: working ? last.trigger : null,
-    lastActive: last ? relTime(last.created_at) : 'never',
-    taskCount: one('SELECT COUNT(*) AS n FROM runs WHERE routine_slug=?', agentSlug(a.name)).n,
-  };
-}
-// Give an agent a task — runs a real session (its role + recent history + the task),
-// captured as a run under @name so the full trace works. Returns the run id.
-function runAgentTask(a, text) {
-  const history = all("SELECT trigger, output FROM runs WHERE routine_slug=? AND status!='running' ORDER BY created_at DESC, ord DESC LIMIT 4", agentSlug(a.name)).reverse();
-  const hist = history.map((h) => `Earlier you were asked: "${h.trigger}"\n→ you reported: ${(h.output || '').slice(0, 400)}`).join('\n\n');
-  const instruction = `You are ${a.name}, an agent on this team.\n${a.role || a.summary || ''}\n\n${hist ? `## Your recent work (for continuity)\n${hist}\n\n` : ''}## Request\n${text}`;
-  const synthetic = {
-    slug: agentSlug(a.name), name: a.name, summary: a.summary || a.role, owner: a.name, team: 'agents',
-    prompt: instruction, connectors: a.connectors, model: a.model, memory: a.memory,
-    repo: '', branch: 'main', chain: '[]', reactions: '[]', effort: a.effort || '', filters: '{}', concurrency: '{}',
-    av_color: a.av_color, initials: (a.name[0] || 'A').toUpperCase(),
-  };
-  return executeRoutine(synthetic, { event: 'agent-message', from: 'user', task: text }, text.replace(/\s+/g, ' ').slice(0, 70) || 'task');
-}
-app.get('/api/agents', (_q, res) => res.json(all('SELECT * FROM agents ORDER BY created_at').map(shapeAgent)));
-app.post('/api/agents', (req, res) => {
-  const b = req.body || {};
-  const name = String(b.name || '').trim().replace(/[^a-z0-9_-]/gi, '');
-  if (!name) return res.status(400).json({ error: 'an agent name (letters, digits, - or _) is required' });
-  if (one('SELECT 1 FROM agents WHERE name=?', name)) return res.status(409).json({ error: `agent "${name}" already exists` });
-  run('INSERT INTO agents (name,role,summary,connectors,model,effort,memory,av_color,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-    name, (b.role || '').trim(), (b.summary || '').trim(),
-    JSON.stringify(Array.isArray(b.connectors) ? b.connectors.filter(Boolean) : []),
-    normModel(b.model), normEffort(b.effort), b.memory ? 1 : 0, ownerColor(name), now());
-  res.status(201).json(shapeAgent(one('SELECT * FROM agents WHERE name=?', name)));
-});
-app.get('/api/agents/:name', (req, res) => {
-  const a = one('SELECT * FROM agents WHERE name=?', req.params.name);
-  if (!a) return res.status(404).json({ error: 'not found' });
-  const tasks = all('SELECT * FROM runs WHERE routine_slug=? ORDER BY created_at DESC, ord DESC LIMIT 30', agentSlug(a.name))
-    .map((x) => ({ id: x.id, task: x.trigger, status: x.status, ago: relTime(x.created_at), dur: x.dur, result: (x.output || '').split('\n').pop()?.slice(0, 160) || '' }));
-  res.json({ ...shapeAgent(a), tasks });
-});
-app.post('/api/agents/:name/message', (req, res) => {
-  if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
-  if (overBudget()) return res.status(409).json({ error: `daily budget $${budgetCap()} reached — dispatch paused` });
-  const a = one('SELECT * FROM agents WHERE name=?', req.params.name);
-  if (!a) return res.status(404).json({ error: 'not found' });
-  const text = String(req.body?.text || '').trim();
-  if (!text) return res.status(400).json({ error: 'a message/task is required' });
-  res.json({ ok: true, runId: runAgentTask(a, text) });
-});
-app.delete('/api/agents/:name', (req, res) => {
-  run('DELETE FROM agents WHERE name=?', req.params.name);
-  run('DELETE FROM runs WHERE routine_slug=?', agentSlug(req.params.name));
-  res.json({ ok: true });
-});
 
 // Live trace stream (SSE): replays the captured steps, then pushes each new one as it
 // happens and a final `done` — so the run page fills in with no polling lag.
@@ -2071,16 +1120,26 @@ app.get('/api/runs/:id/stream', (req, res) => {
     let pl; try { pl = JSON.parse(e.payload); } catch { pl = { d: e.payload }; }
     send({ kind: 'event', event: { seq: e.seq, t: fmtOffset(e.t_offset), ms: e.t_offset, type: e.type, tool: e.tool, ok: e.ok, text: pl.d, truncated: !!pl.truncated } });
   }
-  if (['succeeded', 'failed', 'skipped', 'canceled'].includes(x.status)) { send({ kind: 'done', status: x.status }); return res.end(); }
+  if (['succeeded', 'failed', 'skipped', 'coalesced', 'canceled'].includes(x.status)) { send({ kind: 'done', status: x.status }); return res.end(); }
   const ping = setInterval(() => res.write(':\n\n'), 25_000);
   const onMsg = (m) => { send(m); if (m.kind === 'done') { cleanup(); res.end(); } };
   const cleanup = () => { clearInterval(ping); runBus.off(id, onMsg); };
   runBus.on(id, onMsg);
   req.on('close', cleanup);
 });
+
 // The running agent's inbox — events coalesced onto this run's lease. POST claims them
 // (the `inbox` tool), so the agent fetches new work before wrapping up.
 const runLeaseKey = (x) => { const r = one('SELECT * FROM routines WHERE slug=?', x.routine_slug); return r ? leaseFor(r, jObj(x.event) || {}).key : null; };
+app.post('/api/runs/:id/inbox', (req, res) => {
+  const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
+  if (!x) return res.status(404).json({ error: 'not found' });
+  const key = runLeaseKey(x);
+  const pend = key ? pendingTasks(x.routine_slug, key) : [];
+  claimTasks(pend.map((t) => t.id), x.id);
+  res.json({ key, tasks: pend.map((t) => ({ id: t.id, summary: t.summary, event: jObj(t.payload) })) });
+});
+
 // Reproducibility: re-execute a run with its EXACT original event payload.
 app.post('/api/runs/:id/replay', (req, res) => {
   const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
@@ -2088,76 +1147,12 @@ app.post('/api/runs/:id/replay', (req, res) => {
   const r = one('SELECT * FROM routines WHERE slug=?', x.routine_slug);
   if (!r) return res.status(404).json({ error: 'routine no longer exists' });
   if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
-  if (overBudget()) return res.status(409).json({ error: `daily budget $${budgetCap()} reached — dispatch paused` });
   const ev = jObj(x.event) || {};
-  delete ev._attempt; delete ev._recompile;
+  delete ev._attempt;
   const runId = executeRoutine(r, { ...ev, _replay: true, upstream: { routine: r.slug, run: x.id } }, `replay · ${x.id}`);
   res.json({ ok: true, runId });
 });
-// Re-run with an EDITED event payload — reproduce with tweaks (vs replay's verbatim).
-app.post('/api/runs/:id/rerun', (req, res) => {
-  const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
-  if (!x) return res.status(404).json({ error: 'not found' });
-  const r = one('SELECT * FROM routines WHERE slug=?', x.routine_slug);
-  if (!r) return res.status(404).json({ error: 'routine no longer exists' });
-  if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
-  if (overBudget()) return res.status(409).json({ error: `daily budget $${budgetCap()} reached — dispatch paused` });
-  let ev;
-  try { ev = req.body?.event && typeof req.body.event === 'object' ? req.body.event : JSON.parse(req.body?.event || '{}'); }
-  catch { return res.status(400).json({ error: 'event is not valid JSON' }); }
-  delete ev._attempt; delete ev._recompile; delete ev._replay;
-  const runId = executeRoutine(r, { ...ev, _rerun: true, upstream: { routine: r.slug, run: x.id } }, `edited rerun · ${x.id}`);
-  res.json({ ok: true, runId });
-});
-// Shared run bookmarks — notable runs the team wants to find again.
-app.get('/api/bookmarks', (_q, res) => {
-  const rows = all('SELECT run_id, slug, label, by, created_at FROM bookmarks ORDER BY created_at DESC LIMIT 60');
-  res.json({ bookmarks: rows.map((b) => ({ id: b.run_id, slug: b.slug, label: b.label, by: b.by || 'anon', ago: relTime(b.created_at) })) });
-});
-app.post('/api/runs/:id/bookmark', (req, res) => {
-  const x = one('SELECT id, routine_slug FROM runs WHERE id=?', req.params.id);
-  if (!x) return res.status(404).json({ error: 'not found' });
-  const label = String(req.body?.label || '').trim().slice(0, 80);
-  const by = String(req.body?.by || '').trim().slice(0, 40) || 'anon';
-  run('INSERT INTO bookmarks (run_id, slug, label, by, created_at) VALUES (?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET label=excluded.label, by=excluded.by', x.id, x.routine_slug, label, by, now());
-  res.json({ ok: true });
-});
-app.delete('/api/runs/:id/bookmark', (req, res) => { run('DELETE FROM bookmarks WHERE run_id=?', req.params.id); res.json({ ok: true }); });
-// Emoji reactions — lightweight team signal on a run (toggles per person+emoji).
-const REACT_SET = ['👍', '🔥', '👀', '🎉', '❤️'];
-app.post('/api/runs/:id/react', (req, res) => {
-  if (!one('SELECT 1 FROM runs WHERE id=?', req.params.id)) return res.status(404).json({ error: 'not found' });
-  const emoji = String(req.body?.emoji || '');
-  if (!REACT_SET.includes(emoji)) return res.status(400).json({ error: 'unknown emoji' });
-  const by = String(req.body?.by || '').trim().slice(0, 40) || 'anon';
-  if (one('SELECT 1 FROM run_reactions WHERE run_id=? AND emoji=? AND by=?', req.params.id, emoji, by)) run('DELETE FROM run_reactions WHERE run_id=? AND emoji=? AND by=?', req.params.id, emoji, by);
-  else run('INSERT INTO run_reactions (run_id, emoji, by) VALUES (?,?,?)', req.params.id, emoji, by);
-  res.json({ ok: true });
-});
-function runReactions(id, me) {
-  const rows = all('SELECT emoji, by FROM run_reactions WHERE run_id=?', id);
-  return REACT_SET.map((e) => { const r = rows.filter((x) => x.emoji === e); return { emoji: e, count: r.length, mine: me ? r.some((x) => x.by === me) : false, who: r.map((x) => x.by) }; });
-}
-// Run sign-off: a teammate marks whether the agent's output was correct (QA on AI work).
-app.post('/api/runs/:id/verdict', (req, res) => {
-  const x = one('SELECT id FROM runs WHERE id=?', req.params.id);
-  if (!x) return res.status(404).json({ error: 'not found' });
-  const verdict = ['', 'good', 'bad'].includes(req.body?.verdict) ? req.body.verdict : '';
-  const by = String(req.body?.by || '').trim().slice(0, 40) || 'anon';
-  run('UPDATE runs SET verdict=?, verdict_by=? WHERE id=?', verdict, verdict ? by : '', req.params.id);
-  if (verdict) logActivity(`run ${req.params.id} signed off ${verdict} by ${by}`, verdict === 'good' ? 'success' : 'failing');
-  res.json({ ok: true, verdict });
-});
-// Run handoff: assign a run to a teammate to investigate, with a triage status.
-app.post('/api/runs/:id/assign', (req, res) => {
-  const x = one('SELECT id FROM runs WHERE id=?', req.params.id);
-  if (!x) return res.status(404).json({ error: 'not found' });
-  const assignee = String(req.body?.assignee ?? '').trim().slice(0, 40);
-  const triage = ['', 'open', 'investigating', 'resolved'].includes(req.body?.triage) ? req.body.triage : 'open';
-  run('UPDATE runs SET assignee=?, triage=? WHERE id=?', assignee, (assignee || triage === 'resolved') ? triage : '', req.params.id);
-  if (assignee) logActivity(`run ${req.params.id} assigned to ${assignee} (${triage})`, 'idle');
-  res.json({ ok: true, assignee, triage });
-});
+
 // Cancel a running run: kill its live session, mark it failed, free its lease.
 app.post('/api/runs/:id/cancel', (req, res) => {
   const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
@@ -2172,27 +1167,7 @@ app.post('/api/runs/:id/cancel', (req, res) => {
   logActivity(`${x.routine_slug} run ${x.id} canceled`, 'failing');
   res.json({ ok: true, killed: !!child });
 });
-// Replay a run on a different model — A/B cost/quality on the exact same event.
-app.post('/api/runs/:id/replay-model', (req, res) => {
-  const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
-  if (!x) return res.status(404).json({ error: 'not found' });
-  const r = one('SELECT * FROM routines WHERE slug=?', x.routine_slug);
-  if (!r) return res.status(404).json({ error: 'routine no longer exists' });
-  if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
-  if (overBudget()) return res.status(409).json({ error: 'daily budget reached' });
-  const model = String(req.body?.model || '').trim() || r.model;
-  const ev = jObj(x.event) || {}; delete ev._attempt; delete ev._recompile;
-  const runId = executeRoutine({ ...r, model }, { ...ev, _replay: true, upstream: { routine: r.slug, run: x.id } }, `replay@${model.replace(/^claude-/, '')} · ${x.id}`);
-  res.json({ ok: true, runId });
-});
-app.post('/api/runs/:id/inbox', (req, res) => {
-  const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
-  if (!x) return res.status(404).json({ error: 'not found' });
-  const key = runLeaseKey(x);
-  const pend = key ? pendingTasks(x.routine_slug, key) : [];
-  claimTasks(pend.map((t) => t.id), x.id);
-  res.json({ key, tasks: pend.map((t) => ({ id: t.id, summary: t.summary, event: jObj(t.payload) })) });
-});
+
 app.get('/api/runs/:id', (req, res) => {
   const x = one('SELECT * FROM runs WHERE id=?', req.params.id);
   if (!x) return res.status(404).json({ error: 'not found' });
@@ -2209,13 +1184,13 @@ app.get('/api/runs/:id', (req, res) => {
   });
 
   // Lineage: who kicked this run off, and what it kicked off (chains + reactions).
+  // Kind comes from the structured event flags, not the human-readable trigger label.
   const ev = jObj(x.event) || {};
-  const kindOf = (trig) => (String(trig).startsWith('reaction') ? 'reaction' : String(trig).startsWith('after') ? 'chain' : String(trig).startsWith('replay') ? 'replay' : String(trig).startsWith('edited rerun') ? 'replay' : 'trigger');
-  const triggeredBy = ev.upstream?.run ? { runId: ev.upstream.run, routine: ev.upstream.routine, kind: kindOf(x.trigger) } : null;
-  const downstream = all('SELECT id, routine_slug, trigger, status, dur, event FROM runs WHERE id != ? AND event LIKE ? ORDER BY created_at', x.id, `%${x.id}%`)
-    .filter((d) => (jObj(d.event)?.upstream?.run) === x.id)
-    .map((d) => ({ runId: d.id, routine: d.routine_slug, status: d.status, dur: d.dur, kind: kindOf(d.trigger) }));
-  const watches = all("SELECT * FROM watches WHERE origin_run=? ORDER BY created_at", x.id)
+  const kindOf = (e) => (e?._replay ? 'replay' : e?.event === 'reaction' ? 'reaction' : e?.upstream ? 'chain' : 'trigger');
+  const triggeredBy = ev.upstream?.run ? { runId: ev.upstream.run, routine: ev.upstream.routine, kind: kindOf(ev) } : null;
+  const downstream = all('SELECT id, routine_slug, status, dur, event FROM runs WHERE upstream_run=? ORDER BY created_at', x.id)
+    .map((d) => ({ runId: d.id, routine: d.routine_slug, status: d.status, dur: d.dur, kind: kindOf(jObj(d.event)) }));
+  const watches = all('SELECT * FROM watches WHERE origin_run=? ORDER BY created_at', x.id)
     .map((w) => ({ target: w.target_slug, source: w.source, kind: w.kind, when: w.when_cond, status: w.status, detail: w.detail }));
   // Inbox: tasks coalesced onto this run's lease (claimed by it, or still pending on its key).
   const lkey = runLeaseKey(x);
@@ -2227,18 +1202,12 @@ app.get('/api/runs/:id', (req, res) => {
   const toolBreakdown = all("SELECT tool, SUM(CASE WHEN type='tool_use' THEN 1 ELSE 0 END) AS calls, SUM(CASE WHEN type='tool_result' AND ok=0 THEN 1 ELSE 0 END) AS errors FROM run_events WHERE run_id=? AND tool IS NOT NULL AND tool != '' GROUP BY tool ORDER BY calls DESC", x.id)
     .map((t) => ({ tool: t.tool, calls: t.calls, errors: t.errors })).filter((t) => t.calls > 0 || t.errors > 0);
   res.json({
-    id: x.id, routine: x.routine_slug, status: x.status, trigger: x.trigger, triggerKind: kindOf(x.trigger),
+    id: x.id, routine: x.routine_slug, status: x.status, trigger: x.trigger, triggerKind: kindOf(ev),
     started: new Date(x.created_at).toLocaleTimeString(), elapsed: x.dur, model: x.model_used || r?.model || 'claude',
     cost: x.cost_usd, turns: x.num_turns, sessionId: x.session_id,
     inTokens: x.in_tokens ?? null, outTokens: x.out_tokens ?? null,
     matchExplain: r && ev ? explainMatch(r, ev) : null,
-    baseline: r && r.baseline ? { drift: driftPct(r.baseline, x.output) } : null,
-    slaBreach: r && r.sla_s > 0 && x.dur_ms && x.dur_ms > r.sla_s * 1000 ? { expected: r.sla_s, actual: Math.round(x.dur_ms / 1000) } : null,
-    assignee: x.assignee || '', triage: x.triage || '', verdict: x.verdict || '', verdictBy: x.verdict_by || '',
-    bookmarked: !!one('SELECT 1 FROM bookmarks WHERE run_id=?', x.id),
-    reactions: runReactions(x.id, String(req.query.me || '').trim()),
     stdout: x.output, event: ev, trace, inbox, toolBreakdown,
-    assertResult: jObj(x.assert_result) || null,
     lineage: { triggeredBy, downstream, watches },
     awaiting: running ? 'auto-mode session running…' : null,
     summary: {
@@ -2263,7 +1232,6 @@ app.get('/api/connectors', async (_q, res) => {
     { code: 'GH', name: 'GitHub', kind: 'CLI · gh', health: st.github.connected ? 'ok' : 'off', auth: st.github.connected ? `gh · @${st.github.account}` : 'run `gh auth login`', scopes: 'read/write PRs, issues, checks, gists', routines: uses('github'), ...usageFor('github'), avColor: '#7f9bd1', testable: true, configKey: '' },
     { code: 'SL', name: 'Slack', kind: 'Bot', health: st.slack.connected ? 'ok' : 'off', auth: st.slack.connected ? `${st.slack.team} · @${st.slack.bot}` : 'set a bot token', scopes: 'post messages via slack-post', routines: uses('slack'), ...usageFor('slack'), avColor: '#c9a24a', testable: true, configKey: 'slack' },
     { code: 'WB', name: 'Web fetch', kind: 'Built-in', health: 'ok', auth: 'no auth needed', scopes: 'fetch & read public URLs', routines: uses('web'), ...usageFor('web'), avColor: '#8aa0b8', testable: true, configKey: '' },
-    { code: 'AT', name: 'Atlassian / Confluence', kind: 'API · planned', health: process.env.ATLASSIAN_API_TOKEN ? 'ok' : 'off', auth: process.env.ATLASSIAN_API_TOKEN ? 'token set' : 'set an API token', scopes: 'publish to Confluence (not yet a granted tool)', routines: uses('confluence'), ...usageFor('confluence'), avColor: '#6fae9a', testable: true, configKey: 'atlassian' },
   ];
   for (const s of all('SELECT name, config, auth FROM mcp_servers ORDER BY name')) {
     const cfg = jObj(s.config) || {};
@@ -2275,12 +1243,24 @@ app.get('/api/connectors', async (_q, res) => {
   res.json(out);
 });
 
-// Live connectivity test for a connector (gh user / slack / web / atlassian / MCP server).
+// Live connectivity test for a connector (gh user / slack / web / MCP server).
 app.post('/api/connectors/:code/test', async (req, res) => {
   const t0 = now();
   const result = mcpNameSet().has(req.params.code) ? await testMcp(req.params.code) : await testConnector(req.params.code, req.body || {});
   res.json({ ...result, latencyMs: now() - t0 });
 });
+// Configure a connector's token (slack/atlassian) — stored in meta, loaded into env now.
+app.post('/api/connectors/:code/config', (req, res) => {
+  const code = String(req.params.code || '').toLowerCase();
+  const envKey = TOKEN_ENV[code];
+  if (!envKey) return res.status(400).json({ error: 'this connector has no configurable token' });
+  const token = String(req.body?.token || '').trim();
+  if (token) { setMeta(`token_${code}`, token); process.env[envKey] = token; }
+  else { run('DELETE FROM meta WHERE key=?', `token_${code}`); if (ENV_BASE[envKey]) process.env[envKey] = ENV_BASE[envKey]; else delete process.env[envKey]; }
+  bustStatus();
+  res.json({ ok: true, configured: !!token });
+});
+
 // Custom MCP servers — drop in a config + auth (env/headers); routines grant them by name.
 app.get('/api/mcp', (_q, res) => res.json(all('SELECT * FROM mcp_servers ORDER BY name').map((s) => {
   const auth = jObj(s.auth) || {};
@@ -2306,7 +1286,7 @@ app.post('/api/mcp', (req, res) => {
     const sld = host.length >= 2 ? host[host.length - 2] : host[0]; // mcp.betterstack.com → betterstack
     const name = (String(b.name || '').trim() || sld).replace(/[^a-z0-9_-]/gi, '');
     if (!name) return res.status(400).json({ error: 'a server name is required' });
-    run("INSERT INTO mcp_servers (name,config,created_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET config=excluded.config", name, JSON.stringify(mcpRemoteDef(url)), now());
+    run('INSERT INTO mcp_servers (name,config,created_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET config=excluded.config', name, JSON.stringify(mcpRemoteDef(url)), now());
     return res.json({ ok: true, name, remote: true });
   }
   let parsed;
@@ -2314,7 +1294,7 @@ app.post('/api/mcp', (req, res) => {
   const name = String(parsed.name || '').trim().replace(/[^a-z0-9_-]/gi, '');
   if (!name) return res.status(400).json({ error: 'a server name is required — type one, or paste a { "name": { … } } config' });
   if (!isDef(parsed.def)) return res.status(400).json({ error: 'config needs a "command" (stdio) or a "url" (http/sse)' });
-  run("INSERT INTO mcp_servers (name,config,created_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET config=excluded.config", name, JSON.stringify(parsed.def), now());
+  run('INSERT INTO mcp_servers (name,config,created_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET config=excluded.config', name, JSON.stringify(parsed.def), now());
   res.json({ ok: true, name });
 });
 // MCP Registry (registry.modelcontextprotocol.io) — search & add servers without
@@ -2357,7 +1337,7 @@ app.post('/api/mcp/registry/add', (req, res) => {
   if (b.remoteUrl) { try { def = mcpRemoteDef(new URL(String(b.remoteUrl)).toString()); } catch { return res.status(400).json({ error: 'invalid remote URL' }); } }
   else if (b.runtime && RUNTIME_CMD[b.runtime] && b.identifier) def = RUNTIME_CMD[b.runtime](String(b.identifier));
   else return res.status(400).json({ error: 'this server has no remote URL or runnable package' });
-  run("INSERT INTO mcp_servers (name,config,created_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET config=excluded.config", name, JSON.stringify(def), now());
+  run('INSERT INTO mcp_servers (name,config,created_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET config=excluded.config', name, JSON.stringify(def), now());
   res.json({ ok: true, name, remote: !!b.remoteUrl });
 });
 // Kick off the mcp-remote OAuth flow. We run it with piped output, watch for the
@@ -2396,17 +1376,6 @@ app.post('/api/mcp/:name/oauth', (req, res) => {
   setTimeout(kill, 5 * 60_000); // don't leave the auth proxy running forever
 });
 app.delete('/api/mcp/:name', (req, res) => { run('DELETE FROM mcp_servers WHERE name=?', req.params.name); res.json({ ok: true }); });
-// Configure a connector's token (slack/atlassian) — stored in meta, loaded into env now.
-app.post('/api/connectors/:code/config', (req, res) => {
-  const code = String(req.params.code || '').toLowerCase();
-  const envKey = TOKEN_ENV[code];
-  if (!envKey) return res.status(400).json({ error: 'this connector has no configurable token' });
-  const token = String(req.body?.token || '').trim();
-  if (token) { run("INSERT INTO meta (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", `token_${code}`, token); process.env[envKey] = token; }
-  else { run('DELETE FROM meta WHERE key=?', `token_${code}`); if (ENV_BASE[envKey]) process.env[envKey] = ENV_BASE[envKey]; else delete process.env[envKey]; }
-  bustStatus();
-  res.json({ ok: true, configured: !!token });
-});
 
 app.get('/api/activity', (_q, res) =>
   res.json(all('SELECT * FROM activity ORDER BY ord DESC LIMIT 40').map((a) => ({ time: a.time, text: a.text, state: a.state })))
@@ -2416,196 +1385,14 @@ const shapeWatch = (w) => ({
   id: w.id, origin: w.origin_routine, target: w.target_slug, source: w.source, kind: w.kind, when: w.when_cond,
   entity: jObj(w.entity) || {}, status: w.status, detail: w.detail, attempts: w.attempts, ago: relTime(w.created_at),
 });
-app.get('/api/watches', (_q, res) =>
-  res.json(all('SELECT * FROM watches ORDER BY created_at DESC LIMIT 100').map(shapeWatch))
-);
 
-app.post('/api/routines/:slug/enable', (req, res) => {
-  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  const en = req.body?.enabled ? 1 : 0;
-  run('UPDATE routines SET enabled=?, state=? WHERE slug=?', en, en ? (r.state === 'disabled' ? 'idle' : r.state) : 'disabled', r.slug);
-  if (!!r.enabled !== !!en) run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', r.slug, en ? 'enabled' : 'disabled', now());
-  res.json({ ok: true, enabled: !!en });
-});
-// Personal inbox — what's directed at one operator: @mentions + assigned open runs.
-app.get('/api/inbox', (req, res) => {
-  const who = String(req.query.who || '').trim();
-  if (!who) return res.json({ who: '', assigned: [], mentions: [], count: 0 });
-  const assigned = all("SELECT id, routine_slug, triage, created_at FROM runs WHERE assignee=? AND triage != 'resolved' ORDER BY created_at DESC LIMIT 20", who)
-    .map((x) => ({ id: x.id, slug: x.routine_slug, triage: x.triage || 'open', ago: relTime(x.created_at) }));
-  const mentions = all('SELECT by, slug, snippet, created_at FROM mentions WHERE mentioned=? ORDER BY id DESC LIMIT 20', who)
-    .map((m) => ({ by: m.by || 'anon', slug: m.slug, snippet: m.snippet, ago: relTime(m.created_at) }));
-  const watchSlugs = all('SELECT slug FROM routine_watch WHERE who=?', who).map((x) => x.slug);
-  let watched = []; let watchedFails = [];
-  if (watchSlugs.length) {
-    const ph = watchSlugs.map(() => '?').join(',');
-    watched = all(`SELECT slug, summary, created_at FROM routine_audit WHERE slug IN (${ph}) AND created_at > ? ORDER BY id DESC LIMIT 15`, ...watchSlugs, now() - 3 * 86_400_000)
-      .map((a) => ({ slug: a.slug, summary: a.summary, ago: relTime(a.created_at) }));
-    watchedFails = all(`SELECT id, routine_slug, created_at FROM runs WHERE routine_slug IN (${ph}) AND status='failed' AND created_at > ? ORDER BY created_at DESC LIMIT 10`, ...watchSlugs, now() - 2 * 86_400_000)
-      .map((x) => ({ id: x.id, slug: x.routine_slug, ago: relTime(x.created_at) }));
-  }
-  res.json({ who, assigned, mentions, watched, watchedFails, count: assigned.length + mentions.length + watched.length + watchedFails.length });
-});
-// Team standup — a rollup of recent people-activity (changes, approvals, comments, sign-offs).
-app.get('/api/standup', (req, res) => {
-  const days = Math.min(30, Math.max(1, parseInt(req.query.days, 10) || 1));
-  const since = now() - days * 86_400_000;
-  const audit = all('SELECT slug, summary, created_at FROM routine_audit WHERE created_at > ? ORDER BY id DESC', since);
-  const approvals = audit.filter((a) => a.summary.startsWith('approved by')).length;
-  const changes = audit.filter((a) => a.summary.startsWith('edited')).length;
-  const comments = one('SELECT COUNT(*) AS n FROM comments WHERE created_at > ?', since).n;
-  const signoffs = one("SELECT COUNT(*) AS n FROM runs WHERE verdict != '' AND created_at > ?", since).n;
-  const resolved = one("SELECT COUNT(*) AS n FROM runs WHERE triage='resolved' AND created_at > ?", since).n;
-  res.json({ days, counts: { changes, approvals, comments, signoffs, resolved }, recent: audit.slice(0, 12).map((a) => ({ slug: a.slug, summary: a.summary, ago: relTime(a.created_at) })) });
-});
-// Global change log — every routine config change + approval across the fleet.
-app.get('/api/audit', (req, res) => {
-  const rows = all('SELECT slug, summary, created_at FROM routine_audit ORDER BY id DESC LIMIT 60');
-  res.json({ entries: rows.map((x) => ({ slug: x.slug, summary: x.summary, ago: relTime(x.created_at) })) });
-});
-// Change-log CSV export — for compliance records / sharing outside the app.
-app.get('/api/audit.csv', (_q, res) => {
-  const rows = all('SELECT slug, summary, created_at FROM routine_audit ORDER BY id DESC LIMIT 1000');
-  const esc = (v) => `"${String(v).replace(/"/g, '""')}"`;
-  const lines = [['timestamp', 'routine', 'change'].join(',')].concat(rows.map((r) => [esc(new Date(r.created_at).toISOString()), esc(r.slug), esc(r.summary)].join(',')));
-  res.setHeader('content-type', 'text/csv');
-  res.setHeader('content-disposition', 'attachment; filename="switchboard-changelog.csv"');
-  res.send(lines.join('\n'));
-});
-// Mentions feed — recent @mentions from comments (directed asks).
-app.get('/api/mentions', (req, res) => {
-  const rows = all('SELECT mentioned, by, slug, snippet, created_at FROM mentions ORDER BY id DESC LIMIT 30');
-  res.json({ mentions: rows.map((m) => ({ mentioned: m.mentioned, by: m.by || 'anon', slug: m.slug, snippet: m.snippet, ago: relTime(m.created_at) })) });
-});
-// Routine timeline — merged chronological feed of changes/approvals + comments.
-app.get('/api/routines/:slug/timeline', (req, res) => {
-  const slug = req.params.slug;
-  const ev = [];
-  for (const a of all('SELECT summary, created_at FROM routine_audit WHERE slug=?', slug)) ev.push({ kind: a.summary.startsWith('approved') ? 'approval' : 'change', text: a.summary, at: a.created_at });
-  for (const c of all('SELECT author, body, created_at FROM comments WHERE slug=?', slug)) ev.push({ kind: 'comment', text: `${c.author || 'anon'}: ${c.body.slice(0, 140)}`, at: c.created_at });
-  ev.sort((a, b) => b.at - a.at);
-  res.json({ events: ev.slice(0, 40).map((e) => ({ kind: e.kind, text: e.text, ago: relTime(e.at) })) });
-});
-// Ownership handover — reassign + carry context (note → comment, mention, audit).
-app.post('/api/routines/:slug/handover', (req, res) => {
-  const r = one('SELECT slug, owner FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  const to = String(req.body?.to || '').trim().slice(0, 40);
-  if (!to) return res.status(400).json({ error: 'new owner required' });
-  const from = String(req.body?.from || '').trim().slice(0, 40) || r.owner || 'anon';
-  const note = String(req.body?.note || '').trim().slice(0, 500);
-  run('UPDATE routines SET owner=? WHERE slug=?', to, req.params.slug);
-  run('INSERT INTO comments (slug, author, body, created_at) VALUES (?,?,?,?)', req.params.slug, from, `📋 Handover to @${to}${note ? `: ${note}` : ''}`, now());
-  run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', req.params.slug, `handed over ${from} → ${to}`, now());
-  run('INSERT INTO mentions (mentioned, by, slug, snippet, created_at) VALUES (?,?,?,?,?)', to, from, req.params.slug, `handover${note ? ': ' + note : ''}`.slice(0, 100), now());
-  logActivity(`${req.params.slug} handed over ${from} → ${to}`, 'idle');
-  res.json({ ok: true });
-});
-// Watch / subscribe — follow a routine; its changes surface in the watcher's inbox.
-app.get('/api/routines/:slug/watch', (req, res) => {
-  const who = String(req.query.who || '').trim();
-  res.json({ watching: who ? !!one('SELECT 1 FROM routine_watch WHERE who=? AND slug=?', who, req.params.slug) : false, watchers: one('SELECT COUNT(*) AS n FROM routine_watch WHERE slug=?', req.params.slug).n });
-});
-app.post('/api/routines/:slug/watch', (req, res) => {
-  const who = String(req.body?.who || '').trim().slice(0, 40);
-  if (!who) return res.status(400).json({ error: 'who required' });
-  if (req.body?.on) run('INSERT OR IGNORE INTO routine_watch (who, slug, created_at) VALUES (?,?,?)', who, req.params.slug, now());
-  else run('DELETE FROM routine_watch WHERE who=? AND slug=?', who, req.params.slug);
-  res.json({ ok: true, watching: !!req.body?.on });
-});
-// Routine discussion — team comments / context that lives with the routine.
-app.get('/api/routines/:slug/comments', (req, res) => {
-  const rows = all('SELECT id, author, body, pinned, created_at FROM comments WHERE slug=? ORDER BY pinned DESC, id', req.params.slug);
-  res.json({ comments: rows.map((c) => ({ id: c.id, author: c.author || 'anon', body: c.body, pinned: !!c.pinned, ago: relTime(c.created_at) })) });
-});
-app.post('/api/routines/:slug/comments/:id/pin', (req, res) => {
-  run('UPDATE comments SET pinned=? WHERE id=? AND slug=?', req.body?.pinned ? 1 : 0, req.params.id, req.params.slug);
-  res.json({ ok: true });
-});
-app.post('/api/routines/:slug/comments', (req, res) => {
-  if (!one('SELECT 1 FROM routines WHERE slug=?', req.params.slug)) return res.status(404).json({ error: 'not found' });
-  const body = String(req.body?.body || '').trim().slice(0, 2000);
-  if (!body) return res.status(400).json({ error: 'empty comment' });
-  const author = String(req.body?.author || '').trim().slice(0, 40) || 'anon';
-  run('INSERT INTO comments (slug, author, body, created_at) VALUES (?,?,?,?)', req.params.slug, author, body, now());
-  logActivity(`${author} commented on ${req.params.slug}`, 'idle');
-  const mentioned = [...new Set((body.match(/@([a-z0-9_.-]+)/gi) || []).map((m) => m.slice(1)))];
-  for (const who of mentioned) { run('INSERT INTO mentions (mentioned, by, slug, snippet, created_at) VALUES (?,?,?,?,?)', who, author, req.params.slug, body.slice(0, 100), now()); logActivity(`@${who} mentioned by ${author} on ${req.params.slug}`, 'idle'); }
-  res.status(201).json({ ok: true });
-});
-app.put('/api/routines/:slug/comments/:id', (req, res) => {
-  const body = String(req.body?.body || '').trim().slice(0, 2000);
-  if (!body) return res.status(400).json({ error: 'empty comment' });
-  run('UPDATE comments SET body=? WHERE id=? AND slug=?', body, req.params.id, req.params.slug);
-  res.json({ ok: true });
-});
-app.delete('/api/routines/:slug/comments/:id', (req, res) => {
-  run('DELETE FROM comments WHERE id=? AND slug=?', req.params.id, req.params.slug);
-  res.json({ ok: true });
-});
-// Request review — ask a specific teammate to review (mention + audit).
-app.post('/api/routines/:slug/request-review', (req, res) => {
-  if (!one('SELECT 1 FROM routines WHERE slug=?', req.params.slug)) return res.status(404).json({ error: 'not found' });
-  const reviewer = String(req.body?.reviewer || '').trim().slice(0, 40);
-  if (!reviewer) return res.status(400).json({ error: 'reviewer required' });
-  const by = String(req.body?.by || '').trim().slice(0, 40) || 'anon';
-  run('INSERT INTO mentions (mentioned, by, slug, snippet, created_at) VALUES (?,?,?,?,?)', reviewer, by, req.params.slug, `review requested by ${by}`, now());
-  run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', req.params.slug, `review requested from ${reviewer} by ${by}`, now());
-  logActivity(`review of ${req.params.slug} requested from ${reviewer}`, 'idle');
-  res.json({ ok: true });
-});
-// Approve a routine's current config — clears the needs-review flag, records the reviewer.
-app.post('/api/routines/:slug/approve', (req, res) => {
-  const r = one('SELECT slug, tier FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  const reviewer = String(req.body?.reviewer || '').trim().slice(0, 40) || 'anon';
-  // Two-person rule: a critical routine must be approved by someone other than its last editor.
-  if (r.tier === 'critical') {
-    const le = one("SELECT summary FROM routine_audit WHERE slug=? AND summary LIKE '% edited:%' ORDER BY id DESC LIMIT 1", req.params.slug);
-    const editor = le ? le.summary.split(' edited:')[0] : '';
-    if (editor && editor !== 'anon' && editor === reviewer) return res.status(409).json({ error: 'two-person rule: a critical routine must be approved by someone other than its editor' });
-  }
-  run("UPDATE routines SET review_status='approved', reviewed_by=?, reviewed_at=? WHERE slug=?", reviewer, now(), req.params.slug);
-  run('INSERT INTO routine_audit (slug, summary, created_at) VALUES (?,?,?)', req.params.slug, `approved by ${reviewer}`, now());
-  logActivity(`${req.params.slug} approved by ${reviewer}`, 'success');
-  res.json({ ok: true });
-});
-app.get('/api/routines/:slug/audit', (req, res) => {
-  if (!one('SELECT 1 FROM routines WHERE slug=?', req.params.slug)) return res.status(404).json({ error: 'not found' });
-  const rows = all('SELECT summary, created_at FROM routine_audit WHERE slug=? ORDER BY id DESC LIMIT 30', req.params.slug);
-  res.json({ entries: rows.map((x) => ({ summary: x.summary, ago: relTime(x.created_at) })) });
-});
-
-app.post('/api/routines/:slug/dispatch', (req, res) => {
-  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  if (meta('kill_switch', 'false') === 'true') return res.status(409).json({ error: 'kill switch engaged' });
-  if (overBudget()) return res.status(409).json({ error: `daily budget $${budgetCap()} reached — dispatch paused` });
-  const event = req.body?.event ?? { event: 'manual', routine: r.slug, dispatched_at: new Date().toISOString() };
-  res.json({ ok: true, runId: executeRoutine(r, event, 'manual'), status: 'running' });
-});
-// Metric history: the (numeric) value each successful run produced, over time.
-app.get('/api/routines/:slug/metric', (req, res) => {
-  if (!one('SELECT 1 FROM routines WHERE slug=?', req.params.slug)) return res.status(404).json({ error: 'not found' });
-  const n = Math.min(120, Math.max(2, parseInt(req.query.n, 10) || 30));
-  const rows = all("SELECT id, output, cost_usd, created_at FROM runs WHERE routine_slug=? AND status='succeeded' ORDER BY created_at DESC LIMIT ?", req.params.slug, n).reverse();
-  const points = rows.map((x) => {
-    const m = String(x.output || '').match(/-?\d[\d,]*\.?\d*/);
-    return { runId: x.id, at: x.created_at, ago: relTime(x.created_at), value: m ? Number(m[0].replace(/,/g, '')) : null, raw: String(x.output || '').replace(/\s+/g, ' ').slice(0, 80) };
-  });
-  const nums = points.filter((p) => p.value != null);
-  res.json({ points, numeric: nums.length >= 2, latest: points.length ? points[points.length - 1] : null });
-});
-// Rebuild a script routine's extractor: an agent run that recompiles the script.
-app.post('/api/routines/:slug/recompile', (req, res) => {
-  const r = one('SELECT * FROM routines WHERE slug=?', req.params.slug);
-  if (!r) return res.status(404).json({ error: 'not found' });
-  if (!r.script_mode) return res.status(400).json({ error: 'not a script routine' });
-  run("UPDATE routines SET script_stale=1 WHERE slug=?", r.slug);
-  // Keep the current script as the basis — the compile prompt revises it.
-  const runId = executeRoutine({ ...r, script_stale: 1 }, { event: 'recompile', _recompile: true, routine: r.slug }, 'recompile');
-  res.json({ ok: true, runId });
+// Generic event ingress — any trigger type. POST /api/events/push, /pull_request, etc.
+app.post('/api/events/:type', (req, res) => {
+  const type = req.params.type;
+  const payload = type === 'push' && (!req.body || !Object.keys(req.body).length) ? SAMPLE_PUSH() : req.body;
+  const out = dispatchEvent(type, payload);
+  if (out.error) return res.status(409).json(out);
+  res.json(out);
 });
 
 // Idempotency: GitHub retries the same delivery id on timeout — drop repeats within 10m.
@@ -2617,53 +1404,27 @@ function isDuplicateDelivery(key) {
   if (_recentDeliveries.size > 1000) for (const [k, v] of _recentDeliveries) if (now() - v > 600_000) _recentDeliveries.delete(k);
   return prev != null && now() - prev < 600_000;
 }
-// Recent inbound deliveries (webhook + API ingress) — a debug log of what arrived.
-const deliveryLog = [];
-function logDelivery(type, event, matched, source) {
-  deliveryLog.unshift({ at: now(), source, type, repo: eventRepo(event) || '', action: event?.action || '', pr: event?.pull_request?.number ?? event?.number ?? null, labels: labelsOf(event), matched: matched || [] });
-  if (deliveryLog.length > 60) deliveryLog.pop();
-}
-app.get('/api/webhooks/deliveries', (_q, res) => res.json({ deliveries: deliveryLog.map((d) => ({ ...d, ago: relTime(d.at) })) }));
-
-// Generic event ingress — any trigger type. POST /api/events/push, /pull_request, etc.
-app.post('/api/events/:type', (req, res) => {
-  const type = req.params.type;
-  const payload = type === 'push' && (!req.body || !Object.keys(req.body).length) ? SAMPLE_PUSH() : req.body;
-  const out = dispatchEvent(type, payload);
-  logDelivery(type, payload, out.matched, 'api');
-  if (out.error) return res.status(409).json(out);
-  res.json(out);
-});
-
 // Real GitHub webhook receiver — dispatches by the X-GitHub-Event header.
 app.post('/api/webhooks/github', (req, res) => {
   if (!githubSignatureValid(req)) return res.status(401).json({ error: 'invalid webhook signature' });
   const type = req.get('x-github-event') || 'push';
-  if (type === 'ping') { logDelivery('ping', {}, [], 'webhook'); return res.json({ ok: true, pong: true }); }
+  if (type === 'ping') return res.json({ ok: true, pong: true });
   const deliveryId = req.get('x-github-delivery') || '';
   if (isDuplicateDelivery(deliveryId)) {
-    logDelivery(type, req.body || {}, [], 'webhook·dup');
     logActivity(`webhook ${type} ${deliveryId.slice(0, 8)} dropped · duplicate delivery`, 'idle');
     return res.json({ ok: true, duplicate: true });
   }
   const out = dispatchEvent(type, req.body || {});
-  logDelivery(type, req.body || {}, out.matched, 'webhook');
   if (out.error) return res.status(409).json(out);
   res.json({ ok: true, ...out });
 });
 
-// ── GitHub webhook setup: secret, public URL (cloudflared tunnel), per-repo hooks ──
-// The GitHub events we subscribe to, mapped to our trigger types.
-const HOOK_EVENTS = ['pull_request', 'pull_request_review', 'issue_comment', 'issues', 'push', 'check_run', 'check_suite', 'status', 'deployment_status', 'workflow_run', 'release'];
+// Webhook setup: the receiver URL (behind whatever public URL the user provides) + secret.
 const receiverUrl = () => { const base = meta('webhook_public_url', ''); return base ? base.replace(/\/$/, '') + '/api/webhooks/github' : ''; };
-let tunnelProc = null; let tunnelUrl = '';
-
 app.get('/api/webhooks/config', (_q, res) => res.json({
   publicUrl: meta('webhook_public_url', ''),
   receiverUrl: receiverUrl(),
   secretSet: !!(process.env.GITHUB_WEBHOOK_SECRET || meta('webhook_secret', '')),
-  events: HOOK_EVENTS,
-  tunnel: { available: true, running: !!tunnelProc, url: tunnelUrl }, // cloudflared presence checked on start
 }));
 app.post('/api/webhooks/config', (req, res) => {
   const url = String(req.body?.publicUrl || '').trim().replace(/\/$/, '');
@@ -2676,67 +1437,6 @@ app.post('/api/webhooks/secret', (_q, res) => {
   setMeta('webhook_secret', secret);
   process.env.GITHUB_WEBHOOK_SECRET = secret;
   res.json({ ok: true, secretSet: true }); // never returns the secret
-});
-
-// Quick public URL via cloudflared (no account needed) → auto-fills publicUrl.
-app.post('/api/webhooks/tunnel/start', (req, res) => {
-  if (tunnelProc) return res.json({ ok: true, url: tunnelUrl, already: true });
-  let child;
-  try { child = spawn('cloudflared', ['tunnel', '--url', `http://localhost:${PORT}`], { env: process.env }); }
-  catch (e) { return res.status(500).json({ error: `couldn't start cloudflared: ${e.message}` }); }
-  tunnelProc = child; tunnelUrl = '';
-  let done = false;
-  const finish = (payload, code) => { if (done) return; done = true; clearTimeout(timer); res.status(code || 200).json(payload); };
-  const scan = (d) => {
-    const m = String(d).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
-    if (m && !tunnelUrl) { tunnelUrl = m[0]; setMeta('webhook_public_url', tunnelUrl); finish({ ok: true, url: tunnelUrl, receiverUrl: receiverUrl() }); }
-  };
-  child.stdout.on('data', scan); child.stderr.on('data', scan);
-  child.on('error', (e) => { tunnelProc = null; finish({ error: `cloudflared failed: ${e.message}` }, 500); });
-  child.on('exit', () => { if (tunnelProc === child) { tunnelProc = null; tunnelUrl = ''; } if (!done) finish({ error: 'cloudflared exited before a URL appeared' }, 500); });
-  const timer = setTimeout(() => finish({ error: 'cloudflared did not produce a URL in time' }, 504), 20_000);
-});
-app.post('/api/webhooks/tunnel/stop', (_q, res) => {
-  if (tunnelProc) { try { tunnelProc.kill(); } catch { /* ignore */ } tunnelProc = null; tunnelUrl = ''; }
-  res.json({ ok: true });
-});
-
-// Per-repo hooks via gh (needs the repo scope, which admins repo webhooks).
-app.get('/api/webhooks/hooks', async (req, res) => {
-  const repo = String(req.query.repo || '').trim();
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return res.status(400).json({ error: 'repo must be owner/name' });
-  const r = await gh(['api', `repos/${repo}/hooks`]);
-  if (r.code !== 0) return res.status(502).json({ error: r.err || 'gh failed' });
-  let hooks; try { hooks = JSON.parse(r.out); } catch { hooks = []; }
-  const mine = receiverUrl();
-  res.json({ hooks: hooks.map((h) => ({ id: h.id, url: h.config?.url, active: h.active, events: h.events, ours: h.config?.url === mine })) });
-});
-app.post('/api/webhooks/setup', async (req, res) => {
-  const repo = String(req.body?.repo || '').trim();
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return res.status(400).json({ error: 'repo must be owner/name' });
-  const url = receiverUrl();
-  if (!url) return res.status(400).json({ error: 'set a public URL (or start the tunnel) first' });
-  let secret = process.env.GITHUB_WEBHOOK_SECRET || meta('webhook_secret', '');
-  if (!secret) { secret = crypto.randomBytes(24).toString('hex'); setMeta('webhook_secret', secret); process.env.GITHUB_WEBHOOK_SECRET = secret; }
-  const args = ['api', `repos/${repo}/hooks`, '--method', 'POST', '-f', 'name=web', '-F', 'active=true',
-    '-f', `config[url]=${url}`, '-f', 'config[content_type]=json', '-f', `config[secret]=${secret}`,
-    ...HOOK_EVENTS.flatMap((e) => ['-f', `events[]=${e}`])];
-  const r = await gh(args);
-  if (r.code !== 0) {
-    const dup = /already exists|Hook already/i.test(r.err || '');
-    return res.status(dup ? 409 : 502).json({ error: dup ? 'a webhook for this URL already exists on the repo' : (r.err || 'gh failed').slice(0, 300) });
-  }
-  let hook; try { hook = JSON.parse(r.out); } catch { hook = {}; }
-  logActivity(`webhook installed on ${repo} → ${url}`, 'success');
-  res.json({ ok: true, id: hook.id, url, events: HOOK_EVENTS });
-});
-app.delete('/api/webhooks/hooks', async (req, res) => {
-  const repo = String(req.body?.repo || req.query.repo || '').trim();
-  const id = String(req.body?.id || req.query.id || '').trim();
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^\d+$/.test(id)) return res.status(400).json({ error: 'repo (owner/name) + numeric id required' });
-  const r = await gh(['api', `repos/${repo}/hooks/${id}`, '--method', 'DELETE']);
-  if (r.code !== 0) return res.status(502).json({ error: r.err || 'gh failed' });
-  res.json({ ok: true });
 });
 
 function SAMPLE_PUSH() {
@@ -2752,8 +1452,16 @@ function SAMPLE_PUSH() {
 
 app.post('/api/kill-switch', (req, res) => {
   const engaged = !!req.body?.engaged;
-  run("UPDATE meta SET value=? WHERE key='kill_switch'", engaged ? 'true' : 'false');
+  setMeta('kill_switch', engaged ? 'true' : 'false');
   res.json({ killSwitch: engaged });
 });
+
+// First boot: an empty store ships with the runnable example fleet — the same
+// definitions "Load examples" installs, through the same insertRoutine path.
+if (!one('SELECT 1 FROM routines LIMIT 1')) {
+  const fill = (s) => String(s || '').split('__REPO__').join(DEFAULT_REPO);
+  for (const rt of SAMPLE_ROUTINES) insertRoutine({ ...rt, repo: fill(rt.repo), prompt: fill(rt.prompt) });
+  logActivity(`seeded ${SAMPLE_ROUTINES.length} example routines`, 'success');
+}
 
 app.listen(PORT, () => console.log(`Switchboard API on http://localhost:${PORT} · gh:${process.env.PATH ? 'path-ok' : '?'} · slack:${process.env.SLACK_BOT_TOKEN ? 'token' : 'none'}`));

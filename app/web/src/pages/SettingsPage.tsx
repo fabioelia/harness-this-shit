@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Dot, Toggle } from '@/components/sb';
 import { cn } from '@/lib/utils';
-import { useSettings, useSaveSettings, useWebhookConfig, useRepoHooks, useWebhookActions, useWebhookDeliveries, useMatchPreview } from '@/lib/api';
+import { useSettings, useSaveSettings, useWebhookConfig, useWebhookActions } from '@/lib/api';
 
 export function SettingsPage() {
   const { data } = useSettings();
@@ -88,96 +88,26 @@ const btn = 'h-9 rounded-md border border-line bg-surface-2 px-3.5 font-display 
 
 function WebhooksPanel() {
   const { data: cfg } = useWebhookConfig();
-  const { data: deliv } = useWebhookDeliveries();
-  const matchPrev = useMatchPreview();
-  const [mpType, setMpType] = useState('pull_request');
-  const [mpAction, setMpAction] = useState('opened');
-  const [mpRepo, setMpRepo] = useState('');
   const a = useWebhookActions();
-  const [repo, setRepo] = useState('fabioelia/harness-this-shit');
   const [urlDraft, setUrlDraft] = useState('');
-  const { data: hooksData } = useRepoHooks(repo);
-  const hooks = hooksData?.hooks ?? [];
   const receiver = cfg?.receiverUrl;
   return (
     <div className="overflow-hidden rounded-xl border border-line bg-surface">
-      {/* public URL / tunnel */}
+      {/* public URL */}
       <div className="border-b border-line-soft px-5 py-4">
-        <div className="mb-1 flex items-center gap-2"><Dot color={cfg?.publicUrl ? '#5fbf86' : '#e6b052'} size={8} pulse={!!cfg?.tunnel?.running} /><span className="font-display text-[13px] font-semibold">Public URL</span>{cfg?.tunnel?.running && <span className="rounded bg-ok/15 px-1.5 py-px font-mono text-[10px] text-ok">tunnel up</span>}</div>
-        <div className="mb-2 text-[12px] text-muted-2">GitHub needs a public URL to reach this local harness. Start a quick <span className="font-mono">cloudflared</span> tunnel, or paste your own (ngrok, a domain…).</div>
+        <div className="mb-1 flex items-center gap-2"><Dot color={cfg?.publicUrl ? '#5fbf86' : '#e6b052'} size={8} /><span className="font-display text-[13px] font-semibold">Public URL</span></div>
+        <div className="mb-2 text-[12px] text-muted-2">GitHub needs a public URL to reach this local harness. Paste your own (ngrok, a domain…).</div>
         {receiver ? <div className="mb-2 font-mono text-[11.5px] text-t2">receiver: <span className="text-[var(--code-accent)]">{receiver}</span></div> : <div className="mb-2 font-mono text-[11.5px] text-dim">no public URL yet</div>}
         <div className="flex flex-wrap items-center gap-2">
-          {cfg?.tunnel?.running
-            ? <button onClick={() => a.stopTunnel.mutate()} className={cn(btn, 'border-bad/40 text-bad')}>Stop tunnel</button>
-            : <button onClick={() => a.startTunnel.mutate()} disabled={a.startTunnel.isPending} className={cn(btn, 'border-brand/50 text-brand-soft')}>{a.startTunnel.isPending ? 'Starting…' : 'Start cloudflared tunnel'}</button>}
-          <input value={urlDraft} onChange={(e) => setUrlDraft(e.target.value)} placeholder="or paste https://your-tunnel.example" className={cn(fld, 'min-w-[260px] flex-1')} />
+          <input value={urlDraft} onChange={(e) => setUrlDraft(e.target.value)} placeholder="paste https://your-tunnel.example" className={cn(fld, 'min-w-[260px] flex-1')} />
           <button onClick={() => a.setUrl.mutate(urlDraft.trim())} disabled={!urlDraft.trim()} className={btn}>Set URL</button>
         </div>
-        {a.startTunnel.data?.error && <div className="mt-1.5 text-[12px] text-bad">{a.startTunnel.data.error}</div>}
       </div>
       {/* secret */}
-      <div className="flex items-center gap-3 border-b border-line-soft px-5 py-3.5">
+      <div className="flex items-center gap-3 px-5 py-3.5">
         <Dot color={cfg?.secretSet ? '#5fbf86' : '#e6b052'} size={8} />
         <div className="flex-1"><div className="font-display text-[13px] font-semibold">Signing secret</div><div className="text-[12px] text-muted-2">HMAC-verifies every delivery (X-Hub-Signature-256). {cfg?.secretSet ? 'Set — kept server-side, never shown.' : 'Not set — generate one before installing.'}</div></div>
         <button onClick={() => a.genSecret.mutate()} className={btn}>{cfg?.secretSet ? 'Rotate' : 'Generate'}</button>
-      </div>
-      {/* per-repo install */}
-      <div className="px-5 py-4">
-        <div className="mb-2 font-display text-[13px] font-semibold">Install on a repo</div>
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/name" className={cn(fld, 'min-w-[240px] flex-1')} />
-          <button onClick={() => a.setup.mutate(repo)} disabled={!receiver || a.setup.isPending} className={cn(btn, 'border-brand/50 bg-brand/10 text-brand-soft')}>{a.setup.isPending ? 'Installing…' : 'Install webhook'}</button>
-        </div>
-        {!receiver && <div className="mb-2 text-[11.5px] text-warn">Set a public URL above first.</div>}
-        {a.setup.data?.error && <div className="mb-2 text-[12px] text-bad">{a.setup.data.error}</div>}
-        {hooks.length > 0 && (
-          <div className="flex flex-col gap-1.5">
-            {hooks.map((h) => (
-              <div key={h.id} className="flex items-center gap-2 rounded-md border border-line-soft bg-surface-2 px-3 py-2 font-mono text-[11.5px]">
-                <Dot color={h.active ? '#5fbf86' : '#5d594f'} size={7} />
-                <span className={cn('truncate', h.ours ? 'text-t2' : 'text-dim')}>{h.url}</span>
-                {h.ours && <span className="shrink-0 rounded bg-brand/15 px-1.5 py-px text-[10px] text-brand-soft">this harness</span>}
-                <span className="ml-auto shrink-0 text-dim">{h.events.length} events</span>
-                <button onClick={() => a.remove.mutate({ repo, id: h.id })} className="shrink-0 text-dim hover:text-bad">remove</button>
-              </div>
-            ))}
-          </div>
-        )}
-        <div className="mt-2.5 text-[11px] text-dim-2">Installs a hook (pull_request, issue_comment, push, check_run, release…) pointing at this harness. The quick cloudflared URL is ephemeral — for always-on, use a named tunnel or a domain.</div>
-      </div>
-      {/* match preview */}
-      <div className="border-t border-line-soft px-5 py-4">
-        <div className="mb-2 font-display text-[13px] font-semibold">Match preview <span className="font-mono text-[11px] font-normal text-dim-2">— which routines would an event fire?</span></div>
-        <div className="flex flex-wrap items-center gap-2">
-          <input value={mpType} onChange={(e) => setMpType(e.target.value)} placeholder="event type (e.g. pull_request)" className="h-8 w-48 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
-          <input value={mpAction} onChange={(e) => setMpAction(e.target.value)} placeholder="action (optional)" className="h-8 w-36 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
-          <input value={mpRepo} onChange={(e) => setMpRepo(e.target.value)} placeholder="repo (optional)" className="h-8 w-44 rounded-md border border-line bg-surface-2 px-2.5 font-mono text-[12px] text-fg focus:border-brand/60 focus:outline-none" />
-          <button onClick={() => matchPrev.mutate({ type: mpType.trim() || 'manual', event: { action: mpAction.trim() || undefined, repository: mpRepo.trim() || undefined, pull_request: { number: 1, base: { ref: 'main' }, head: { ref: 'feature' } } } })} className="h-8 rounded-md border border-brand/50 bg-brand/10 px-3 font-display text-[12px] font-semibold text-brand-soft hover:bg-brand/20">Preview</button>
-        </div>
-        {matchPrev.data && (
-          <div className="mt-2 font-mono text-[12px]">
-            {matchPrev.data.matched.length === 0 ? <span className="text-dim">no routines would fire on this event.</span> : matchPrev.data.matched.map((r) => <span key={r.slug} className="mr-2 inline-block rounded border border-ok/30 bg-ok/10 px-1.5 py-0.5 text-ok">{r.name}</span>)}
-          </div>
-        )}
-      </div>
-      {/* recent deliveries */}
-      <div className="border-t border-line-soft px-5 py-4">
-        <div className="mb-2 font-display text-[13px] font-semibold">Recent deliveries</div>
-        {!deliv || deliv.deliveries.length === 0 ? (
-          <div className="font-mono text-[11.5px] text-dim">No inbound events yet — they appear here the moment a webhook or API event arrives.</div>
-        ) : (
-          <div className="flex flex-col gap-1">
-            {deliv.deliveries.slice(0, 12).map((x, i) => (
-              <div key={i} className="flex items-center gap-2 font-mono text-[11px]">
-                <span className={`w-[52px] shrink-0 ${x.source === 'webhook' ? 'text-lease' : 'text-dim'}`}>{x.source}</span>
-                <span className="w-[120px] shrink-0 truncate text-t2">{x.type}{x.action ? `:${x.action}` : ''}</span>
-                <span className="flex-1 truncate text-dim-2">{x.repo}{x.pr ? ` #${x.pr}` : ''}{x.labels.length ? ` [${x.labels.join(',')}]` : ''}</span>
-                <span className="shrink-0">{x.matched.length ? <span className="text-ok">→ {x.matched.join(', ')}</span> : <span className="text-dim">no match</span>}</span>
-                <span className="w-[56px] shrink-0 text-right text-dim">{x.ago}</span>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );

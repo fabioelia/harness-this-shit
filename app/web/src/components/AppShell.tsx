@@ -3,8 +3,7 @@ import { NavLink, Outlet } from 'react-router-dom';
 import { TooltipProvider, Tip } from '@/components/ui/tooltip';
 import { CommandPalette } from '@/components/CommandPalette';
 import { ShortcutsHelp } from '@/components/ShortcutsHelp';
-import { useOperator, setOperator } from '@/lib/operator';
-import { useKillSwitch, useStats, useInbox } from '@/lib/api';
+import { useKillSwitch, useStats } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 const ICONS = {
@@ -24,19 +23,9 @@ const ICONS = {
       <circle cx="5" cy="5" r="2.4" /><circle cx="13" cy="13" r="2.4" /><line x1="6.8" y1="6.8" x2="11.2" y2="11.2" strokeLinecap="round" />
     </svg>
   ),
-  team: (
-    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6">
-      <circle cx="6.5" cy="6" r="2.3" /><circle cx="12.5" cy="7.5" r="1.8" /><path d="M2.5 14c0-2.2 1.8-3.6 4-3.6s4 1.4 4 3.6" strokeLinecap="round" /><path d="M11 10.6c1.9 0 3.5 1.1 3.5 3" strokeLinecap="round" />
-    </svg>
-  ),
   audit: (
     <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
       <circle cx="4" cy="5" r="1" /><line x1="7" y1="5" x2="15" y2="5" /><circle cx="4" cy="9" r="1" /><line x1="7" y1="9" x2="15" y2="9" /><circle cx="4" cy="13" r="1" /><line x1="7" y1="13" x2="15" y2="13" />
-    </svg>
-  ),
-  insights: (
-    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="3" y1="15" x2="15" y2="15" /><rect x="4" y="9" width="2.6" height="5" rx="0.5" /><rect x="8" y="5.5" width="2.6" height="8.5" rx="0.5" /><rect x="12" y="7.5" width="2.6" height="6.5" rx="0.5" />
     </svg>
   ),
   config: (
@@ -54,8 +43,6 @@ const ICONS = {
 const NAV = [
   { to: '/', label: 'Fleet', icon: ICONS.fleet, end: true },
   { to: '/runs', label: 'Runs', icon: ICONS.runs },
-  { to: '/insights', label: 'Insights', icon: ICONS.insights },
-  { to: '/team', label: 'Team', icon: ICONS.team },
   { to: '/connectors', label: 'Connectors', icon: ICONS.mcps },
   { to: '/activity', label: 'Activity', icon: ICONS.audit },
   { to: '/settings', label: 'Settings', icon: ICONS.config },
@@ -65,8 +52,6 @@ export function AppShell() {
   const { data: stats } = useStats();
   const kill = useKillSwitch();
   const halted = !!stats?.killSwitch;
-  const [operator] = useOperator();
-  const { data: inbox } = useInbox(operator);
   const [light, setLight] = useState(() => typeof document !== 'undefined' && document.documentElement.classList.contains('light'));
   const toggleTheme = () => {
     const next = !light;
@@ -95,9 +80,6 @@ export function AppShell() {
             >
               <span className="relative">
                 {n.icon}
-                {n.to === '/activity' && (inbox?.count ?? 0) > 0 && (
-                  <span className="absolute -right-2.5 -top-1.5 grid h-[15px] min-w-[15px] place-items-center rounded-full bg-brand px-1 font-mono text-[9px] font-bold text-[#16130f]" title={`${inbox?.count} for you`}>{inbox?.count}</span>
-                )}
                 {n.to === '/' && (stats?.failing ?? 0) > 0 && (
                   <span className="absolute -right-2.5 -top-1.5 grid h-[15px] min-w-[15px] place-items-center rounded-full bg-bad px-1 font-mono text-[9px] font-bold text-white" title={`${stats?.failing} routine(s) failing`}>{stats?.failing}</span>
                 )}
@@ -105,12 +87,6 @@ export function AppShell() {
               <span className="font-display text-[8.5px] font-semibold tracking-[0.04em]">{n.label}</span>
             </NavLink>
           ))}
-          <Tip label={operator ? `You: ${operator} — click to change` : 'Set your name'} side="right">
-            <button onClick={() => { const n = prompt('Your name (used as the default author/reviewer/assignee):', operator); if (n != null) setOperator(n); }} className="mt-auto flex w-12 flex-col items-center gap-[5px] rounded-[11px] py-[9px] text-dim transition-colors hover:text-t2">
-              <span className="grid h-[18px] w-[18px] place-items-center rounded-full bg-brand/15 font-mono text-[9px] font-bold text-brand-soft">{operator ? operator.slice(0, 2).toUpperCase() : '?'}</span>
-              <span className="max-w-[44px] truncate font-display text-[8.5px] font-semibold tracking-[0.04em]">{operator || 'You'}</span>
-            </button>
-          </Tip>
           <Tip label={light ? 'Switch to dark' : 'Switch to light'} side="right">
             <button onClick={toggleTheme} className="mt-auto flex w-12 flex-col items-center gap-[5px] rounded-[11px] py-[9px] text-dim transition-colors hover:text-t2">
               {light ? (

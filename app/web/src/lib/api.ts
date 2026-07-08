@@ -1,136 +1,38 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ActivityEntry, Agent, AgentDetail, Connector, RegistryServer, Routine, RoutineDetail, RunDetail, RunLite, Stats } from '@/types';
+import type { ActivityEntry, Connector, RegistryServer, Routine, RoutineDetail, RunDetail, RunLite, Stats } from '@/types';
 
-async function get<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${res.status} ${url}`);
-  return res.json();
-}
-async function post<T>(url: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
+    method,
+    ...(body !== undefined ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}),
   });
   if (!res.ok) {
     let msg = `${res.status} ${url}`;
-    try {
-      const e = await res.json();
-      if (e?.error) msg = e.error;
-    } catch {
-      /* non-JSON error */
-    }
+    try { const e = await res.json(); if (e?.error) msg = e.error; } catch { /* non-JSON error */ }
     throw new Error(msg);
   }
   return res.json();
 }
-async function put<T>(url: string, body?: unknown): Promise<T> {
-  const res = await fetch(url, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) });
-  if (!res.ok) { let m = `${res.status}`; try { const e = await res.json(); if (e?.error) m = e.error; } catch { /**/ } throw new Error(m); }
-  return res.json();
-}
-async function del<T = unknown>(url: string): Promise<T> {
-  const res = await fetch(url, { method: 'DELETE' });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
-}
+const get = <T,>(url: string) => request<T>('GET', url);
+const post = <T,>(url: string, body?: unknown) => request<T>('POST', url, body ?? {});
+const put = <T,>(url: string, body?: unknown) => request<T>('PUT', url, body ?? {});
+const del = <T = unknown,>(url: string) => request<T>('DELETE', url);
 
 export const useStats = () => useQuery({ queryKey: ['stats'], queryFn: () => get<Stats>('/api/stats'), refetchInterval: 8000 });
-export interface Contributors { contributors: { who: string; approvals: number; comments: number; signoffs: number; total: number }[] }
-export const useContributors = () => useQuery({ queryKey: ['contributors'], queryFn: () => get<Contributors>('/api/contributors'), refetchInterval: 30000 });
-export interface Owners { owners: { owner: string; routines: number; enabled: number; failing: number; runs: number; cost: number; assignedOpen: number }[] }
-export const useOwners = () => useQuery({ queryKey: ['owners'], queryFn: () => get<Owners>('/api/owners'), refetchInterval: 20000 });
-export interface Teams { teams: { team: string; routines: number; enabled: number; owners: string[]; runs: number; cost: number; failRate: number; budget: number; spentToday: number }[] }
-export const useTeams = () => useQuery({ queryKey: ['teams-rollup'], queryFn: () => get<Teams>('/api/teams'), refetchInterval: 20000 });
-export function useSetTeamBudget() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (b: { team: string; cap: number }) => post('/api/team-budgets', b), onSuccess: () => qc.invalidateQueries({ queryKey: ['teams-rollup'] }) });
-}
-export interface Attention { total: number; items: { kind: string; n: number; text: string; link: string }[] }
-export const useAttention = () => useQuery({ queryKey: ['attention'], queryFn: () => get<Attention>('/api/attention'), refetchInterval: 12000 });
-
-export interface Insights {
-  days: number;
-  daily: { date: string; runs: number; cost: number; fails: number }[];
-  perRoutine: { slug: string; name: string; runs: number; cost: number; turns: number; avgMs: number; fails: number; failRate: number; costPerSuccess: number }[];
-  byModel: { model: string; runs: number; cost: number; avgMs: number; tokens: number; costPer1k: number }[];
-  byTag: { tag: string; runs: number; cost: number }[];
-  byEffort: { effort: string; runs: number; cost: number }[];
-  dispatch: Record<string, number>;
-  totals: { runs: number; cost: number; turns: number; avgMs: number; fails: number; failRate: number; inTok: number; outTok: number };
-  projection: { perDay: number; monthly: number; runsPerDay: number };
-  budget: { cap: number; today: number; over: boolean };
-  digest: { channel: string; hour: number };
-  retentionDays: number;
-}
-export function usePruneRuns() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (days: number) => post<{ pruned: number; days: number }>('/api/runs/prune', { days }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['runs'] }); qc.invalidateQueries({ queryKey: ['insights'] }); } });
-}
-export function useSetRetention() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (days: number) => post('/api/runs/retention', { days }), onSuccess: () => qc.invalidateQueries({ queryKey: ['insights'] }) });
-}
-export function useSetDigest() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (b: { channel?: string; hour?: number }) => post('/api/digest', b), onSuccess: () => qc.invalidateQueries({ queryKey: ['insights'] }) });
-}
-export function useSendDigest() {
-  return useMutation({ mutationFn: () => post<{ sent: boolean; preview: string }>('/api/digest/send', {}) });
-}
-export function useSetBudget() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (cap: number) => post<{ ok: boolean; cap: number; today: number }>('/api/budget', { cap }), onSuccess: () => qc.invalidateQueries({ queryKey: ['insights'] }) });
-}
-export const useInsights = (days = 14) => useQuery({ queryKey: ['insights', days], queryFn: () => get<Insights>(`/api/insights?days=${days}`), refetchInterval: 15000 });
-
-export interface Graph { edges: { from: string; to: string; kind: string; label: string; fromName: string; toName: string; toExists: boolean }[] }
-export const useGraph = () => useQuery({ queryKey: ['graph'], queryFn: () => get<Graph>('/api/graph'), refetchInterval: 30000 });
-export interface Heatmap { grid: number[][]; max: number; days: number }
-export const useHeatmap = (days = 30) => useQuery({ queryKey: ['heatmap', days], queryFn: () => get<Heatmap>(`/api/heatmap?days=${days}`), refetchInterval: 60000 });
-export interface Failures { total: number; clusters: { signature: string; count: number; routines: string[]; sampleRun: string; ago: string }[] }
-export const useFailures = (days = 7) => useQuery({ queryKey: ['failures', days], queryFn: () => get<Failures>(`/api/failures?days=${days}`), refetchInterval: 20000 });
-export interface Recs { recommendations: { slug: string; name: string; kind: string; text: string }[] }
-export const useRecommendations = () => useQuery({ queryKey: ['recs'], queryFn: () => get<Recs>('/api/recommendations'), refetchInterval: 30000 });
-export interface Anomalies { anomalies: { id: string; slug: string; cost: number; avg: number; x: number; turns: number; ago: string }[] }
-export const useAnomalies = (days = 14) => useQuery({ queryKey: ['anomalies', days], queryFn: () => get<Anomalies>(`/api/anomalies?days=${days}`), refetchInterval: 20000 });
-export interface Lint { count: number; issues: { slug: string; name: string; warnings: string[] }[] }
-export const useLint = () => useQuery({ queryKey: ['lint'], queryFn: () => get<Lint>('/api/lint'), refetchInterval: 20000 });
-export interface ActiveRuns { active: { id: string; slug: string; trigger: string; status: string; elapsed: string; longRunning: boolean }[] }
-export const useActiveRuns = () => useQuery({ queryKey: ['active-runs'], queryFn: () => get<ActiveRuns>('/api/runs/active'), refetchInterval: 3000 });
-export interface Leases { leases: { key: string; runId: string; slug: string; sha: string; held: string; ttl: string }[]; pending: { slug: string; key: string; summary: string; ago: string }[] }
-export const useLeases = () => useQuery({ queryKey: ['leases'], queryFn: () => get<Leases>('/api/leases'), refetchInterval: 4000 });
-export function useReleaseLease() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (key: string) => del(`/api/leases?key=${encodeURIComponent(key)}`), onSuccess: () => qc.invalidateQueries({ queryKey: ['leases'] }) });
-}
-export interface Schedule { hours: number; count: number; upcoming: { slug: string; name: string; cron: string; at: number; when: string; in: string }[]; missed: { slug: string; name: string; cron: string; expected: number; ago: string }[] }
-export const useSchedule = (hours = 48) => useQuery({ queryKey: ['schedule', hours], queryFn: () => get<Schedule>(`/api/schedule?hours=${hours}`), refetchInterval: 30000 });
 
 // GitHub webhooks
-export interface WebhookConfig { publicUrl: string; receiverUrl: string; secretSet: boolean; events: string[]; tunnel: { available: boolean; running: boolean; url: string } }
-export interface RepoHook { id: number; url: string; active: boolean; events: string[]; ours: boolean }
-export const useWebhookConfig = () => useQuery({ queryKey: ['wh-config'], queryFn: () => get<WebhookConfig>('/api/webhooks/config'), refetchInterval: 6000 });
-export interface Delivery { at: number; ago: string; source: string; type: string; repo: string; action: string; pr: number | null; labels: string[]; matched: string[] }
-export const useWebhookDeliveries = () => useQuery({ queryKey: ['wh-deliveries'], queryFn: () => get<{ deliveries: Delivery[] }>('/api/webhooks/deliveries'), refetchInterval: 5000 });
-export function useMatchPreview() {
-  return useMutation({ mutationFn: (b: { type: string; event?: Record<string, unknown> }) => post<{ type: string; matched: { slug: string; name: string; team: string }[] }>('/api/match-preview', b) });
-}
-export const useRepoHooks = (repo: string) => useQuery({ queryKey: ['wh-hooks', repo], enabled: /^[\w.-]+\/[\w.-]+$/.test(repo), queryFn: () => get<{ hooks: RepoHook[] }>(`/api/webhooks/hooks?repo=${encodeURIComponent(repo)}`) });
+export interface WebhookConfig { publicUrl: string; receiverUrl: string; secretSet: boolean }
+export const useWebhookConfig = () => useQuery({ queryKey: ['wh-config'], queryFn: () => get<WebhookConfig>('/api/webhooks/config') });
 export function useWebhookActions() {
   const qc = useQueryClient();
-  const inval = () => { qc.invalidateQueries({ queryKey: ['wh-config'] }); qc.invalidateQueries({ queryKey: ['wh-hooks'] }); };
+  const inval = () => qc.invalidateQueries({ queryKey: ['wh-config'] });
   return {
     genSecret: useMutation({ mutationFn: () => post('/api/webhooks/secret', {}), onSuccess: inval }),
     setUrl: useMutation({ mutationFn: (publicUrl: string) => post('/api/webhooks/config', { publicUrl }), onSuccess: inval }),
-    startTunnel: useMutation({ mutationFn: () => post<{ url?: string; error?: string }>('/api/webhooks/tunnel/start', {}), onSuccess: inval }),
-    stopTunnel: useMutation({ mutationFn: () => post('/api/webhooks/tunnel/stop', {}), onSuccess: inval }),
-    setup: useMutation({ mutationFn: (repo: string) => post<{ id?: number; error?: string }>('/api/webhooks/setup', { repo }), onSuccess: inval }),
-    remove: useMutation({ mutationFn: (v: { repo: string; id: number }) => del(`/api/webhooks/hooks?repo=${encodeURIComponent(v.repo)}&id=${v.id}`), onSuccess: inval }),
   };
 }
 export const useModels = () => useQuery({ queryKey: ['models'], queryFn: () => get<{ models: { id: string; label: string }[]; efforts: string[]; defaultModel: string }>('/api/models'), staleTime: Infinity });
-export interface RoutineTemplate { id: string; name: string; desc: string; icon: string; body: { triggers?: string[]; connectors?: string[]; schedule?: string; model?: string; scriptMode?: boolean; scriptLang?: string; prompt?: string } }
+export interface RoutineTemplate { id: string; name: string; desc: string; icon: string; body: { triggers?: string[]; connectors?: string[]; schedule?: string; model?: string; prompt?: string } }
 export const useTemplates = () => useQuery({ queryKey: ['templates'], queryFn: () => get<{ templates: RoutineTemplate[] }>('/api/templates'), staleTime: Infinity });
 export const useGithubOrgs = () => useQuery({ queryKey: ['gh-orgs'], queryFn: () => get<{ orgs: string[] }>('/api/github/orgs'), staleTime: 300_000 });
 export const useGithubChecks = (repo: string) =>
@@ -144,90 +46,26 @@ export const useGithubRepos = (owner = '', q = '') =>
     staleTime: 60_000,
     placeholderData: (prev) => prev,
   });
-export function usePinRoutine() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (slug: string) => post<{ ok: boolean; pinned: boolean }>(`/api/routines/${slug}/pin`), onSuccess: () => qc.invalidateQueries({ queryKey: ['routines'] }) });
-}
-export interface FleetView { name: string; params: Record<string, string | boolean> }
-export const useFleetViews = () => useQuery({ queryKey: ['views'], queryFn: () => get<{ views: FleetView[] }>('/api/views') });
-export function useSaveView() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (v: FleetView) => post('/api/views', v), onSuccess: () => qc.invalidateQueries({ queryKey: ['views'] }) });
-}
-export function useDeleteView() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (name: string) => del(`/api/views?name=${encodeURIComponent(name)}`), onSuccess: () => qc.invalidateQueries({ queryKey: ['views'] }) });
-}
-export function useBulkRoutines() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (b: { slugs: string[]; action: string; hours?: number; tag?: string; owner?: string }) => post<{ ok: boolean; affected: number }>('/api/routines/bulk', b), onSuccess: () => { qc.invalidateQueries({ queryKey: ['routines'] }); qc.invalidateQueries({ queryKey: ['stats'] }); } });
-}
-export const useRoutines = (archived = false) => useQuery({ queryKey: ['routines', archived], queryFn: () => get<Routine[]>(`/api/routines${archived ? '?archived=1' : ''}`), refetchInterval: 10000 });
-export function useApproveRoutine() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ slug, reviewer }: { slug: string; reviewer: string }) => post(`/api/routines/${slug}/approve`, { reviewer }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['routine', v.slug] }); qc.invalidateQueries({ queryKey: ['routines'] }); } });
-}
-export function useArchiveRoutine() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ slug, archived }: { slug: string; archived: boolean }) => post<{ ok: boolean; archived: boolean }>(`/api/routines/${slug}/archive`, { archived }), onSuccess: () => qc.invalidateQueries({ queryKey: ['routines'] }) });
-}
+export const useRoutines = () => useQuery({ queryKey: ['routines'], queryFn: () => get<Routine[]>('/api/routines'), refetchInterval: 10000 });
 export const useRoutine = (slug?: string) =>
   useQuery({ queryKey: ['routine', slug], queryFn: () => get<RoutineDetail>(`/api/routines/${slug}`), enabled: !!slug, retry: false });
 export const useRuns = () => useQuery({ queryKey: ['runs'], queryFn: () => get<RunLite[]>('/api/runs'), refetchInterval: 8000 });
-export interface Triage { items: { id: string; slug: string; assignee: string; triage: string; ago: string; summary: string }[] }
-export const useTriage = () => useQuery({ queryKey: ['triage'], queryFn: () => get<Triage>('/api/triage'), refetchInterval: 15000 });
-export interface Bookmarks { bookmarks: { id: string; slug: string; label: string; by: string; ago: string }[] }
-export const useBookmarks = () => useQuery({ queryKey: ['bookmarks'], queryFn: () => get<Bookmarks>('/api/bookmarks'), refetchInterval: 20000 });
-export function useReactRun() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ id, emoji, by }: { id: string; emoji: string; by: string }) => post(`/api/runs/${id}/react`, { emoji, by }), onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['run', v.id] }) });
-}
-export function useBookmarkRun() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ id, label, by, on }: { id: string; label?: string; by?: string; on: boolean }) => on ? post(`/api/runs/${id}/bookmark`, { label, by }) : del(`/api/runs/${id}/bookmark`), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['run', v.id] }); qc.invalidateQueries({ queryKey: ['bookmarks'] }); } });
-}
-export interface ReviewQueue { total: number; reviewed: number; coverage: number; pending: { id: string; slug: string; ago: string }[] }
-export const useReviewQueue = () => useQuery({ queryKey: ['review-queue'], queryFn: () => get<ReviewQueue>('/api/review-queue'), refetchInterval: 15000 });
-export function useRerunFailed() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (hours: number) => post<{ rerun: number }>('/api/runs/rerun-failed', { hours }), onSuccess: () => qc.invalidateQueries({ queryKey: ['runs'] }) });
-}
-export interface RunSearch { q: string; results: { id: string; slug: string; status: string; ago: string; snippet: string }[] }
-export const useRunSearch = (q: string, days = 0) => useQuery({ queryKey: ['runsearch', q, days], enabled: q.trim().length >= 2, queryFn: () => get<RunSearch>(`/api/runs/search?q=${encodeURIComponent(q)}${days ? `&days=${days}` : ''}`) });
-export interface RunDiff { current: { id: string; output: string; cost: number | null; turns: number | null; status: string; ago: string } | null; previous: { id: string; output: string; cost: number | null; turns: number | null; status: string; ago: string } | null }
-export const useRunDiff = (id: string, enabled: boolean) => useQuery({ queryKey: ['rundiff', id], enabled, queryFn: () => get<RunDiff>(`/api/runs/${id}/diff`) });
-export interface RunCompare { a: { id: string; slug: string; output: string; cost: number | null; turns: number | null; status: string; ago: string }; b: RunCompare['a'] }
-export const useRunCompare = (a: string, b: string) => useQuery({ queryKey: ['runcompare', a, b], enabled: !!a && b.trim().length > 3, queryFn: () => get<RunCompare>(`/api/runs/compare?a=${a}&b=${encodeURIComponent(b.trim())}`), retry: false });
-export const useRun = (id?: string, me = '') =>
+export const useRun = (id?: string) =>
   useQuery({
     queryKey: ['run', id],
-    queryFn: () => get<RunDetail>(`/api/runs/${id}?me=${encodeURIComponent(me)}`),
+    queryFn: () => get<RunDetail>(`/api/runs/${id}`),
     enabled: !!id,
     retry: false,
-    refetchInterval: (q) => (q.state.data?.status === 'running' ? 1500 : false),
+    // The SSE stream carries the live trace; this poll only refreshes header metadata.
+    refetchInterval: (q) => (q.state.data?.status === 'running' ? 5000 : false),
   });
 export const useConnectors = () => useQuery({ queryKey: ['connectors'], queryFn: () => get<Connector[]>('/api/connectors'), refetchInterval: 15000 });
-export const useAgents = () => useQuery({ queryKey: ['agents'], queryFn: () => get<Agent[]>('/api/agents'), refetchInterval: 5000 });
 export function useLoadSamples() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => post<{ repo: string; routines: string[]; agents: string[] }>('/api/samples/load', {}),
-    onSuccess: () => { ['routines', 'agents', 'stats'].forEach((k) => qc.invalidateQueries({ queryKey: [k] })); },
+    mutationFn: () => post<{ repo: string; routines: string[] }>('/api/samples/load', {}),
+    onSuccess: () => { ['routines', 'stats'].forEach((k) => qc.invalidateQueries({ queryKey: [k] })); },
   });
-}
-export const useAgent = (name?: string) =>
-  useQuery({ queryKey: ['agent', name], enabled: !!name, queryFn: () => get<AgentDetail>(`/api/agents/${name}`), refetchInterval: (q) => (q.state.data?.status === 'working' ? 2000 : 8000) });
-export function useCreateAgent() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (b: { name: string; role?: string; summary?: string; connectors?: string[]; model?: string; effort?: string; memory?: boolean }) => post<Agent>('/api/agents', b), onSuccess: () => qc.invalidateQueries({ queryKey: ['agents'] }) });
-}
-export function useMessageAgent() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ name, text }: { name: string; text: string }) => post<{ runId: string }>(`/api/agents/${name}/message`, { text }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['agent', v.name] }); qc.invalidateQueries({ queryKey: ['agents'] }); } });
-}
-export function useDeleteAgent() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (name: string) => del(`/api/agents/${name}`), onSuccess: () => qc.invalidateQueries({ queryKey: ['agents'] }) });
 }
 export function useTestConnector() {
   return useMutation({ mutationFn: ({ code, body }: { code: string; body?: unknown }) => post<{ ok: boolean; detail: string; latencyMs?: number }>(`/api/connectors/${code}/test`, body ?? {}) });
@@ -288,118 +126,21 @@ export function useDispatchRoutine() {
     },
   });
 }
-export interface MetricHistory {
-  points: { runId: string; at: number; ago: string; value: number | null; raw: string }[];
-  numeric: boolean;
-  latest: { runId: string; at: number; ago: string; value: number | null; raw: string } | null;
-}
-export const useRoutineMetric = (slug: string, enabled = true) => useQuery({ queryKey: ['metric', slug], enabled, queryFn: () => get<MetricHistory>(`/api/routines/${slug}/metric?n=30`), refetchInterval: 15000 });
-export interface RoutinePreview { prompt: string; tools: string[]; agents: string[]; wouldMatch: boolean; leaseKey: string | null; scriptMode: boolean; willCompile: boolean; allowedTools: string[]; promptChars: number; estTokens: number }
-export interface Inbox { who: string; count: number; assigned: { id: string; slug: string; triage: string; ago: string }[]; mentions: { by: string; slug: string; snippet: string; ago: string }[]; watched: { slug: string; summary: string; ago: string }[]; watchedFails: { id: string; slug: string; ago: string }[] }
-export const useInbox = (who: string) => useQuery({ queryKey: ['inbox', who], enabled: !!who, queryFn: () => get<Inbox>(`/api/inbox?who=${encodeURIComponent(who)}`), refetchInterval: 12000 });
-export interface Standup { days: number; counts: { changes: number; approvals: number; comments: number; signoffs: number; resolved: number }; recent: { slug: string; summary: string; ago: string }[] }
-export const useStandup = (days = 1) => useQuery({ queryKey: ['standup', days], queryFn: () => get<Standup>(`/api/standup?days=${days}`), refetchInterval: 20000 });
-export function usePostStandup() {
-  return useMutation({ mutationFn: () => post<{ sent: boolean; preview: string; channel: string }>('/api/standup/send', {}) });
-}
-export interface GlobalAudit { entries: { slug: string; summary: string; ago: string }[] }
-export const useGlobalAudit = () => useQuery({ queryKey: ['global-audit'], queryFn: () => get<GlobalAudit>('/api/audit'), refetchInterval: 15000 });
-export const useWatch = (slug: string, who: string) => useQuery({ queryKey: ['watch', slug, who], enabled: !!slug, queryFn: () => get<{ watching: boolean; watchers: number }>(`/api/routines/${slug}/watch?who=${encodeURIComponent(who)}`) });
-export function useRequestReview() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ slug, reviewer, by }: { slug: string; reviewer: string; by: string }) => post(`/api/routines/${slug}/request-review`, { reviewer, by }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['timeline', v.slug] }); qc.invalidateQueries({ queryKey: ['mentions'] }); } });
-}
-export function useHandover() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ slug, to, from, note }: { slug: string; to: string; from: string; note: string }) => post(`/api/routines/${slug}/handover`, { to, from, note }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['routine', v.slug] }); qc.invalidateQueries({ queryKey: ['timeline', v.slug] }); qc.invalidateQueries({ queryKey: ['comments', v.slug] }); } });
-}
-export function useToggleWatch() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ slug, who, on }: { slug: string; who: string; on: boolean }) => post(`/api/routines/${slug}/watch`, { who, on }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['watch', v.slug] }); qc.invalidateQueries({ queryKey: ['inbox'] }); } });
-}
-export interface Timeline { events: { kind: string; text: string; ago: string }[] }
-export const useTimeline = (slug: string) => useQuery({ queryKey: ['timeline', slug], enabled: !!slug, queryFn: () => get<Timeline>(`/api/routines/${slug}/timeline`), refetchInterval: 20000 });
-export interface Mentions { mentions: { mentioned: string; by: string; slug: string; snippet: string; ago: string }[] }
-export const useMentions = () => useQuery({ queryKey: ['mentions'], queryFn: () => get<Mentions>('/api/mentions'), refetchInterval: 15000 });
-export interface Comments { comments: { id: number; author: string; body: string; pinned: boolean; ago: string }[] }
-export const useComments = (slug: string, enabled = true) => useQuery({ queryKey: ['comments', slug], enabled, queryFn: () => get<Comments>(`/api/routines/${slug}/comments`) });
-export function useAddComment() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ slug, author, body }: { slug: string; author: string; body: string }) => post(`/api/routines/${slug}/comments`, { author, body }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['comments', v.slug] }); qc.invalidateQueries({ queryKey: ['routine', v.slug] }); } });
-}
-export function useEditComment() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ slug, id, body }: { slug: string; id: number; body: string }) => put(`/api/routines/${slug}/comments/${id}`, { body }), onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['comments', v.slug] }) });
-}
-export function usePinComment() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ slug, id, pinned }: { slug: string; id: number; pinned: boolean }) => post(`/api/routines/${slug}/comments/${id}/pin`, { pinned }), onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['comments', v.slug] }) });
-}
-export function useDeleteComment() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ slug, id }: { slug: string; id: number }) => del(`/api/routines/${slug}/comments/${id}`), onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['comments', v.slug] }) });
-}
-export interface Audit { entries: { summary: string; ago: string }[] }
-export const useRoutineAudit = (slug: string, enabled = true) => useQuery({ queryKey: ['audit', slug], enabled, queryFn: () => get<Audit>(`/api/routines/${slug}/audit`) });
-export function useSnooze() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ slug, hours, reason }: { slug: string; hours: number; reason?: string }) => post<{ ok: boolean; snoozedUntil: number }>(`/api/routines/${slug}/snooze`, { hours, reason }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['routine', v.slug] }); qc.invalidateQueries({ queryKey: ['routines'] }); } });
+export interface RoutinePreview { prompt: string; tools: string[]; wouldMatch: boolean; leaseKey: string | null; allowedTools: string[]; promptChars: number; estTokens: number }
+export function usePreviewRoutine() {
+  return useMutation({ mutationFn: (slug: string) => post<RoutinePreview>(`/api/routines/${slug}/preview`, {}) });
 }
 export function useFireEvent() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: ({ type, payload }: { type: string; payload: unknown }) => post<{ matched: string[]; runs: { slug: string; runId: string }[] }>(`/api/events/${type}`, payload), onSuccess: () => { qc.invalidateQueries({ queryKey: ['runs'] }); qc.invalidateQueries({ queryKey: ['routines'] }); } });
 }
-export function usePreviewRoutine() {
-  return useMutation({ mutationFn: (slug: string) => post<RoutinePreview>(`/api/routines/${slug}/preview`, {}) });
-}
-export interface PromptHistory { current: string; versions: { id: number; ago: string; chars: number; prompt: string }[] }
-export const useRoutineHistory = (slug: string, enabled = true) => useQuery({ queryKey: ['history', slug], enabled, queryFn: () => get<PromptHistory>(`/api/routines/${slug}/history`) });
-export function useRestorePrompt() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ slug, id }: { slug: string; id: number }) => post(`/api/routines/${slug}/restore/${id}`), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['routine', v.slug] }); qc.invalidateQueries({ queryKey: ['history', v.slug] }); } });
-}
-export function useCloneRoutine() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (slug: string) => post<Routine>(`/api/routines/${slug}/clone`), onSuccess: () => qc.invalidateQueries({ queryKey: ['routines'] }) });
-}
-export function useImportRoutine() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (bundle: unknown) => post<Routine>('/api/routines/import', bundle), onSuccess: () => qc.invalidateQueries({ queryKey: ['routines'] }) });
-}
 export function useReplayRun() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (id: string) => post<{ ok: boolean; runId: string }>(`/api/runs/${id}/replay`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['runs'] }); } });
 }
-export function useSetBaseline() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (id: string) => post(`/api/runs/${id}/baseline`), onSuccess: (_r, id) => qc.invalidateQueries({ queryKey: ['run', id] }) });
-}
-export function useVerdictRun() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ id, verdict, by }: { id: string; verdict: string; by: string }) => post<{ ok: boolean }>(`/api/runs/${id}/verdict`, { verdict, by }), onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['run', v.id] }) });
-}
-export function useAssignRun() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ id, assignee, triage }: { id: string; assignee: string; triage: string }) => post<{ ok: boolean }>(`/api/runs/${id}/assign`, { assignee, triage }), onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['run', v.id] }); qc.invalidateQueries({ queryKey: ['runs'] }); qc.invalidateQueries({ queryKey: ['triage'] }); } });
-}
 export function useCancelRun() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (id: string) => post<{ ok: boolean; killed: boolean }>(`/api/runs/${id}/cancel`), onSuccess: (_r, id) => { qc.invalidateQueries({ queryKey: ['run', id] }); qc.invalidateQueries({ queryKey: ['runs'] }); } });
-}
-export function useReplayModel() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ id, model }: { id: string; model: string }) => post<{ ok: boolean; runId: string }>(`/api/runs/${id}/replay-model`, { model }), onSuccess: () => qc.invalidateQueries({ queryKey: ['runs'] }) });
-}
-export function useRerunRun() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ id, event }: { id: string; event: string }) => post<{ ok: boolean; runId: string }>(`/api/runs/${id}/rerun`, { event }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['runs'] }); } });
-}
-export function useRecompile() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (slug: string) => post<{ ok: boolean; runId: string }>(`/api/routines/${slug}/recompile`),
-    onSuccess: (_r, slug) => { qc.invalidateQueries({ queryKey: ['routine', slug] }); qc.invalidateQueries({ queryKey: ['routines'] }); qc.invalidateQueries({ queryKey: ['runs'] }); },
-  });
 }
 
 export interface PushResult {
@@ -436,22 +177,10 @@ export interface CreateRoutineInput {
   chain?: string[];
   schedule?: string;
   filters?: { actions?: string[]; branches?: string[]; labels?: string[]; mode?: string; match?: string; groups?: { match: string; conditions: { field: string; op: string; values: string[] }[] }[] };
-  scriptMode?: boolean;
-  scriptLang?: string;
   retries?: number;
-  assertions?: { type: string; value: string }[];
-  alertOnFail?: boolean;
-  alertTarget?: string;
-  timeout?: number;
-  env?: Record<string, string>;
-  tags?: string[];
-  rateLimit?: number;
-  maxFails?: number;
-  notes?: string;
-  activeWindow?: { start: number | null; end: number | null; days: number[] } | null;
-  sla?: number;
   reactions?: { source: string; kind: string; when: string; run: string; check?: string }[];
   memory?: boolean;
+  concurrency?: { scope?: string; onConflict?: string };
 }
 export const useRoutineMemory = (slug: string | undefined, enabled: boolean) =>
   useQuery({ queryKey: ['memory', slug], enabled: !!slug && enabled, queryFn: () => get<{ enabled: boolean; exists: boolean; md: string; files: string[] }>(`/api/routines/${slug}/memory`) });

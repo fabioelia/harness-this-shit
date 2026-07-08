@@ -3,7 +3,6 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useCreateRoutine, useUpdateRoutine, useRoutine, useRoutines, useGithubRepos, useGithubOrgs, useGithubChecks, useGithubLabels, useModels, useMcp, useTemplates } from '@/lib/api';
 import type { RoutineTemplate } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { useOperator } from '@/lib/operator';
 
 // Dropdown of known values that also accepts free text — selected items become chips.
 function TokenPicker({ value, onChange, suggestions, placeholder }: { value: string; onChange: (v: string) => void; suggestions: string[]; placeholder: string }) {
@@ -179,7 +178,7 @@ const TRIGGER_GROUPS: { label: string; items: string[] }[] = [
   { label: 'CI / checks', items: ['check_run', 'check_suite', 'workflow_run', 'status', 'deployment_status'] },
 ];
 // Only tools the runner actually grants (runner.js allowedToolsFor). No phantom MCPs.
-const CONNECTORS = ['github', 'slack', 'web', 'team'];
+const CONNECTORS = ['github', 'slack', 'web'];
 
 // Reactions the watcher can actually evaluate (index.js pollWatch). Generalizes beyond these.
 const REACTION_PRESETS = [
@@ -388,7 +387,6 @@ export function NewRoutinePage() {
   const { slug: editSlug } = useParams();
   const isEdit = !!editSlug;
   const { data: templates } = useTemplates();
-  const [operator] = useOperator();
   const existing = useRoutine(editSlug);
   const create = useCreateRoutine();
   const update = useUpdateRoutine();
@@ -410,28 +408,7 @@ export function NewRoutinePage() {
   const [model, setModel] = useState('claude-opus-4-8');
   const [effort, setEffort] = useState('');
   const [memory, setMemory] = useState(false);
-  const [scriptMode, setScriptMode] = useState(false);
-  const [scriptLang, setScriptLang] = useState<'bash' | 'node'>('bash');
   const [retries, setRetries] = useState(0);
-  const [assertions, setAssertions] = useState<{ type: string; value: string }[]>([]);
-  const [alertOnFail, setAlertOnFail] = useState(false);
-  const [alertTarget, setAlertTarget] = useState('');
-  const [escalation, setEscalation] = useState('');
-  const [linksText, setLinksText] = useState('');
-  const [timeoutS, setTimeoutS] = useState(0);
-  const [envPairs, setEnvPairs] = useState<{ k: string; v: string }[]>([]);
-  const [tags, setTags] = useState('');
-  const [lifecycle, setLifecycle] = useState('active');
-  const [gateReview, setGateReview] = useState(false);
-  const [tier, setTier] = useState('standard');
-  const [sunset, setSunset] = useState('');
-  const [rateLimit, setRateLimit] = useState(0);
-  const [maxFails, setMaxFails] = useState(0);
-  const [sla, setSla] = useState(0);
-  const [notes, setNotes] = useState('');
-  const [winStart, setWinStart] = useState<string>('');
-  const [winEnd, setWinEnd] = useState<string>('');
-  const [winDays, setWinDays] = useState<number[]>([]);
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('main');
   const [prompt, setPrompt] = useState('');
@@ -475,7 +452,7 @@ export function NewRoutinePage() {
     setSummary(d.summary); setOwner(d.owner); setTeam(d.team);
     setTriggers(d.triggers); setConnectors(d.connectors);
     setModel(d.model || 'claude-opus-4-8'); setEffort(d.effort || ''); setMemory(!!d.memory); setRepo(d.repo || ''); setBranch(d.branch || 'main');
-    setScriptMode(!!d.scriptMode); setScriptLang(d.scriptLang === 'node' ? 'node' : 'bash'); setRetries(d.retries || 0); setAssertions(d.assertions ?? []); setAlertOnFail(!!d.alertOnFail); setAlertTarget(d.alertTarget || ''); setEscalation(d.escalation || ''); setLinksText((d.links || []).map((l) => `${l.label} | ${l.url}`).join('\n')); setTimeoutS(d.timeout || 0); setEnvPairs(Object.entries(d.env || {}).map(([k, v]) => ({ k, v: String(v) }))); setTags((d.tags || []).join(', ')); setLifecycle(d.lifecycle || 'active'); setGateReview(!!d.gateReview); setTier(d.tier || 'standard'); setSunset(d.sunsetAt ? new Date(d.sunsetAt).toISOString().slice(0, 10) : ''); setRateLimit(d.rateLimit || 0); setMaxFails(d.maxFails || 0); setSla(d.sla || 0); setNotes(d.notes || ''); setWinStart(d.activeWindow?.start != null ? String(d.activeWindow.start) : ''); setWinEnd(d.activeWindow?.end != null ? String(d.activeWindow.end) : ''); setWinDays(d.activeWindow?.days || []);
+    setRetries(d.retries || 0);
     setPrompt(d.prompt || '');
     setChain(d.chain.join(', '));
     if (d.schedule) setSchedule(d.schedule);
@@ -539,13 +516,11 @@ export function NewRoutinePage() {
     if (b.connectors) setConnectors(b.connectors);
     if (b.model) setModel(b.model);
     if (b.schedule) setSchedule(b.schedule);
-    if (b.scriptMode != null) setScriptMode(b.scriptMode);
-    if (b.scriptLang === 'bash' || b.scriptLang === 'node') setScriptLang(b.scriptLang);
     if (b.prompt) setPrompt(b.prompt);
   }
   function submit() {
     if (!valid) return;
-    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, scriptMode, scriptLang, retries, assertions: assertions.filter((a) => a.type === 'no_tool_errors' || a.value.trim()), alertOnFail, alertTarget, escalation, links: linksText.split('\n').map((ln) => { const i = ln.indexOf('|'); return i < 0 ? { label: '', url: ln.trim() } : { label: ln.slice(0, i).trim(), url: ln.slice(i + 1).trim() }; }).filter((l) => l.url), timeout: timeoutS, env: Object.fromEntries(envPairs.filter((p) => p.k.trim()).map((p) => [p.k.trim(), p.v])), tags: tags.split(',').map((t) => t.trim()).filter(Boolean), rateLimit, maxFails, notes, sla, lifecycle, gateReview, tier, sunsetAt: sunset ? new Date(sunset + 'T00:00:00').getTime() : 0, editor: operator, activeWindow: (winStart || winEnd || winDays.length) ? { start: winStart === '' ? null : +winStart, end: winEnd === '' ? null : +winEnd, days: winDays } : null };
+    const body = { name: name.trim(), slug, summary, owner, team, triggers, connectors, model, effort, memory, repo, branch, prompt, chain: chainArr, schedule: triggers.includes('schedule') ? schedule.trim() : '', filters: filtersObj, reactions, concurrency: { scope: concScope, onConflict: concConflict }, retries };
     if (isEdit) update.mutate({ slug: editSlug!, body }, { onSuccess: () => navigate(`/routines/${editSlug}`) });
     else create.mutate(body, { onSuccess: (r) => navigate(`/routines/${r.slug}`) });
   }
@@ -604,11 +579,6 @@ export function NewRoutinePage() {
                 </div>
               </div>
               <div><div className={LABEL}>Summary · one line</div><input value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="On a PR, post the title to #dev-ai-slop" className={inputCls} /></div>
-              <div><div className={LABEL}>Tags · <span className="font-mono lowercase tracking-normal text-dim-2">comma-separated, for grouping</span></div><input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="ci, security, experimental" className={cn(inputCls, 'font-mono text-[12px]')} /></div>
-              <div><div className={LABEL}>Lifecycle</div><select value={lifecycle} onChange={(e) => setLifecycle(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')}><option value="draft">draft — work in progress</option><option value="active">active — production</option><option value="deprecated">deprecated — being retired</option></select></div>
-              <div><div className={LABEL}>Criticality tier</div><select value={tier} onChange={(e) => setTier(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')}><option value="critical">critical — page immediately</option><option value="standard">standard</option><option value="experimental">experimental</option></select></div>
-              {lifecycle === 'deprecated' && <div><div className={LABEL}>Sunset date · <span className="font-mono lowercase tracking-normal text-dim-2">when this should be retired</span></div><input type="date" value={sunset} onChange={(e) => setSunset(e.target.value)} className={cn(inputCls, 'font-mono text-[12px]')} /></div>}
-              <div><div className={LABEL}>Notes · <span className="font-mono lowercase tracking-normal text-dim-2">ops context / runbook (optional)</span></div><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} placeholder="Why this exists, known quirks, who to ping…" className={cn(inputCls, 'font-sans text-[13px] leading-relaxed')} /></div>
             </div>
           </div>
 
@@ -667,7 +637,7 @@ export function NewRoutinePage() {
             <div className="flex flex-wrap gap-1.5">
               {TOOLS.map((c) => <ChipToggle key={c} on={connectors.includes(c)} onClick={() => toggle(setConnectors, c)}>{c}</ChipToggle>)}
             </div>
-            <div className="mt-2.5 text-[11.5px] text-dim-2">Deny-by-default — <span className="font-mono">github</span> → gh, <span className="font-mono">slack</span> → bot, <span className="font-mono">web</span> → fetch, <span className="font-mono">team</span> → delegate to agents. Custom <span className="font-mono">MCP</span> servers appear here too.</div>
+            <div className="mt-2.5 text-[11.5px] text-dim-2">Deny-by-default — <span className="font-mono">github</span> → gh, <span className="font-mono">slack</span> → bot, <span className="font-mono">web</span> → fetch. Custom <span className="font-mono">MCP</span> servers appear here too.</div>
           </div>
 
           {/* 5 — advanced (collapsed) */}
@@ -693,84 +663,11 @@ export function NewRoutinePage() {
                     </select>
                     <div className="mt-1 text-[11px] text-dim-2">A failed run (claude/gh/timeout) re-fires automatically with backoff — no human needed to notice and re-run.</div>
                   </div>
-                  <div><div className={LABEL}>Max duration (s)</div><input type="number" min={0} max={1800} value={timeoutS || ''} onChange={(e) => setTimeoutS(+e.target.value)} placeholder="240 (default)" className={cn(inputCls, 'font-mono text-[12px]')} /></div>
-                  <div><div className={LABEL}>Rate limit · <span className="font-mono lowercase tracking-normal text-dim-2">runs/hour, 0=off</span></div><input type="number" min={0} max={1000} value={rateLimit || ''} onChange={(e) => setRateLimit(+e.target.value)} placeholder="0 (unlimited)" className={cn(inputCls, 'font-mono text-[12px]')} /></div>
-                  <div><div className={LABEL}>Auto-disable after · <span className="font-mono lowercase tracking-normal text-dim-2">consecutive fails, 0=off</span></div><input type="number" min={0} max={50} value={maxFails || ''} onChange={(e) => setMaxFails(+e.target.value)} placeholder="0 (never)" className={cn(inputCls, 'font-mono text-[12px]')} /></div>
-                  <div><div className={LABEL}>SLA · <span className="font-mono lowercase tracking-normal text-dim-2">expected max sec, 0=off</span></div><input type="number" min={0} max={3600} value={sla || ''} onChange={(e) => setSla(+e.target.value)} placeholder="0 (no SLA)" className={cn(inputCls, 'font-mono text-[12px]')} /></div>
-                  <div className="col-span-2">
-                    <div className={LABEL}>Active window · <span className="font-mono lowercase tracking-normal text-dim-2">events outside skip (blank = always)</span></div>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      <input type="number" min={0} max={23} value={winStart} onChange={(e) => setWinStart(e.target.value)} placeholder="from h" className={cn(inputCls, 'h-8 w-20 font-mono text-[12px]')} />
-                      <span className="font-mono text-[12px] text-dim">→</span>
-                      <input type="number" min={0} max={24} value={winEnd} onChange={(e) => setWinEnd(e.target.value)} placeholder="to h" className={cn(inputCls, 'h-8 w-20 font-mono text-[12px]')} />
-                      <span className="mx-1 h-5 w-px bg-line" />
-                      {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((lbl, di) => (
-                        <button key={di} type="button" onClick={() => setWinDays(winDays.includes(di) ? winDays.filter((x) => x !== di) : [...winDays, di])} className={cn('h-8 w-8 rounded-md border font-mono text-[11px]', winDays.includes(di) ? 'border-brand/50 bg-brand/15 text-brand-soft' : 'border-line text-dim hover:text-t2')}>{lbl}</button>
-                      ))}
-                    </div>
-                    <div className="mt-1 text-[11px] text-dim-2">e.g. 9 → 18 with Mo–Fr = business hours only. No days selected = every day.</div>
-                  </div>
-                  <div className="col-span-2">
-                    <div className={LABEL}>Environment variables <span className="font-mono lowercase tracking-normal text-dim-2">— available to the session shell & scripts</span></div>
-                    {envPairs.map((p, i) => (
-                      <div key={i} className="mt-1.5 flex items-center gap-1.5">
-                        <input value={p.k} onChange={(e) => setEnvPairs(envPairs.map((x, j) => j === i ? { ...x, k: e.target.value } : x))} placeholder="NAME" className={cn(inputCls, 'h-8 w-40 font-mono text-[12px]')} />
-                        <input value={p.v} onChange={(e) => setEnvPairs(envPairs.map((x, j) => j === i ? { ...x, v: e.target.value } : x))} placeholder="value" className={cn(inputCls, 'h-8 flex-1 font-mono text-[12px]')} />
-                        <button type="button" onClick={() => setEnvPairs(envPairs.filter((_, j) => j !== i))} className="shrink-0 text-dim hover:text-bad" aria-label="remove">✕</button>
-                      </div>
-                    ))}
-                    <button type="button" onClick={() => setEnvPairs([...envPairs, { k: '', v: '' }])} className="mt-1.5 font-mono text-[11px] text-brand-soft hover:underline">+ variable</button>
-                  </div>
-                  <div className="col-span-2">
-                    <label className="flex cursor-pointer items-center gap-2 text-[12px] text-t2"><input type="checkbox" checked={alertOnFail} onChange={(e) => setAlertOnFail(e.target.checked)} className="h-4 w-4 accent-[#e5736b]" />Alert on failure</label>
-                    {alertOnFail && <input value={alertTarget} onChange={(e) => setAlertTarget(e.target.value)} placeholder="@fabio or #alerts · blank = the owner" className={cn(inputCls, 'mt-1.5 font-mono text-[12px]')} />}
-                    <div className="mt-1 text-[11px] text-dim-2">When a run finally fails (after retries), Slack-DMs the target so nobody has to watch the dashboard.</div>
-                  </div>
-                  <div className="col-span-2"><div className={LABEL}>Escalation contact · <span className="font-mono lowercase tracking-normal text-dim-2">CC'd on failure alerts when the owner is out</span></div><input value={escalation} onChange={(e) => setEscalation(e.target.value)} placeholder="@oncall or #incidents" className={cn(inputCls, 'font-mono text-[12px]')} /></div>
-                  <div className="col-span-2"><div className={LABEL}>Reference links · <span className="font-mono lowercase tracking-normal text-dim-2">one per line — "Label | https://url" (runbook, dashboard, design doc)</span></div><textarea value={linksText} onChange={(e) => setLinksText(e.target.value)} rows={3} placeholder={'Runbook | https://wiki/...\nDashboard | https://grafana/...'} className={cn(inputCls, 'font-mono text-[12px]')} /></div>
-                  <div className="col-span-2">
-                    <label className="flex cursor-pointer items-center gap-2 text-[12px] text-t2"><input type="checkbox" checked={gateReview} onChange={(e) => setGateReview(e.target.checked)} className="h-4 w-4 accent-[#e6b052]" />Require approval to run</label>
-                    <div className="mt-1 text-[11px] text-dim-2">When a config change is unreviewed, event/schedule dispatch is blocked until a teammate approves (manual runs still allowed).</div>
-                  </div>
                 </div>
                 <label className="flex cursor-pointer items-start gap-2.5">
                   <input type="checkbox" checked={memory} onChange={(e) => setMemory(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[#5b9ee6]" />
                   <div><div className="font-display text-[12.5px] font-semibold text-t2">Persistent memory</div><div className="text-[11px] text-dim-2">A <span className="font-mono text-[var(--code-accent)]">memory.md</span> the session reads at start and updates as it learns.</div></div>
                 </label>
-                <div className="border-t border-line-soft pt-3.5">
-                  <label className="flex cursor-pointer items-start gap-2.5">
-                    <input type="checkbox" checked={scriptMode} onChange={(e) => setScriptMode(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[#5fbf86]" />
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-display text-[12.5px] font-semibold text-t2">Deterministic script</span>
-                        {scriptMode && (
-                          <select value={scriptLang} onChange={(e) => setScriptLang(e.target.value as 'bash' | 'node')} onClick={(e) => e.preventDefault()} className="h-6 rounded border border-line bg-surface-2 px-1.5 font-mono text-[11px] text-fg">
-                            <option value="bash">bash</option><option value="node">node</option>
-                          </select>
-                        )}
-                      </div>
-                      <div className="text-[11px] text-dim-2">The <span className="text-t2">first run</span> is an agent that explores the repo and <span className="text-t2">writes a reusable {scriptLang} extractor</span> from your prompt. Every run after just executes that script — deterministic, fast, $0. Edit the prompt to recompile.</div>
-                    </div>
-                  </label>
-                </div>
-                <div className="border-t border-line-soft pt-3.5">
-                  <div className={LABEL}>Assertions · <span className="font-mono lowercase tracking-normal text-dim-2">checked over the result — fail = gate chain & reactions</span></div>
-                  {assertions.length > 0 && (
-                    <div className="mb-2 mt-1 flex flex-col gap-1.5">
-                      {assertions.map((a, i) => (
-                        <div key={i} className="flex items-center gap-1.5">
-                          <select value={a.type} onChange={(e) => setAssertions(assertions.map((x, j) => (j === i ? { ...x, type: e.target.value } : x)))} className="h-8 shrink-0 rounded-md border border-line bg-surface-2 px-1.5 font-mono text-[11px] text-fg">
-                            {[['contains', 'output contains'], ['not_contains', "output doesn't contain"], ['matches', 'output matches /regex/'], ['max_cost', 'cost ≤ ($)'], ['max_turns', 'turns ≤'], ['min_length', 'output length ≥'], ['no_tool_errors', 'no tool errors']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                          </select>
-                          {a.type !== 'no_tool_errors' && <input value={a.value} onChange={(e) => setAssertions(assertions.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} placeholder={a.type === 'max_cost' ? '0.50' : a.type === 'max_turns' || a.type === 'min_length' ? '10' : 'value…'} className={cn(inputCls, 'h-8 flex-1 font-mono text-[12px]')} />}
-                          <button type="button" onClick={() => setAssertions(assertions.filter((_, j) => j !== i))} className="shrink-0 text-dim hover:text-bad" aria-label="remove">✕</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <button type="button" onClick={() => setAssertions([...assertions, { type: 'contains', value: '' }])} className="font-mono text-[11px] text-brand-soft hover:underline">+ assertion</button>
-                  <div className="mt-1.5 text-[11px] text-dim-2">Checked harness-side over the run's output, cost, turns and trace — the agent can't fake a pass. A failed assertion blocks chains and reactions, catching silent regressions.</div>
-                </div>
                 <div className="border-t border-line-soft pt-3.5">
                   <div className={LABEL}>Concurrency · <span className="font-mono lowercase tracking-normal text-dim-2">no two routines touch the same thing at once</span></div>
                   <div className="mt-1 flex gap-3">
