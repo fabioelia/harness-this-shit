@@ -2,8 +2,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { existsSync } from 'node:fs';
-import { seed } from './seed.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.SWITCHBOARD_DB || join(__dirname, '..', 'switchboard.db');
@@ -108,7 +106,8 @@ CREATE TABLE IF NOT EXISTS runs (
   dur_ms INTEGER,
   model_used TEXT NOT NULL DEFAULT '',
   in_tokens INTEGER,
-  out_tokens INTEGER
+  out_tokens INTEGER,
+  upstream_run TEXT NOT NULL DEFAULT ''      -- run id that chained/reacted into this one
 );
 CREATE TABLE IF NOT EXISTS run_events (
   id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,7 +126,6 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 let _db;
 export function getDb() {
   if (_db) return _db;
-  const fresh = !existsSync(DB_PATH);
   _db = new DatabaseSync(DB_PATH);
   _db.exec('PRAGMA journal_mode = WAL;');
   _db.exec(SCHEMA);
@@ -141,8 +139,21 @@ export function getDb() {
   ensure('runs', 'model_used', "model_used TEXT NOT NULL DEFAULT ''");
   ensure('runs', 'in_tokens', 'in_tokens INTEGER');
   ensure('runs', 'out_tokens', 'out_tokens INTEGER');
-  const n = _db.prepare('SELECT COUNT(*) AS n FROM routines').get();
-  if (fresh || n.n === 0) seed(_db);
+  ensure('runs', 'upstream_run', "upstream_run TEXT NOT NULL DEFAULT ''");
+  _db.exec('CREATE INDEX IF NOT EXISTS idx_runs_upstream ON runs(upstream_run)'); // after ensure: legacy DBs gain the column above
+  // Downgrade migration: databases created before the big simplification carry columns the
+  // INSERTs no longer supply — meta_short/lease_ref were NOT NULL with no default, so routine
+  // creation would break on an upgraded install. Drop every retired column (best-effort).
+  const drop = (t, name) => { if (cols(t).has(name)) { try { _db.exec(`ALTER TABLE ${t} DROP COLUMN ${name}`); } catch { /* keep working even if a legacy index blocks the drop */ } } };
+  ['meta_short', 'lease_ref', 'sinks', 'script_mode', 'script', 'script_lang', 'script_stale', 'assertions',
+    'alert_on_fail', 'alert_target', 'timeout_s', 'snooze_until', 'snooze_reason', 'env', 'tags', 'rate_limit',
+    'max_fails', 'fail_streak', 'notes', 'pinned', 'active_window', 'baseline', 'sla_s', 'archived', 'lifecycle',
+    'tier', 'escalation', 'links', 'sunset_at', 'review_status', 'gate_review', 'reviewed_by', 'reviewed_at',
+  ].forEach((c) => drop('routines', c));
+  ['sinks_result', 'exec_mode', 'cloud_url', 'assert_result', 'assignee', 'verdict', 'verdict_by', 'triage']
+    .forEach((c) => drop('runs', c));
+  for (const t of ['agents', 'prompt_history', 'routine_audit', 'comments', 'mentions', 'bookmarks', 'routine_watch', 'run_reactions'])
+    _db.exec(`DROP TABLE IF EXISTS ${t}`);
   return _db;
 }
 export const all = (sql, ...p) => getDb().prepare(sql).all(...p);

@@ -3,14 +3,12 @@ import { useActivity } from '@/lib/api';
 import { Dot, Empty } from '@/components/sb';
 import { cn } from '@/lib/utils';
 
-const STATE_GROUPS: Record<string, string[]> = { success: ['success'], failing: ['failing'], idle: ['idle'], queued: ['queued'] };
-
 export function ActivityPage() {
   const { data: activity } = useActivity();
   const [q, setQ] = useState('');
   const [state, setState] = useState('all');
   const filtered = (activity ?? []).filter((a) => {
-    if (state !== 'all' && !STATE_GROUPS[state]?.includes(a.state)) return false;
+    if (state !== 'all' && a.state !== state) return false;
     if (q.trim() && !a.text.toLowerCase().includes(q.toLowerCase())) return false;
     return true;
   });

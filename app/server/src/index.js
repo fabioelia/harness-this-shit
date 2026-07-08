@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { getDb, all, one, run } from './db.js';
 import { runClaude, buildPrompt, allowedToolsFor } from './runner.js';
 import { integrationStatus, listRepos, listOrgs, listChecks, claudeAccount, testConnector, bustStatus, gh } from './integrations.js';
-import { SAMPLE_ROUTINES } from './samples.js';
+import { SAMPLE_ROUTINES, DEFAULT_REPO } from './samples.js';
 
 // In-process bus so the run trace can stream live over SSE (no DB polling lag).
 const runBus = new EventEmitter();
@@ -187,10 +187,10 @@ function leaseFor(routine, event) {
   const sha = eventSha(event);
   // Keys are per-routine so a routine never overlaps itself on an entity, but distinct
   // routines act on the same PR independently (and coalesce hands off to its OWN agent).
-  if (scope === 'off') return { key: null, onConflict, sha: '' };
-  if (scope === 'pr' && pr) return { key: `${routine.slug}@pr:${pr.repo}#${pr.pr}`, onConflict, sha };
-  if (scope === 'repo') { const repo = pr?.repo || repoTargets(routine)[0] || eventRepo(event); return { key: repo ? `${routine.slug}@repo:${repo}` : `routine:${routine.slug}`, onConflict, sha }; }
-  return { key: `routine:${routine.slug}`, onConflict, sha };
+  if (scope === 'off') return { key: null, onConflict, sha: '', prRef: null };
+  if (scope === 'pr' && pr) return { key: `${routine.slug}@pr:${pr.repo}#${pr.pr}`, onConflict, sha, prRef: pr };
+  if (scope === 'repo') { const repo = pr?.repo || repoTargets(routine)[0] || eventRepo(event); return { key: repo ? `${routine.slug}@repo:${repo}` : `routine:${routine.slug}`, onConflict, sha, prRef: null }; }
+  return { key: `routine:${routine.slug}`, onConflict, sha, prRef: null };
 }
 // Atomic (node:sqlite is synchronous): steals an expired lease, else reports the holder.
 function acquireLease(key, runId, slug, sha) {
@@ -315,7 +315,12 @@ function maybeRetry(r, rawEvent, triggerLabel, attempt) {
   const delay = RETRY_DELAYS[attempt] || 60_000;
   const base = String(triggerLabel || '').replace(/^retry \d+\/\d+ · /, '');
   logActivity(`${r.slug} failed — auto-retry ${next}/${max} in ${Math.round(delay / 1000)}s`, 'queued');
-  setTimeout(() => executeRoutine(r, { ...(rawEvent || {}), _attempt: next }, `retry ${next}/${max} · ${base}`), delay).unref?.();
+  setTimeout(() => {
+    // Re-fetch at fire time: the user may have disabled or edited the routine meanwhile.
+    const fresh = one('SELECT * FROM routines WHERE slug=? AND enabled=1', r.slug);
+    if (fresh) executeRoutine(fresh, { ...(rawEvent || {}), _attempt: next }, `retry ${next}/${max} · ${base}`);
+    else logActivity(`${r.slug} retry ${next}/${max} dropped · routine disabled or deleted`, 'idle');
+  }, delay).unref?.();
   return true;
 }
 
@@ -327,8 +332,18 @@ function executeRoutine(r, rawEvent, triggerLabel) {
   run(`INSERT INTO runs (id,routine_slug,status,ago,dur,trigger,ord,output,event,created_at)
        VALUES (?,?,?,?,?,?,?,?,?,?)`,
     id, r.slug, 'running', 'now', '…', triggerLabel, ord, '', JSON.stringify(rawEvent ?? {}), created);
+  run('UPDATE runs SET upstream_run=? WHERE id=?', rawEvent?.upstream?.run || '', id);
   run('UPDATE routines SET state=?, last_ago=?, last_status=? WHERE slug=?', 'running', 'now', 'running', r.slug);
 
+  // Kill switch is authoritative HERE, not just at the ingress endpoints — async re-entry
+  // paths (queued retries, chain follow-ups, inbox drains, in-flight reaction ticks) all
+  // funnel into executeRoutine, so this is the one check they can't bypass.
+  if (meta('kill_switch', 'false') === 'true') {
+    run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", 'kill switch engaged — skipped', id);
+    run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
+    logActivity(`${r.slug} skipped · kill switch engaged`, 'failing');
+    return id;
+  }
   // Auto-pause: if a required connector is offline, skip (don't burn a session that'll fail).
   if (meta('skip_on_connector_down', '1') === '1') {
     const need = j(r.connectors); const down = [];
@@ -345,7 +360,7 @@ function executeRoutine(r, rawEvent, triggerLabel) {
   (async () => {
     // Concurrency guard: acquire the routine's lease before doing any work so two
     // runs never act on the same entity (PR / repo / routine) at once.
-    const { key: leaseK, onConflict, sha } = leaseFor(r, rawEvent ?? {});
+    const { key: leaseK, onConflict, sha, prRef } = leaseFor(r, rawEvent ?? {});
     if (leaseK) {
       let lease = acquireLease(leaseK, id, r.slug, sha);
       if (!lease.ok) {
@@ -366,7 +381,14 @@ function executeRoutine(r, rawEvent, triggerLabel) {
         run("UPDATE runs SET status='waiting', dur=? WHERE id=?", `waiting · ${leaseK}`, id);
         logActivity(`${r.slug} waiting · ${leaseK} held by ${lease.holder}`, 'queued');
         const deadline = now() + LEASE_TTL;
-        while (now() < deadline) { await sleep(3000); lease = acquireLease(leaseK, id, r.slug, sha); if (lease.ok) break; }
+        while (now() < deadline) {
+          await sleep(3000);
+          if (canceledRuns.has(id)) break; // canceled while waiting — don't take the lease
+          lease = acquireLease(leaseK, id, r.slug, sha);
+          if (lease.ok) break;
+        }
+        // A cancel that landed while we waited already finalized the run row — stand down.
+        if (canceledRuns.delete(id)) { releaseLease(leaseK, id); return; }
         if (!lease.ok) {
           run("UPDATE runs SET status='failed', dur='—', output=? WHERE id=?", `gave up waiting for ${leaseK}`, id);
           run("UPDATE routines SET state='idle', last_status='failing' WHERE slug=?", r.slug);
@@ -375,12 +397,11 @@ function executeRoutine(r, rawEvent, triggerLabel) {
       }
       // SHA barrier: once we hold the lease, if the PR's head moved past the SHA this
       // event was for (someone pushed, e.g. while we waited), stand down as stale.
-      const prm = sha && leaseK.includes('@pr:') && leaseK.split('@pr:')[1]?.match(/^(.+)#(\d+)$/);
-      if (prm) {
-        const live = await livePrHeadSha(prm[1], prm[2]);
+      if (sha && prRef) {
+        const live = await livePrHeadSha(prRef.repo, prRef.pr);
         if (live && live !== sha) {
           releaseLease(leaseK, id);
-          run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", `stood down — ${prm[1]}#${prm[2]} head moved to ${live.slice(0, 7)} (this run was for ${sha.slice(0, 7)})`, id);
+          run("UPDATE runs SET status='skipped', dur='—', output=? WHERE id=?", `stood down — ${prRef.repo}#${prRef.pr} head moved to ${live.slice(0, 7)} (this run was for ${sha.slice(0, 7)})`, id);
           run("UPDATE routines SET state='idle', last_ago='just now', last_status='idle' WHERE slug=?", r.slug);
           logActivity(`${r.slug} stood down · ${leaseK} head ${sha.slice(0, 7)}→${live.slice(0, 7)} (stale)`, 'idle');
           return;
@@ -527,6 +548,9 @@ const labelsOf = (e) => [...new Set([
 // A "labeled"/"unlabeled" pull_request/issues delivery also satisfies the `label` trigger.
 const LABEL_TYPES = new Set(['pull_request', 'pull_request_target', 'issues']);
 const isLabelEvent = (type, e) => LABEL_TYPES.has(type) && (e?.action === 'labeled' || e?.action === 'unlabeled');
+// The one trigger test everyone uses — dispatch, dry-run preview, and run-page explain
+// must agree, label aliasing included.
+const triggerHit = (triggers, type, event) => triggers.includes(type) || (isLabelEvent(type, event) && triggers.includes('label'));
 // A condition's field → the event's value(s) for it (always an array).
 const FILTER_FIELDS = {
   action: (e) => eventStates(e),
@@ -581,7 +605,7 @@ function explainMatch(r, event) {
   const checks = [];
   const type = event?.event || event?.type || 'manual';
   const triggers = j(r.triggers);
-  checks.push({ label: `trigger is "${type}"`, ok: triggers.includes(type), detail: `listens for [${triggers.join(', ') || 'none'}]` });
+  checks.push({ label: `trigger is "${type}"`, ok: triggerHit(triggers, type, event), detail: `listens for [${triggers.join(', ') || 'none'}]` });
   const targets = repoTargets(r);
   if (targets.length) checks.push({ label: 'repository in target', ok: repoMatches(r, event), detail: `target [${targets.join(', ')}]` });
   let f; try { f = JSON.parse(r.filters || '{}'); } catch { f = {}; }
@@ -591,7 +615,7 @@ function explainMatch(r, event) {
       checks.push({ label: `${c.field} ${c.op} [${(c.values || []).join(', ')}]`, ok: evalCondition(c, event), detail: `event ${c.field}: [${vals.join(', ') || '—'}]` });
     }
   }
-  return { fired: triggers.includes(type) && repoMatches(r, event) && filtersMatch(r, event), checks };
+  return { fired: triggerHit(triggers, type, event) && repoMatches(r, event) && filtersMatch(r, event), checks };
 }
 
 function dispatchEvent(type, payload) {
@@ -600,9 +624,8 @@ function dispatchEvent(type, payload) {
     return { error: 'kill switch engaged' };
   }
   const event = payload && Object.keys(payload).length ? payload : { event: type };
-  const labelEvt = isLabelEvent(type, event);
   const candidates = all('SELECT * FROM routines WHERE enabled=1')
-    .filter((r) => { const t = j(r.triggers); return t.includes(type) || (labelEvt && t.includes('label')); });
+    .filter((r) => triggerHit(j(r.triggers), type, event));
   const matched = candidates.filter((r) => repoMatches(r, event) && filtersMatch(r, event));
   // Audit: record why subscribed routines stood down (the "logs of if/how" devs want).
   candidates.filter((r) => !matched.includes(r)).forEach((r) => {
@@ -631,11 +654,13 @@ function cronFieldMatch(field, val, min, max) {
 export function cronMatches(expr, d) {
   const p = String(expr).trim().split(/\s+/);
   if (p.length !== 5) return false;
+  // Standard cron accepts both 0 and 7 for Sunday in the day-of-week field.
+  const dowMatch = cronFieldMatch(p[4], d.getDay(), 0, 6) || (d.getDay() === 0 && cronFieldMatch(p[4], 7, 0, 7));
   return cronFieldMatch(p[0], d.getMinutes(), 0, 59)
     && cronFieldMatch(p[1], d.getHours(), 0, 23)
     && cronFieldMatch(p[2], d.getDate(), 1, 31)
     && cronFieldMatch(p[3], d.getMonth() + 1, 1, 12)
-    && cronFieldMatch(p[4], d.getDay(), 0, 6);
+    && dowMatch;
 }
 const _lastFired = new Map();
 function tickScheduler() {
@@ -765,7 +790,11 @@ async function pollWatch(w) {
   return { action: 'keep' };
 }
 const WATCH_MAX_ATTEMPTS = 60; // ~45 min at the 45s cadence (timeout watches are exempt)
+let _watchTickRunning = false; // slow gh polls must not overlap the next interval tick
 async function tickWatches() {
+  if (_watchTickRunning) return;
+  _watchTickRunning = true;
+  try {
   if (meta('kill_switch', 'false') === 'true') return;
   for (const w of all("SELECT * FROM watches WHERE status='open' ORDER BY created_at LIMIT 50")) {
     let res; try { res = await pollWatch(w); } catch (e) { res = { action: 'keep', detail: String(e.message).slice(0, 60) }; }
@@ -787,6 +816,7 @@ async function tickWatches() {
       run('UPDATE watches SET attempts=?, detail=? WHERE id=?', attempts, res.detail || '', w.id);
     }
   }
+  } finally { _watchTickRunning = false; }
 }
 if (process.env.SWITCHBOARD_NO_SCHEDULER !== '1') setInterval(tickWatches, 45_000).unref?.();
 
@@ -811,23 +841,6 @@ app.get('/api/stats', (_q, res) => {
     runsToday: one('SELECT COUNT(*) AS n FROM runs WHERE created_at > ?', dayAgo).n,
     successRate, spend: `$${Number(spendNum).toFixed(2)}`,
   });
-});
-
-// Live concurrency: leases currently held + inbox tasks waiting to be picked up.
-app.get('/api/leases', (_q, res) => {
-  const leases = all('SELECT * FROM leases WHERE expires_at > ? ORDER BY acquired_at DESC', now())
-    .map((l) => ({ key: l.key, runId: l.run_id, slug: l.routine_slug, sha: l.head_sha ? l.head_sha.slice(0, 7) : '', held: relTime(l.acquired_at), ttl: fmtDur(Math.max(0, l.expires_at - now())) }));
-  const pending = all("SELECT * FROM run_tasks WHERE handled_by='' ORDER BY created_at DESC LIMIT 40")
-    .map((t) => ({ slug: t.routine_slug, key: t.lease_key, summary: t.summary, ago: relTime(t.created_at) }));
-  res.json({ leases, pending });
-});
-// Manually release a stuck lease.
-app.delete('/api/leases', (req, res) => {
-  const key = String(req.query.key || '');
-  if (!key) return res.status(400).json({ error: 'key required' });
-  run('DELETE FROM leases WHERE key=?', key);
-  logActivity(`lease ${key} released manually`, 'idle');
-  res.json({ ok: true });
 });
 
 // The user's real GitHub repos — so the UI can see & target repositories.
@@ -895,23 +908,20 @@ const ROUTINE_TEMPLATES = [
 app.get('/api/templates', (_q, res) => res.json({ templates: ROUTINE_TEMPLATES }));
 
 // One-click: seed the sample scenarios. Idempotent.
-app.get('/api/samples', (_q, res) => res.json({
-  scenarios: [...new Set(SAMPLE_ROUTINES.map((r) => r.scenario))].map((s) => ({
-    scenario: s, routines: SAMPLE_ROUTINES.filter((r) => r.scenario === s).map((r) => ({ slug: r.slug, name: r.name, summary: r.summary, exists: !!one('SELECT 1 FROM routines WHERE slug=?', r.slug) })),
-  })),
-}));
 app.post('/api/samples/load', async (req, res) => {
-  const repos = await listRepos({});
-  const repo = String(req.body?.repo || '').trim() || repos[0] || '';
-  const fill = (s) => String(s).split('__REPO__').join(repo || 'OWNER/REPO');
-  const routines = [], skipped = [];
-  for (const rt of SAMPLE_ROUTINES) {
-    if (one('SELECT 1 FROM routines WHERE slug=?', rt.slug)) { skipped.push(rt.slug); continue; }
-    insertRoutine({ ...rt, repo: rt.repo === '__REPO__' ? repo : rt.repo, prompt: fill(rt.prompt) });
-    routines.push(rt.slug);
-  }
-  if (routines.length) logActivity(`loaded ${routines.length} example routines${repo ? ` for ${repo}` : ''}`, 'success');
-  res.json({ repo, routines, skipped });
+  try {
+    const repos = await listRepos({});
+    const repo = String(req.body?.repo || '').trim() || repos[0] || '';
+    const fill = (s) => String(s).split('__REPO__').join(repo || 'OWNER/REPO');
+    const routines = [], skipped = [];
+    for (const rt of SAMPLE_ROUTINES) {
+      if (one('SELECT 1 FROM routines WHERE slug=?', rt.slug)) { skipped.push(rt.slug); continue; }
+      insertRoutine({ ...rt, repo: rt.repo === '__REPO__' ? repo : rt.repo, prompt: fill(rt.prompt) });
+      routines.push(rt.slug);
+    }
+    if (routines.length) logActivity(`loaded ${routines.length} example routines${repo ? ` for ${repo}` : ''}`, 'success');
+    res.json({ repo, routines, skipped });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/routines', (req, res) => {
@@ -1026,7 +1036,7 @@ app.post('/api/routines/:slug/preview', (req, res) => {
   const tools = j(r.connectors);
   const prompt = buildPrompt({ ...r, connectors: tools }, event, policyConstraints(), {});
   const triggerType = event.event || event.type || 'manual';
-  const wouldMatch = j(r.triggers).includes(triggerType) && repoMatches(r, event) && filtersMatch(r, event);
+  const wouldMatch = triggerHit(j(r.triggers), triggerType, event) && repoMatches(r, event) && filtersMatch(r, event);
   const { key } = leaseFor(r, event);
   res.json({ prompt, tools, wouldMatch, leaseKey: key, allowedTools: allowedToolsFor(tools), promptChars: prompt.length, estTokens: Math.round(prompt.length / 4) });
 });
@@ -1091,16 +1101,11 @@ app.post('/api/settings', (req, res) => {
 });
 
 app.get('/api/runs', (_q, res) =>
-  res.json(all('SELECT * FROM runs ORDER BY created_at DESC, ord DESC LIMIT 100').map((x) => {
-    const r = one('SELECT name FROM routines WHERE slug=?', x.routine_slug);
-    return { id: x.id, routineSlug: x.routine_slug, routineName: r?.name ?? x.routine_slug, status: x.status, ago: relTime(x.created_at), dur: x.dur, trigger: x.trigger };
-  }))
+  res.json(all(`SELECT runs.*, routines.name AS routine_name FROM runs
+                LEFT JOIN routines ON routines.slug = runs.routine_slug
+                ORDER BY runs.created_at DESC, runs.ord DESC LIMIT 100`)
+    .map((x) => ({ id: x.id, routineSlug: x.routine_slug, routineName: x.routine_name ?? x.routine_slug, status: x.status, ago: relTime(x.created_at), dur: x.dur, trigger: x.trigger })))
 );
-// Currently-active runs across the fleet (running or waiting), with elapsed time.
-app.get('/api/runs/active', (_q, res) => {
-  const rows = all("SELECT id, routine_slug, trigger, status, created_at FROM runs WHERE status IN ('running','waiting') ORDER BY created_at");
-  res.json({ active: rows.map((x) => ({ id: x.id, slug: x.routine_slug, trigger: x.trigger, status: x.status, elapsed: fmtDur(now() - x.created_at), longRunning: now() - x.created_at > 8 * 60_000 })) });
-});
 
 // Live trace stream (SSE): replays the captured steps, then pushes each new one as it
 // happens and a final `done` — so the run page fills in with no polling lag.
@@ -1115,7 +1120,7 @@ app.get('/api/runs/:id/stream', (req, res) => {
     let pl; try { pl = JSON.parse(e.payload); } catch { pl = { d: e.payload }; }
     send({ kind: 'event', event: { seq: e.seq, t: fmtOffset(e.t_offset), ms: e.t_offset, type: e.type, tool: e.tool, ok: e.ok, text: pl.d, truncated: !!pl.truncated } });
   }
-  if (['succeeded', 'failed', 'skipped', 'canceled'].includes(x.status)) { send({ kind: 'done', status: x.status }); return res.end(); }
+  if (['succeeded', 'failed', 'skipped', 'coalesced', 'canceled'].includes(x.status)) { send({ kind: 'done', status: x.status }); return res.end(); }
   const ping = setInterval(() => res.write(':\n\n'), 25_000);
   const onMsg = (m) => { send(m); if (m.kind === 'done') { cleanup(); res.end(); } };
   const cleanup = () => { clearInterval(ping); runBus.off(id, onMsg); };
@@ -1179,12 +1184,12 @@ app.get('/api/runs/:id', (req, res) => {
   });
 
   // Lineage: who kicked this run off, and what it kicked off (chains + reactions).
+  // Kind comes from the structured event flags, not the human-readable trigger label.
   const ev = jObj(x.event) || {};
-  const kindOf = (trig) => (String(trig).startsWith('reaction') ? 'reaction' : String(trig).startsWith('after') ? 'chain' : String(trig).startsWith('replay') ? 'replay' : 'trigger');
-  const triggeredBy = ev.upstream?.run ? { runId: ev.upstream.run, routine: ev.upstream.routine, kind: kindOf(x.trigger) } : null;
-  const downstream = all('SELECT id, routine_slug, trigger, status, dur, event FROM runs WHERE id != ? AND event LIKE ? ORDER BY created_at', x.id, `%${x.id}%`)
-    .filter((d) => (jObj(d.event)?.upstream?.run) === x.id)
-    .map((d) => ({ runId: d.id, routine: d.routine_slug, status: d.status, dur: d.dur, kind: kindOf(d.trigger) }));
+  const kindOf = (e) => (e?._replay ? 'replay' : e?.event === 'reaction' ? 'reaction' : e?.upstream ? 'chain' : 'trigger');
+  const triggeredBy = ev.upstream?.run ? { runId: ev.upstream.run, routine: ev.upstream.routine, kind: kindOf(ev) } : null;
+  const downstream = all('SELECT id, routine_slug, status, dur, event FROM runs WHERE upstream_run=? ORDER BY created_at', x.id)
+    .map((d) => ({ runId: d.id, routine: d.routine_slug, status: d.status, dur: d.dur, kind: kindOf(jObj(d.event)) }));
   const watches = all('SELECT * FROM watches WHERE origin_run=? ORDER BY created_at', x.id)
     .map((w) => ({ target: w.target_slug, source: w.source, kind: w.kind, when: w.when_cond, status: w.status, detail: w.detail }));
   // Inbox: tasks coalesced onto this run's lease (claimed by it, or still pending on its key).
@@ -1197,7 +1202,7 @@ app.get('/api/runs/:id', (req, res) => {
   const toolBreakdown = all("SELECT tool, SUM(CASE WHEN type='tool_use' THEN 1 ELSE 0 END) AS calls, SUM(CASE WHEN type='tool_result' AND ok=0 THEN 1 ELSE 0 END) AS errors FROM run_events WHERE run_id=? AND tool IS NOT NULL AND tool != '' GROUP BY tool ORDER BY calls DESC", x.id)
     .map((t) => ({ tool: t.tool, calls: t.calls, errors: t.errors })).filter((t) => t.calls > 0 || t.errors > 0);
   res.json({
-    id: x.id, routine: x.routine_slug, status: x.status, trigger: x.trigger, triggerKind: kindOf(x.trigger),
+    id: x.id, routine: x.routine_slug, status: x.status, trigger: x.trigger, triggerKind: kindOf(ev),
     started: new Date(x.created_at).toLocaleTimeString(), elapsed: x.dur, model: x.model_used || r?.model || 'claude',
     cost: x.cost_usd, turns: x.num_turns, sessionId: x.session_id,
     inTokens: x.in_tokens ?? null, outTokens: x.out_tokens ?? null,
@@ -1380,9 +1385,6 @@ const shapeWatch = (w) => ({
   id: w.id, origin: w.origin_routine, target: w.target_slug, source: w.source, kind: w.kind, when: w.when_cond,
   entity: jObj(w.entity) || {}, status: w.status, detail: w.detail, attempts: w.attempts, ago: relTime(w.created_at),
 });
-app.get('/api/watches', (_q, res) =>
-  res.json(all('SELECT * FROM watches ORDER BY created_at DESC LIMIT 100').map(shapeWatch))
-);
 
 // Generic event ingress — any trigger type. POST /api/events/push, /pull_request, etc.
 app.post('/api/events/:type', (req, res) => {
@@ -1453,5 +1455,13 @@ app.post('/api/kill-switch', (req, res) => {
   setMeta('kill_switch', engaged ? 'true' : 'false');
   res.json({ killSwitch: engaged });
 });
+
+// First boot: an empty store ships with the runnable example fleet — the same
+// definitions "Load examples" installs, through the same insertRoutine path.
+if (!one('SELECT 1 FROM routines LIMIT 1')) {
+  const fill = (s) => String(s || '').split('__REPO__').join(DEFAULT_REPO);
+  for (const rt of SAMPLE_ROUTINES) insertRoutine({ ...rt, repo: fill(rt.repo), prompt: fill(rt.prompt) });
+  logActivity(`seeded ${SAMPLE_ROUTINES.length} example routines`, 'success');
+}
 
 app.listen(PORT, () => console.log(`Switchboard API on http://localhost:${PORT} · gh:${process.env.PATH ? 'path-ok' : '?'} · slack:${process.env.SLACK_BOT_TOKEN ? 'token' : 'none'}`));

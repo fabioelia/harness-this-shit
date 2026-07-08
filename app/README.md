@@ -77,15 +77,15 @@ The three Switchboard pillars, and deliberately little else:
 Tokens live in `web/tailwind.config.js`, lifted verbatim from the `.dc.html` (warm brown-black
 surfaces, blue `#5b9ee6` accent, the signal palette: success/running/needs-human/failing/lease/
 disabled). The reusable primitives are in `web/src/components/sb.tsx` — `Dot`, `Pill`/`StatePill`,
-`Spark` (14-bar history), `Sbar` (success meter), `Avatar`, `Toggle`, `Chip` — each a 1:1 port of
-the design's `support.js` render helpers, so the app and the mock share one component vocabulary.
+`Avatar`, `Toggle`, `Chip`, `Empty` — each a 1:1 port of the design's `support.js` render
+helpers, so the app and the mock share one component vocabulary.
 
 ## Layout
 
 ```
 app/
   server/   Express + node:sqlite API
-    src/{index,db,seed,samples,runner,integrations}.js
+    src/{index,db,samples,runner,integrations}.js
     tools/{slack-post,inbox}   scripts granted to sessions by name
   web/      Vite + React + TS
     src/

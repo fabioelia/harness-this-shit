@@ -1,50 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ActivityEntry, Connector, RegistryServer, Routine, RoutineDetail, RunDetail, RunLite, Stats } from '@/types';
 
-async function get<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${res.status} ${url}`);
-  return res.json();
-}
-async function post<T>(url: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
+    method,
+    ...(body !== undefined ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}),
   });
   if (!res.ok) {
     let msg = `${res.status} ${url}`;
-    try {
-      const e = await res.json();
-      if (e?.error) msg = e.error;
-    } catch {
-      /* non-JSON error */
-    }
+    try { const e = await res.json(); if (e?.error) msg = e.error; } catch { /* non-JSON error */ }
     throw new Error(msg);
   }
   return res.json();
 }
-async function put<T>(url: string, body?: unknown): Promise<T> {
-  const res = await fetch(url, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) });
-  if (!res.ok) { let m = `${res.status}`; try { const e = await res.json(); if (e?.error) m = e.error; } catch { /**/ } throw new Error(m); }
-  return res.json();
-}
-async function del<T = unknown>(url: string): Promise<T> {
-  const res = await fetch(url, { method: 'DELETE' });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
-}
+const get = <T,>(url: string) => request<T>('GET', url);
+const post = <T,>(url: string, body?: unknown) => request<T>('POST', url, body ?? {});
+const put = <T,>(url: string, body?: unknown) => request<T>('PUT', url, body ?? {});
+const del = <T = unknown,>(url: string) => request<T>('DELETE', url);
 
 export const useStats = () => useQuery({ queryKey: ['stats'], queryFn: () => get<Stats>('/api/stats'), refetchInterval: 8000 });
-
-export interface ActiveRuns { active: { id: string; slug: string; trigger: string; status: string; elapsed: string; longRunning: boolean }[] }
-export const useActiveRuns = () => useQuery({ queryKey: ['active-runs'], queryFn: () => get<ActiveRuns>('/api/runs/active'), refetchInterval: 3000 });
-export interface Leases { leases: { key: string; runId: string; slug: string; sha: string; held: string; ttl: string }[]; pending: { slug: string; key: string; summary: string; ago: string }[] }
-export const useLeases = () => useQuery({ queryKey: ['leases'], queryFn: () => get<Leases>('/api/leases'), refetchInterval: 4000 });
-export function useReleaseLease() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (key: string) => del(`/api/leases?key=${encodeURIComponent(key)}`), onSuccess: () => qc.invalidateQueries({ queryKey: ['leases'] }) });
-}
 
 // GitHub webhooks
 export interface WebhookConfig { publicUrl: string; receiverUrl: string; secretSet: boolean }
@@ -82,7 +56,8 @@ export const useRun = (id?: string) =>
     queryFn: () => get<RunDetail>(`/api/runs/${id}`),
     enabled: !!id,
     retry: false,
-    refetchInterval: (q) => (q.state.data?.status === 'running' ? 1500 : false),
+    // The SSE stream carries the live trace; this poll only refreshes header metadata.
+    refetchInterval: (q) => (q.state.data?.status === 'running' ? 5000 : false),
   });
 export const useConnectors = () => useQuery({ queryKey: ['connectors'], queryFn: () => get<Connector[]>('/api/connectors'), refetchInterval: 15000 });
 export function useLoadSamples() {

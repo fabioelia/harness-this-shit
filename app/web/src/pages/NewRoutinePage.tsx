@@ -178,7 +178,7 @@ const TRIGGER_GROUPS: { label: string; items: string[] }[] = [
   { label: 'CI / checks', items: ['check_run', 'check_suite', 'workflow_run', 'status', 'deployment_status'] },
 ];
 // Only tools the runner actually grants (runner.js allowedToolsFor). No phantom MCPs.
-const CONNECTORS = ['github', 'slack', 'web', 'team'];
+const CONNECTORS = ['github', 'slack', 'web'];
 
 // Reactions the watcher can actually evaluate (index.js pollWatch). Generalizes beyond these.
 const REACTION_PRESETS = [
@@ -637,7 +637,7 @@ export function NewRoutinePage() {
             <div className="flex flex-wrap gap-1.5">
               {TOOLS.map((c) => <ChipToggle key={c} on={connectors.includes(c)} onClick={() => toggle(setConnectors, c)}>{c}</ChipToggle>)}
             </div>
-            <div className="mt-2.5 text-[11.5px] text-dim-2">Deny-by-default — <span className="font-mono">github</span> → gh, <span className="font-mono">slack</span> → bot, <span className="font-mono">web</span> → fetch, <span className="font-mono">team</span> → delegate to agents. Custom <span className="font-mono">MCP</span> servers appear here too.</div>
+            <div className="mt-2.5 text-[11.5px] text-dim-2">Deny-by-default — <span className="font-mono">github</span> → gh, <span className="font-mono">slack</span> → bot, <span className="font-mono">web</span> → fetch. Custom <span className="font-mono">MCP</span> servers appear here too.</div>
           </div>
 
           {/* 5 — advanced (collapsed) */}
