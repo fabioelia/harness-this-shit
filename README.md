@@ -12,9 +12,9 @@ cd app && npm run install:all && npm run dev      # web → http://localhost:531
 ```
 
 A pixel-close recreation of the **Switchboard Fleet** Claude Design file: the dense Fleet table,
-routine detail (front-matter contract, reactive flow, live lease & budget, owned PRs), run detail
-(timeline, dispatcher decision, outputs), and the connectors registry — all wired to a SQLite
-store and live controls (toggles, run-now, kill switch). See [`app/README.md`](app/README.md).
+routine detail (front-matter contract, reactive flow, live leases), run detail (timeline,
+dispatcher decision, outputs), and the connectors registry — all wired to a SQLite store and
+live controls (toggles, run-now, kill switch). See [`app/README.md`](app/README.md).
 
 ## The one-paragraph version
 

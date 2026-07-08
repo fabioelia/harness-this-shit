@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, useRecompile, useRoutineMetric, usePreviewRoutine, useSnooze, useCloneRoutine, useFireEvent, useRoutineHistory, useRestorePrompt, useRoutineAudit, useArchiveRoutine, useUpdateRoutine, useApproveRoutine, useComments, useAddComment, useDeleteComment, useEditComment, usePinComment, useWatch, useToggleWatch, useTimeline, useHandover, useRequestReview } from '@/lib/api';
+import { useRoutine, useToggleRoutine, useDispatchRoutine, useSimulatePush, useValidateRoutine, useDeleteRoutine, useRoutineRaw, useStats, useRoutineMemory, usePreviewRoutine, useFireEvent, useUpdateRoutine } from '@/lib/api';
 import { Avatar, Chip, Dot, Empty, StatePill, Toggle, SIGNAL } from '@/components/sb';
 import { cn } from '@/lib/utils';
-import { useOperator } from '@/lib/operator';
 import type { FrontMatter, RoutineDetail } from '@/types';
 
 const CARD = 'rounded-lg border border-line bg-surface p-[18px]';
@@ -68,33 +67,6 @@ function FrontMatterCard({ fm }: { fm: FrontMatter }) {
   );
 }
 
-// Minimal, safe inline markdown: **bold**, `code`, [text](url). Builds React nodes (no HTML injection).
-function inlineMd(text: string): React.ReactNode[] {
-  const out: React.ReactNode[] = [];
-  const re = /(\*\*([^*]+)\*\*)|(`([^`]+)`)|(\[([^\]]+)\]\((https?:\/\/[^)\s]+)\))/g;
-  let last = 0, m: RegExpExecArray | null, k = 0;
-  while ((m = re.exec(text))) {
-    if (m.index > last) out.push(text.slice(last, m.index));
-    if (m[2]) out.push(<strong key={k++} className="font-semibold text-t2">{m[2]}</strong>);
-    else if (m[4]) out.push(<code key={k++} className="rounded bg-white/[0.06] px-1 font-mono text-[11.5px] text-brand-soft">{m[4]}</code>);
-    else if (m[6]) out.push(<a key={k++} href={m[7]} target="_blank" rel="noreferrer" className="text-brand hover:underline">{m[6]}</a>);
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
-}
-function NotesMd({ text }: { text: string }) {
-  return (
-    <div className="flex flex-col gap-1.5 font-sans text-[13px] leading-relaxed text-muted-2">
-      {text.split('\n').map((ln, i) => {
-        if (/^#{1,3}\s/.test(ln)) return <div key={i} className="font-display text-[12px] font-semibold uppercase tracking-[0.05em] text-dim">{inlineMd(ln.replace(/^#{1,3}\s/, ''))}</div>;
-        if (/^[-*]\s/.test(ln)) return <div key={i} className="flex gap-2 pl-1"><span className="text-dim">•</span><span>{inlineMd(ln.replace(/^[-*]\s/, ''))}</span></div>;
-        if (!ln.trim()) return <div key={i} className="h-1" />;
-        return <div key={i}>{inlineMd(ln)}</div>;
-      })}
-    </div>
-  );
-}
 function ReactiveFlowCard({ d }: { d: RoutineDetail }) {
   return (
     <div className={CARD}>
@@ -117,167 +89,6 @@ function ReactiveFlowCard({ d }: { d: RoutineDetail }) {
   );
 }
 
-function ThroughputCard({ data }: { data: { date: string; runs: number; fails: number }[] }) {
-  if (!data || data.every((d) => d.runs === 0)) return null;
-  const max = Math.max(1, ...data.map((d) => d.runs));
-  const total = data.reduce((a, d) => a + d.runs, 0);
-  return (
-    <div className={CARD}>
-      <div className={`${LABEL} mb-3`}>Throughput · {total} runs / 14d</div>
-      <div className="flex items-end gap-[3px]" style={{ height: 56 }}>
-        {data.map((d) => (
-          <div key={d.date} className="group relative flex flex-1 flex-col justify-end" title={`${d.date} · ${d.runs} runs${d.fails ? ` · ${d.fails} failed` : ''}`}>
-            {d.fails > 0 && <div className="w-full rounded-t-[2px] bg-bad/70" style={{ height: `${(d.fails / max) * 50}px` }} />}
-            <div className={`w-full ${d.fails > 0 ? '' : 'rounded-t-[2px]'} bg-brand/60`} style={{ height: `${((d.runs - d.fails) / max) * 50}px` }} />
-          </div>
-        ))}
-      </div>
-      <div className="mt-2 flex justify-between font-mono text-[10px] text-dim-3"><span>{data[0]?.date.slice(5)}</span><span>{data[data.length - 1]?.date.slice(5)}</span></div>
-    </div>
-  );
-}
-function CostTrendCard({ trend }: { trend: number[] }) {
-  if (!trend || trend.length < 3) return null;
-  const last = trend[trend.length - 1];
-  const avg = trend.reduce((a, b) => a + b, 0) / trend.length;
-  const min = Math.min(...trend), max = Math.max(...trend), span = max - min || 1;
-  const W = 320, H = 40;
-  const pts = trend.map((v, i) => `${(i / Math.max(1, trend.length - 1)) * W},${H - ((v - min) / span) * (H - 6) - 3}`).join(' ');
-  return (
-    <div className={CARD}>
-      <div className={`${LABEL} mb-3`}>Cost per run · last {trend.length}</div>
-      <div className="flex items-end gap-3">
-        <div>
-          <div className="font-display text-[24px] font-bold leading-none tracking-tight text-fg">${last.toFixed(4)}</div>
-          <div className={`mt-1 font-mono text-[11px] ${last > avg * 1.3 ? 'text-bad' : 'text-dim-2'}`}>avg ${avg.toFixed(4)}{last > avg * 1.3 ? ' · above avg' : ''}</div>
-        </div>
-        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="ml-auto" preserveAspectRatio="none">
-          <polyline points={pts} fill="none" stroke="#5fbf86" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
-          {trend.map((v, i) => <circle key={i} cx={(i / Math.max(1, trend.length - 1)) * W} cy={H - ((v - min) / span) * (H - 6) - 3} r={i === trend.length - 1 ? 2.5 : 1} fill="#5fbf86" />)}
-        </svg>
-      </div>
-    </div>
-  );
-}
-function TimelineCard({ slug }: { slug: string }) {
-  const { data } = useTimeline(slug);
-  if (!data || data.events.length === 0) return null;
-  const tone: Record<string, string> = { approval: 'text-ok', change: 'text-brand-soft', comment: 'text-lease' };
-  const dot: Record<string, string> = { approval: '✓', change: '✎', comment: '💬' };
-  return (
-    <div className={CARD}>
-      <div className={`${LABEL} mb-3`}>Timeline</div>
-      <div className="flex flex-col gap-2">
-        {data.events.slice(0, 15).map((e, i) => (
-          <div key={i} className="flex items-start gap-2 font-mono text-[11.5px]">
-            <span className={`shrink-0 ${tone[e.kind] || 'text-dim'}`}>{dot[e.kind] || '·'}</span>
-            <span className="flex-1 break-words text-muted-2">{e.text}</span>
-            <span className="shrink-0 text-dim">{e.ago}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-function ReadinessCard({ d }: { d: RoutineDetail }) {
-  const checks = [
-    { label: 'Has an owner', ok: !!d.owner && d.owner !== 'unassigned' },
-    { label: 'Runbook / notes written', ok: !!(d.notes && d.notes.trim()) },
-    { label: 'Escalation contact set', ok: !!d.escalation },
-    { label: 'Reference links added', ok: (d.links?.length ?? 0) > 0 },
-    { label: 'Config reviewed', ok: d.reviewStatus !== 'needs_review' },
-    { label: 'Not failing', ok: d.lastStatus !== 'failing' },
-  ];
-  const done = checks.filter((c) => c.ok).length;
-  const pct = Math.round((100 * done) / checks.length);
-  return (
-    <div className={CARD}>
-      <div className="mb-3 flex items-center justify-between">
-        <div className={LABEL}>Readiness</div>
-        <div className="flex items-center gap-2"><div className="h-1.5 w-20 overflow-hidden rounded-full bg-surface-2"><div className={`h-full rounded-full ${pct === 100 ? 'bg-ok/70' : pct >= 50 ? 'bg-warn/70' : 'bg-bad/70'}`} style={{ width: `${pct}%` }} /></div><span className="font-mono text-[11px] text-dim">{done}/{checks.length}</span></div>
-      </div>
-      <div className="flex flex-col gap-1.5">
-        {checks.map((c) => (
-          <div key={c.label} className="flex items-center gap-2 font-mono text-[12px]">
-            <span className={c.ok ? 'text-ok' : 'text-dim-3'}>{c.ok ? '✓' : '○'}</span>
-            <span className={c.ok ? 'text-muted-2' : 'text-dim'}>{c.label}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-function CommentsCard({ slug }: { slug: string }) {
-  const { data } = useComments(slug, true);
-  const add = useAddComment();
-  const delc = useDeleteComment();
-  const pinc = usePinComment();
-  const editc = useEditComment();
-  const [body, setBody] = useState('');
-  const [author, setAuthor] = useState(() => { try { return localStorage.getItem('sb-author') || ''; } catch { return ''; } });
-  const submit = () => { if (!body.trim()) return; try { localStorage.setItem('sb-author', author.trim()); } catch { /**/ } add.mutate({ slug, author: author.trim() || 'anon', body: body.trim() }, { onSuccess: () => setBody('') }); };
-  return (
-    <div className={CARD}>
-      <div className={`${LABEL} mb-3`}>Discussion{data && data.comments.length ? ` · ${data.comments.length}` : ''}</div>
-      <div className="flex flex-col gap-2.5">
-        {data?.comments.map((c) => (
-          <div key={c.id} className={`rounded-md border px-3 py-2 ${c.pinned ? 'border-brand/40 bg-brand/[0.05]' : 'border-line-soft bg-surface-2'}`}>
-            <div className="mb-0.5 flex items-center gap-2 font-mono text-[10.5px]">{c.pinned && <span className="text-brand-soft">📌</span>}<span className="font-semibold text-brand-soft">{c.author}</span><span className="text-dim">{c.ago}</span><button onClick={() => pinc.mutate({ slug, id: c.id, pinned: !c.pinned })} title={c.pinned ? 'unpin' : 'pin to top'} className={`ml-auto ${c.pinned ? 'text-brand-soft' : 'text-dim hover:text-brand-soft'}`}>{c.pinned ? 'unpin' : 'pin'}</button><button onClick={() => { const nb = prompt('Edit comment:', c.body); if (nb != null && nb.trim()) editc.mutate({ slug, id: c.id, body: nb.trim() }); }} className="text-dim hover:text-brand-soft">edit</button><button onClick={() => delc.mutate({ slug, id: c.id })} className="text-dim hover:text-bad">×</button></div>
-            <div className="whitespace-pre-wrap break-words font-sans text-[12.5px] leading-relaxed text-muted-2">{c.body}</div>
-          </div>
-        ))}
-        {data && data.comments.length === 0 && <div className="font-mono text-[11.5px] text-dim">No comments yet — leave context for your team.</div>}
-        <div className="mt-1 flex flex-col gap-1.5">
-          <div className="flex items-center gap-2">
-            <input value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="your name" className="h-7 w-32 rounded-md border border-line bg-surface-2 px-2 font-mono text-[11px] text-fg focus:border-brand/60 focus:outline-none" />
-            <span className="font-mono text-[10px] text-dim-2">saved locally</span>
-          </div>
-          <textarea value={body} onChange={(e) => setBody(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit(); }} rows={2} placeholder="add a comment… (⌘↵ to post)" className="w-full rounded-md border border-line bg-surface-2 px-2.5 py-1.5 font-sans text-[12.5px] text-fg focus:border-brand/60 focus:outline-none" />
-          <button onClick={submit} disabled={add.isPending || !body.trim()} className="self-start h-7 rounded-md border border-brand/50 bg-brand/10 px-3 font-display text-[12px] font-semibold text-brand-soft hover:bg-brand/20 disabled:opacity-40">Post</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-function AuditCard({ slug }: { slug: string }) {
-  const { data } = useRoutineAudit(slug, true);
-  if (!data || data.entries.length === 0) return null;
-  return (
-    <div className={CARD}>
-      <div className={`${LABEL} mb-3`}>Change log · {data.entries.length}</div>
-      <div className="flex flex-col gap-1">
-        {data.entries.map((e, i) => (
-          <div key={i} className="flex items-center gap-2 font-mono text-[11.5px]">
-            <span className="flex-1 text-t2">{e.summary}</span>
-            <span className="shrink-0 text-dim">{e.ago}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-function PromptHistoryCard({ slug }: { slug: string }) {
-  const { data } = useRoutineHistory(slug, true);
-  const restore = useRestorePrompt();
-  const [open, setOpen] = useState<number | null>(null);
-  if (!data || data.versions.length === 0) return null;
-  return (
-    <div className={CARD}>
-      <div className={`${LABEL} mb-3`}>Prompt history · {data.versions.length} prior version{data.versions.length > 1 ? 's' : ''}</div>
-      <div className="flex flex-col gap-1.5">
-        {data.versions.map((v) => (
-          <div key={v.id} className="rounded-md border border-line-soft">
-            <div className="flex items-center gap-2 px-2.5 py-1.5">
-              <button onClick={() => setOpen(open === v.id ? null : v.id)} className="font-mono text-[11.5px] text-t2 hover:text-brand">{open === v.id ? '▾' : '▸'} {v.ago} · {v.chars} chars</button>
-              <button onClick={() => restore.mutate({ slug, id: v.id })} disabled={restore.isPending} className="ml-auto font-mono text-[11px] text-dim hover:text-brand disabled:opacity-40">restore</button>
-            </div>
-            {open === v.id && <pre className="max-h-[240px] overflow-auto whitespace-pre-wrap break-words border-t border-line-soft bg-code px-2.5 py-2 font-mono text-[11px] leading-[1.5] text-muted">{v.prompt}</pre>}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 function TestFireCard({ slug, triggers, repo }: { slug: string; triggers: string[]; repo: string }) {
   const fire = useFireEvent();
   const navigate = useNavigate();
@@ -310,57 +121,7 @@ function TestFireCard({ slug, triggers, repo }: { slug: string; triggers: string
     </div>
   );
 }
-function MetricCard({ slug }: { slug: string }) {
-  const { data } = useRoutineMetric(slug, true);
-  if (!data || !data.numeric) return null;
-  const nums = data.points.filter((p) => p.value != null).map((p) => p.value as number);
-  const last = nums[nums.length - 1];
-  const prev = nums.length > 1 ? nums[nums.length - 2] : undefined;
-  const delta = prev != null ? last - prev : undefined;
-  const min = Math.min(...nums); const max = Math.max(...nums); const span = max - min || 1;
-  const W = 320; const H = 44;
-  const pts = nums.map((v, i) => `${(i / Math.max(1, nums.length - 1)) * W},${H - ((v - min) / span) * (H - 6) - 3}`).join(' ');
-  return (
-    <div className={CARD}>
-      <div className={`${LABEL} mb-3`}>Metric history · {nums.length} runs</div>
-      <div className="flex items-end gap-3">
-        <div>
-          <div className="font-display text-[28px] font-bold leading-none tracking-tight text-fg">{last.toLocaleString()}</div>
-          {delta != null && delta !== 0 && <div className={`mt-1 font-mono text-[11.5px] ${delta > 0 ? 'text-bad' : 'text-ok'}`}>{delta > 0 ? '▲' : '▼'} {Math.abs(delta).toLocaleString()} vs prev</div>}
-          {delta === 0 && <div className="mt-1 font-mono text-[11.5px] text-dim">unchanged</div>}
-        </div>
-        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="ml-auto" preserveAspectRatio="none">
-          <polyline points={pts} fill="none" stroke="var(--brand, #5b9ee6)" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
-          {nums.map((v, i) => <circle key={i} cx={(i / Math.max(1, nums.length - 1)) * W} cy={H - ((v - min) / span) * (H - 6) - 3} r={i === nums.length - 1 ? 2.5 : 1.2} fill="#5b9ee6" />)}
-        </svg>
-      </div>
-      <div className="mt-2 font-mono text-[11px] text-dim-2">latest <span className="text-t2">{data.latest?.ago}</span> · range {min.toLocaleString()}–{max.toLocaleString()} · the leading number in each successful run's output.</div>
-    </div>
-  );
-}
-function ScriptCard({ slug, lang, compiled, stale, script }: { slug: string; lang: string; compiled: boolean; stale: boolean; script: string }) {
-  const recompile = useRecompile();
-  return (
-    <div className={CARD}>
-      <div className="mb-3 flex items-center justify-between">
-        <span className={LABEL}>Deterministic extractor · {lang}</span>
-        <button onClick={() => recompile.mutate(slug)} disabled={recompile.isPending} className="h-7 rounded-md border border-line bg-surface-2 px-2.5 font-display text-[11.5px] font-semibold text-t2 hover:border-hair disabled:opacity-40">{recompile.isPending ? 'Revising…' : compiled ? 'Rebuild' : 'Compile now'}</button>
-      </div>
-      {compiled ? (
-        <>
-          {stale ? (
-            <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-warn/30 bg-warn/10 px-2 py-0.5 font-display text-[10px] font-semibold text-warn"><Dot color="#e6b052" size={6} pulse /> prompt changed — the LLM is revising this script from the version below</div>
-          ) : (
-            <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-ok/30 bg-ok/10 px-2 py-0.5 font-display text-[10px] font-semibold text-ok"><Dot color="#5fbf86" size={6} /> compiled — runs deterministically ($0)</div>
-          )}
-          <pre className="max-h-[320px] overflow-auto whitespace-pre rounded-md border border-line-soft bg-code px-3.5 py-3 font-mono text-[11px] leading-[1.55] text-muted">{script}</pre>
-        </>
-      ) : (
-        <div className="font-mono text-[12px] text-dim">Not compiled yet — the first run (or <span className="text-t2">Compile now</span>) builds the {lang} extractor from the prompt; every run after executes it verbatim.</div>
-      )}
-    </div>
-  );
-}
+
 function MemoryCard({ slug }: { slug: string }) {
   const { data } = useRoutineMemory(slug, true);
   return (
@@ -392,19 +153,10 @@ export function RoutineDetailPage() {
   const del = useDeleteRoutine();
   const [showRaw, setShowRaw] = useState(false);
   const preview = usePreviewRoutine();
-  const snooze = useSnooze();
-  const archive = useArchiveRoutine();
   const update = useUpdateRoutine();
-  const approve = useApproveRoutine();
-  const [op2] = useOperator();
-  const watch = useWatch(slug || '', op2);
-  const toggleWatch = useToggleWatch();
-  const handover = useHandover();
-  const reqReview = useRequestReview();
   const [reassign, setReassign] = useState(false);
   const [ownerDraft, setOwnerDraft] = useState("");
   const [teamDraft, setTeamDraft] = useState("");
-  const clone = useCloneRoutine();
   const [msg, setMsg] = useState<{ text: string; tone: 'bad' | 'warn' } | null>(null);
   const raw = useRoutineRaw(slug, showRaw);
   useEffect(() => {
@@ -418,9 +170,8 @@ export function RoutineDetailPage() {
 
   const killed = !!stats?.killSwitch;
   const runNow = () => { setMsg(null); dispatch.mutate(d.slug, { onSuccess: (res) => navigate(`/runs/${res.runId}`), onError: (e) => setMsg({ text: (e as Error).message, tone: 'bad' }) }); };
-  const blast = () => { const deps = (d.dependents || []).filter((x) => x.enabled); return deps.length ? `\n\n⚠ Blast radius — this breaks ${deps.length} downstream flow(s):\n${deps.map((x) => `• ${x.name} (via ${x.via})`).join('\n')}` : ''; };
-  const onKill = () => { if (confirm(`Disable “${d.name}”? It will stop firing on its triggers.${blast()}`)) toggle.mutate({ slug: d.slug, enabled: false }); };
-  const onDelete = () => { if (confirm(`Delete “${d.name}” and its run history? This cannot be undone.${blast()}`)) del.mutate(d.slug, { onSuccess: () => navigate('/') }); };
+  const onKill = () => { if (confirm(`Disable “${d.name}”? It will stop firing on its triggers.`)) toggle.mutate({ slug: d.slug, enabled: false }); };
+  const onDelete = () => { if (confirm(`Delete “${d.name}” and its run history? This cannot be undone.`)) del.mutate(d.slug, { onSuccess: () => navigate('/') }); };
   const simulatePush = () => {
     setMsg(null);
     const repo = (d.repo || '').split(',').map((s) => s.trim()).filter(Boolean)[0];
@@ -462,30 +213,13 @@ export function RoutineDetailPage() {
             <button onClick={runNow} disabled={busy || killed} title={killed ? 'Kill switch is engaged' : undefined} className="flex h-[34px] items-center gap-[7px] rounded-md bg-brand px-3.5 font-display text-[12.5px] font-semibold text-[#16130f] transition-colors hover:bg-brand-deep disabled:opacity-40">
               <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M3 2 L10 6 L3 10 Z" /></svg>{dispatch.isPending ? 'Running…' : 'Run now'}
             </button>
-            {d.snoozedUntil > 0
-              ? <button onClick={() => snooze.mutate({ slug: d.slug, hours: 0 })} className="flex h-[34px] items-center rounded-md border border-lease/50 bg-lease/10 px-[13px] font-display text-[12.5px] font-semibold text-lease hover:bg-lease/20" title={`Snoozed until ${new Date(d.snoozedUntil).toLocaleString()}${d.snoozeReason ? ` — ${d.snoozeReason}` : ''}`}>💤 Resume</button>
-              : <button onClick={() => { const reason = prompt('Snooze 4h — reason (shown to the team, optional):') ?? ''; snooze.mutate({ slug: d.slug, hours: 4, reason }); }} className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair" title="Pause triggers + schedule for 4h, then auto-resume">Snooze 4h</button>}
-            <button onClick={() => clone.mutate(d.slug, { onSuccess: (c) => navigate(`/routines/${c.slug}/edit`) })} disabled={clone.isPending} className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair disabled:opacity-40">{clone.isPending ? 'Cloning…' : 'Duplicate'}</button>
             <button onClick={() => navigate(`/routines/${d.slug}/edit`)} className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair">Edit</button>
             <button onClick={() => validate.mutate(d.slug)} disabled={validate.isPending} className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair disabled:opacity-40">{validate.isPending ? 'Validating…' : 'Validate'}</button>
-            <button onClick={() => archive.mutate({ slug: d.slug, archived: !d.archived }, { onSuccess: () => navigate(d.archived ? `/routines/${d.slug}` : '/') })} disabled={archive.isPending} className="flex h-[34px] items-center rounded-md border border-line bg-surface-2 px-[13px] font-display text-[12.5px] font-semibold text-t2 hover:border-hair disabled:opacity-40">{d.archived ? 'Restore' : 'Archive'}</button>
             <button onClick={d.enabled ? onKill : onDelete} disabled={del.isPending} className="flex h-[34px] items-center rounded-md border border-bad/40 px-[13px] font-display text-[12.5px] font-semibold text-bad hover:bg-bad/10 disabled:opacity-40">{d.enabled ? 'Disable' : 'Delete'}</button>
           </div>
         </div>
         {msg && (
           <div className={`mt-3 inline-block rounded-md border px-3 py-1.5 text-[12px] ${msg.tone === 'bad' ? 'border-bad/30 bg-bad/10 text-bad' : 'border-warn/30 bg-warn/10 text-warn'}`}>{msg.text}</div>
-        )}
-        {d.reviewStatus === 'needs_review' && (
-          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-warn/30 bg-warn/[0.07] px-3.5 py-2">
-            <span className="font-display text-[11px] font-semibold uppercase tracking-[0.06em] text-warn">⚑ Needs review</span>
-            <span className="font-mono text-[11.5px] text-dim-2">config changed since last approval</span>
-            {approve.isError && <span className="font-mono text-[11px] text-bad">{(approve.error as Error).message}</span>}
-            <button onClick={() => { const rv = prompt('Request review from which teammate?'); if (rv && rv.trim()) reqReview.mutate({ slug: d.slug, reviewer: rv.trim(), by: op2 || 'anon' }); }} className="h-7 rounded-md border border-line bg-surface-2 px-3 font-display text-[12px] font-semibold text-dim hover:text-brand-soft">Request review</button>
-            <button onClick={() => { let rv = ''; try { rv = localStorage.getItem('sb-author') || ''; } catch { /**/ } approve.mutate({ slug: d.slug, reviewer: rv || 'anon' }); }} disabled={approve.isPending} className="ml-auto h-7 rounded-md border border-ok/50 bg-ok/10 px-3 font-display text-[12px] font-semibold text-ok hover:bg-ok/20 disabled:opacity-40">{approve.isPending ? 'Approving…' : '✓ Approve'}</button>
-          </div>
-        )}
-        {d.reviewStatus === 'approved' && d.reviewedBy && (
-          <div className="mt-3 inline-flex items-center gap-2 rounded-md border border-ok/25 bg-ok/[0.05] px-3 py-1.5 font-mono text-[11.5px] text-ok">✓ approved by {d.reviewedBy} · {d.reviewedAgo}</div>
         )}
         {d.lastStatus === 'failing' && d.lastError && (
           <Link to={`/runs/${d.lastError.runId}`} className="mt-3 block rounded-md border border-bad/30 bg-bad/[0.07] px-3.5 py-2.5 hover:border-bad/50">
@@ -524,12 +258,7 @@ export function RoutineDetailPage() {
             <button onClick={() => { setOwnerDraft(d.owner); setTeamDraft(d.team); setReassign(true); }} title="reassign owner / team" className="inline-flex items-center gap-[7px] rounded-md px-1 hover:bg-white/[0.04]"><Avatar color={d.ownerColor} initials={d.initials} size={20} /><span className="font-sans text-[12px] font-medium text-t2">{d.owner}</span><span className="text-faint">·</span><span className="font-mono text-[11px] font-medium text-dim">{d.team}</span><span className="ml-0.5 font-mono text-[10px] text-faint">✎</span></button>
           )}
           {d.connectors.slice(0, 2).map((c) => <Chip key={c}>{c}</Chip>)}
-          {d.lastTouched && <span className="ml-auto font-mono text-[11px] text-dim-2" title="most recent config change / approval">✎ {d.lastTouched.summary} · {d.lastTouched.ago}</span>}
-          {d.lastSuccessAgo && <span className={`${d.lastTouched ? '' : 'ml-auto'} font-mono text-[11.5px] ${d.staleSuccess ? 'text-warn' : 'text-dim'}`} title="when this routine last produced a successful run">last ✓ {d.lastSuccessAgo}</span>}
-          <button onClick={() => toggleWatch.mutate({ slug: d.slug, who: op2 || 'anon', on: !watch.data?.watching })} title={watch.data?.watching ? 'unwatch' : 'watch — changes land in your inbox'} className={`font-mono text-[12px] font-medium hover:text-brand ${watch.data?.watching ? 'text-brand-soft' : 'text-dim'} ${d.lastSuccessAgo || d.lastTouched ? '' : 'ml-auto'}`}>{watch.data?.watching ? '👁 watching' : '👁 watch'}{watch.data?.watchers ? ` ${watch.data.watchers}` : ''}</button>
-          <button onClick={() => { const to = prompt(`Hand over “${d.name}” (owner: ${d.owner}) to whom?`); if (!to || !to.trim()) return; const note = prompt('Handover note for the new owner (optional):') ?? ''; handover.mutate({ slug: d.slug, to: to.trim(), from: op2 || d.owner || 'anon', note }); }} title="transfer ownership with a note + notify the new owner" className="font-mono text-[12px] font-medium text-dim hover:text-brand">⇄ hand over</button>
-          <button onClick={() => preview.mutate(d.slug)} className="font-mono text-[12px] font-medium text-dim hover:text-brand">Preview prompt ▸</button>
-          <a href={`/api/routines/${d.slug}/export`} download={`${d.slug}.routine.json`} className="font-mono text-[12px] font-medium text-dim hover:text-brand">Export JSON ↓</a>
+          <button onClick={() => preview.mutate(d.slug)} className="ml-auto font-mono text-[12px] font-medium text-dim hover:text-brand">Preview prompt ▸</button>
           <button onClick={() => setShowRaw(true)} className="font-mono text-[12px] font-medium text-brand hover:underline">View raw {d.file} ›</button>
         </div>
       </div>
@@ -554,7 +283,7 @@ export function RoutineDetailPage() {
         <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-8" onClick={() => preview.reset()}>
           <div className="mt-12 w-full max-w-[820px] overflow-hidden rounded-lg border border-line bg-surface shadow-pop" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-line-soft px-4 py-2.5">
-              <span className="font-mono text-[12px] font-medium text-t2">Resolved prompt · {preview.data.promptChars.toLocaleString()} chars · ~{preview.data.estTokens.toLocaleString()} tokens{preview.data.willCompile ? ' (compile run)' : ''}</span>
+              <span className="font-mono text-[12px] font-medium text-t2">Resolved prompt · {preview.data.promptChars.toLocaleString()} chars · ~{preview.data.estTokens.toLocaleString()} tokens</span>
               <button onClick={() => preview.reset()} className="font-mono text-[12px] text-dim hover:text-fg">esc ✕</button>
             </div>
             <div className="flex flex-wrap items-center gap-2 border-b border-line-soft px-4 py-2 font-mono text-[11px]">
@@ -578,7 +307,7 @@ export function RoutineDetailPage() {
             </div>
             <pre className="overflow-auto whitespace-pre-wrap break-words rounded-md border border-line-soft bg-code px-4 py-3.5 font-mono text-[12px] leading-[1.7] text-muted">
               {d.prompt.split('\n').map((line, i) => (
-                <div key={i} style={line.startsWith('##') ? { color: 'var(--dim-2)' } : undefined}>{line || ' '}</div>
+                <div key={i} style={line.startsWith('##') ? { color: 'var(--dim-2)' } : undefined}>{line || ' '}</div>
               ))}
             </pre>
           </div>
@@ -636,76 +365,7 @@ export function RoutineDetailPage() {
               )}
             </div>
           )}
-          {d.notes && d.notes.trim() && (
-            <div className={CARD}>
-              <div className={`${LABEL} mb-2`}>Notes · runbook</div>
-              <NotesMd text={d.notes} />
-            </div>
-          )}
           <TestFireCard slug={d.slug} triggers={d.triggers} repo={d.repo} />
-          <PromptHistoryCard slug={d.slug} />
-          <ReadinessCard d={d} />
-          <TimelineCard slug={d.slug} />
-          <CommentsCard slug={d.slug} />
-          <AuditCard slug={d.slug} />
-          <div className={CARD}>
-            <div className={`${LABEL} mb-3`}>People · who to ask</div>
-            <div className="flex flex-col gap-2 font-mono text-[12px]">
-              <div className="flex items-center gap-2"><span className="w-[80px] shrink-0 text-dim">owner</span><span className="text-t2">{d.owner}</span><span className="text-dim-2">· {d.team}</span></div>
-              {d.escalation && <div className="flex items-center gap-2"><span className="w-[80px] shrink-0 text-dim">escalation</span><span className="text-warn">{d.escalation}</span></div>}
-              {d.lastTouched && <div className="flex items-start gap-2"><span className="w-[80px] shrink-0 text-dim">last change</span><span className="text-t2">{d.lastTouched.summary} · {d.lastTouched.ago}</span></div>}
-              <div className="flex items-start gap-2"><span className="w-[80px] shrink-0 text-dim">watching</span><span className="flex-1 text-dim-2">{d.watchers.length ? d.watchers.map((w) => <span key={w} className="mr-1 rounded bg-lease/10 px-1.5 py-px text-lease">{w}</span>) : 'nobody yet'}</span></div>
-              {d.links && d.links.length > 0 && (
-                <div className="flex items-start gap-2"><span className="w-[80px] shrink-0 text-dim">links</span><span className="flex flex-1 flex-wrap gap-x-3 gap-y-1">{d.links.map((l, i) => <a key={i} href={l.url} target="_blank" rel="noreferrer" className="text-brand hover:underline">{l.label || l.url} ↗</a>)}</span></div>
-              )}
-            </div>
-          </div>
-          {d.upstream && d.upstream.length > 0 && (
-            <div className={CARD}>
-              <div className={`${LABEL} mb-3`}>Upstream feeders · {d.upstream.length}</div>
-              <div className="flex flex-col gap-1.5">
-                {d.upstream.map((u) => {
-                  const broken = u.missing || !u.enabled || u.lastStatus === 'failing';
-                  return (
-                    <div key={u.slug} className="flex items-center gap-2 font-mono text-[12px]">
-                      <span className={broken ? 'text-bad' : 'text-ok'}>{broken ? '⚠' : '✓'}</span>
-                      {u.missing ? <span className="text-dim line-through">{u.slug}</span> : <Link to={`/routines/${u.slug}`} className="text-t2 hover:text-brand">{u.name}</Link>}
-                      <span className="text-dim-2">{u.missing ? 'missing' : !u.enabled ? 'disabled — not feeding you' : u.lastStatus === 'failing' ? 'failing — output may be stale' : 'healthy'}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-          {d.dependents && d.dependents.length > 0 && (
-            <div className={CARD}>
-              <div className={`${LABEL} mb-3`}>Depended on by · {d.dependents.length}</div>
-              <div className="flex flex-col gap-1.5">
-                {d.dependents.map((dep) => (
-                  <div key={dep.slug} className="flex items-center gap-2 font-mono text-[12px]">
-                    <Link to={`/routines/${dep.slug}`} className="flex-1 truncate font-sans font-semibold text-t2 hover:text-brand">{dep.name}</Link>
-                    <span className="text-dim-2">via {dep.via}</span>
-                    {!dep.enabled && <span className="text-dim">(off)</span>}
-                  </div>
-                ))}
-              </div>
-              <div className="mt-2 font-mono text-[10.5px] text-dim-2">disabling or deleting this routine breaks these downstream flows.</div>
-            </div>
-          )}
-          {d.mttr && (
-            <div className={CARD}>
-              <div className={`${LABEL} mb-2`}>Reliability · MTTR</div>
-              <div className="flex items-baseline gap-3">
-                <div className="font-display text-[22px] font-bold leading-none text-fg">{d.mttr.value}</div>
-                <div className="font-mono text-[11.5px] text-dim-2">{d.mttr.incidents} recover{d.mttr.incidents === 1 ? 'y' : 'ies'}{d.mttr.openIncident && <span className="ml-1 text-bad">· down since {d.mttr.downSince}</span>}</div>
-              </div>
-              <div className="mt-1.5 font-mono text-[10.5px] text-dim-2">mean time from a failure to the next success.</div>
-            </div>
-          )}
-          <ThroughputCard data={d.runsByDay} />
-          <CostTrendCard trend={d.costTrend} />
-          <MetricCard slug={d.slug} />
-          {d.scriptMode && <ScriptCard slug={d.slug} lang={d.scriptLang} compiled={d.compiled} stale={d.scriptStale} script={d.script} />}
           {d.memory && <MemoryCard slug={d.slug} />}
           {d.chain?.length > 0 && (
             <div className={CARD}>

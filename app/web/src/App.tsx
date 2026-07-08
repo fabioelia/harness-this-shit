@@ -6,9 +6,7 @@ import { RoutineDetailPage } from '@/pages/RoutineDetailPage';
 import { RunsPage } from '@/pages/RunsPage';
 import { RunDetailPage } from '@/pages/RunDetailPage';
 import { ConnectorsPage } from '@/pages/ConnectorsPage';
-import { TeamPage, AgentPage } from '@/pages/TeamPage';
 import { ActivityPage } from '@/pages/ActivityPage';
-import { InsightsPage } from '@/pages/InsightsPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 
 export function App() {
@@ -22,9 +20,6 @@ export function App() {
           <Route path="/routines/:slug" element={<RoutineDetailPage />} />
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />
-          <Route path="/insights" element={<InsightsPage />} />
-          <Route path="/team" element={<TeamPage />} />
-          <Route path="/team/:name" element={<AgentPage />} />
           <Route path="/connectors" element={<ConnectorsPage />} />
           <Route path="/activity" element={<ActivityPage />} />
           <Route path="/settings" element={<SettingsPage />} />
