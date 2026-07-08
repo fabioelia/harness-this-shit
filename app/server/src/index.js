@@ -478,13 +478,16 @@ app.post('/api/routines/:slug/enable', (req, res) => {
   res.json({ ok: true, enabled: en });
 });
 
-app.post('/api/routines/:slug/dispatch', (req, res) => {
+// `/run` is the harness CLI's route (harness run <slug> routes here while the
+// app owns the folder, keeping one lease authority); `/dispatch` is the UI's.
+app.post(['/api/routines/:slug/dispatch', '/api/routines/:slug/run'], (req, res) => {
   const r = bySlug(req.params.slug);
   if (!r) return res.status(404).json({ error: 'not found' });
   if (state.killSwitch) return res.status(409).json({ error: 'kill switch engaged' });
-  const payload = req.body?.event ?? { event: 'manual', routine: r.slug, dispatched_at: new Date().toISOString() };
+  const payload = req.body?.event ?? { event: 'manual', routine: r.slug, by: req.body?.by, inputs: req.body?.inputs ?? {}, dispatched_at: new Date().toISOString() };
   const env = makeEnvelope('manual', 'manual', payload);
-  res.json({ ok: true, runId: startRun(r, env, 'manual'), status: 'running' });
+  const runId = startRun(r, env, 'manual');
+  res.json({ ok: true, runId, run: runId, status: 'running' });
 });
 
 app.post('/api/routines/:slug/preview', (req, res) => {

@@ -54,8 +54,10 @@ function prettyLine(e) {
 async function daemonCall(dir, method, path, body) {
   const st = loadState(dir);
   if (!isDaemonAlive(st)) return null;
+  const base = st.up.control_url ?? (st.up.port ? `http://127.0.0.1:${st.up.port}` : null);
+  if (!base) return null;
   try {
-    const res = await fetch(`http://127.0.0.1:${st.up.port}${path}`, {
+    const res = await fetch(`${base}${path}`, {
       method, headers: { 'content-type': 'application/json', ...(process.env.HARNESS_API_TOKEN ? { authorization: `Bearer ${process.env.HARNESS_API_TOKEN}` } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });

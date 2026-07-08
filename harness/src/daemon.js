@@ -74,7 +74,7 @@ export class Daemon {
       this.server = await startHttp(this, { port: this.port });
       if (!this.config.controlUrl) this.config.controlUrl = `http://127.0.0.1:${this.port}`;
     }
-    this.log.append('harness.up', { dir: this.dir, version: VERSION, pid: process.pid, port: this.http ? this.port : null, embedded: !this.http || undefined, routines: this.routines.length });
+    this.log.append('harness.up', { dir: this.dir, version: VERSION, pid: process.pid, port: this.http ? this.port : null, embedded: !this.http || undefined, control_url: this.config.controlUrl ?? undefined, routines: this.routines.length });
 
     for (const f of this.failures) this.log.append('routine.error', { file: f.file, errors: f.errors });
     for (const s of this.skipped) this.log.append('routine.skipped', { file: s.file, reason: s.reason });
