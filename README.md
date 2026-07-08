@@ -1,11 +1,27 @@
 # Switchboard — a team harness for Claude Code routines
 
-> **Status:** Design package **plus a working reference implementation**. [`docs/`](docs) holds the
-> shared understanding (what we're building and why, the canonical shape, the tools). [`app/`](app)
-> is a runnable slice — the **Fleet** console — built on a real component-library design system
-> (React + Express + `node:sqlite`). "Switchboard" is a working codename — rename freely.
+> **Status:** Design package **plus two runnable pieces**, now cleanly separated.
+> [`docs/`](docs) holds the shared understanding (what we're building and why, the canonical
+> shape, the tools). [`harness/`](harness) is the **headless harness** — a standalone CLI that
+> reads a folder of front-matter `.md` routines, wires cron/webhooks/MCPs per the
+> [docs/02 spec](docs/02-routine-spec.md), and logs everything to a single `.harness` file.
+> [`app/`](app) is the **Fleet console** — the web UI reference implementation (React +
+> Express + `node:sqlite`). "Switchboard" is a working codename — rename freely.
 
-## Try the app
+## Try the headless harness
+
+```bash
+cd harness && npm install
+node bin/harness.js validate examples/routines    # schema-check + lint the fleet
+node bin/harness.js up examples/routines          # wire triggers, stay resident
+tail -f examples/routines/.harness                # the single log of everything
+```
+
+The MD folder is the entire config — front matter drives triggers, grants, concurrency,
+policy; the body is the prompt run through headless `claude -p`. Slack and Jira are wired
+via the connector registry (`connectors.yaml` + builtins). See [`harness/README.md`](harness/README.md).
+
+## Try the app (web UI)
 
 ```bash
 cd app && npm run install:all && npm run dev      # web → http://localhost:5317

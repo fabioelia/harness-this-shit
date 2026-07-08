@@ -1,0 +1,14 @@
+{
+  "name": "@switchboard/harness",
+  "version": "0.1.0",
+  "description": "Headless harness for Claude Code routines — point it at a folder of front-matter Markdown files and it wires cron, webhooks, MCPs, and flow reactions, logging everything to a single .harness file.",
+  "type": "module",
+  "bin": { "harness": "./bin/harness.js" },
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "yaml": "^2.4.0"
+  }
+}
